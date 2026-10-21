@@ -100,7 +100,7 @@ function FloatInput({
           fontSize: lifted ? '0.65rem' : '0.85rem',
           letterSpacing: lifted ? '0.2em' : '0.05em',
           textTransform: 'uppercase',
-          color: lifted ? '#C17A3A' : 'rgba(245,240,232,0.45)',
+          color: lifted ? '#C17A3A' : 'rgba(28,43,30,0.48)',
           fontFamily: 'Jost, sans-serif',
           transition: 'all 0.25s cubic-bezier(0.22,1,0.36,1)',
           pointerEvents: 'none',
@@ -120,9 +120,9 @@ function FloatInput({
           width: '100%',
           background: 'transparent',
           border: 'none',
-          borderBottom: `1px solid ${focused ? '#C17A3A' : 'rgba(245,240,232,0.15)'}`,
+          borderBottom: `1px solid ${focused ? '#C17A3A' : 'rgba(28,43,30,0.18)'}`,
           outline: 'none',
-          color: '#F5F0E8',
+          color: '#1C2B1E',
           fontFamily: 'Jost, sans-serif',
           fontWeight: 300,
           fontSize: '0.95rem',
@@ -155,7 +155,7 @@ function FloatSelect({
           fontSize: lifted ? '0.65rem' : '0.85rem',
           letterSpacing: lifted ? '0.2em' : '0.05em',
           textTransform: 'uppercase',
-          color: lifted ? '#C17A3A' : 'rgba(245,240,232,0.45)',
+          color: lifted ? '#C17A3A' : 'rgba(28,43,30,0.48)',
           fontFamily: 'Jost, sans-serif',
           transition: 'all 0.25s cubic-bezier(0.22,1,0.36,1)',
           pointerEvents: 'none',
@@ -173,9 +173,9 @@ function FloatSelect({
           width: '100%',
           background: 'transparent',
           border: 'none',
-          borderBottom: `1px solid ${focused ? '#C17A3A' : 'rgba(245,240,232,0.15)'}`,
+          borderBottom: `1px solid ${focused ? '#C17A3A' : 'rgba(28,43,30,0.18)'}`,
           outline: 'none',
-          color: value ? '#F5F0E8' : 'transparent',
+          color: value ? '#1C2B1E' : 'transparent',
           fontFamily: 'Jost, sans-serif',
           fontWeight: 300,
           fontSize: '0.95rem',
@@ -187,9 +187,9 @@ function FloatSelect({
           WebkitAppearance: 'none',
         }}
       >
-        <option value="" style={{ background: '#1C2B1E' }} />
+        <option value="" style={{ background: '#FFFFFF' }} />
         {SUBJECTS.map(s => (
-          <option key={s} value={s} style={{ background: '#1C2B1E', color: '#F5F0E8' }}>
+          <option key={s} value={s} style={{ background: '#FFFFFF', color: '#1C2B1E' }}>
             {s}
           </option>
         ))}
@@ -197,7 +197,7 @@ function FloatSelect({
       {/* chevron */}
       <span style={{
         position: 'absolute', right: 0, top: 32,
-        color: 'rgba(245,240,232,0.4)', fontSize: '0.7rem', pointerEvents: 'none',
+        color: 'rgba(28,43,30,0.45)', fontSize: '0.7rem', pointerEvents: 'none',
       }}>▾</span>
     </div>
   );
@@ -223,7 +223,7 @@ function FloatTextarea({
           fontSize: lifted ? '0.65rem' : '0.85rem',
           letterSpacing: lifted ? '0.2em' : '0.05em',
           textTransform: 'uppercase',
-          color: lifted ? '#C17A3A' : 'rgba(245,240,232,0.45)',
+          color: lifted ? '#C17A3A' : 'rgba(28,43,30,0.48)',
           fontFamily: 'Jost, sans-serif',
           transition: 'all 0.25s cubic-bezier(0.22,1,0.36,1)',
           pointerEvents: 'none',
@@ -242,9 +242,9 @@ function FloatTextarea({
           width: '100%',
           background: 'transparent',
           border: 'none',
-          borderBottom: `1px solid ${focused ? '#C17A3A' : 'rgba(245,240,232,0.15)'}`,
+          borderBottom: `1px solid ${focused ? '#C17A3A' : 'rgba(28,43,30,0.18)'}`,
           outline: 'none',
-          color: '#F5F0E8',
+          color: '#1C2B1E',
           fontFamily: 'Jost, sans-serif',
           fontWeight: 300,
           fontSize: '0.95rem',
@@ -302,7 +302,7 @@ export default function Contact() {
         }
         .c-visible { opacity: 1 !important; transform: none !important; }
         .soc-btn { transition: background 0.25s ease, border-color 0.25s ease; }
-        .soc-btn:hover { background: #C17A3A !important; border-color: #C17A3A !important; }
+        .soc-btn:hover { background: #C17A3A !important; border-color: #C17A3A !important; color: #fff !important; }
       `}</style>
 
       <div style={{ minHeight: '100vh', background: '#0D1A0E' }}>
@@ -346,7 +346,7 @@ export default function Contact() {
         {/* ══════════════════════════════════════════
             TWO-COLUMN MAIN
         ══════════════════════════════════════════ */}
-        <div style={{ display: 'flex', flexWrap: 'wrap', minHeight: 'fit-content' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', minHeight: 'fit-content', background: '#F5F0E8' }}>
 
           {/* ── LEFT: Info panel ── */}
           <div
@@ -354,7 +354,7 @@ export default function Contact() {
             className="c-hidden"
             style={{
               flex: '1 1 340px',
-              background: '#0D1A0E',
+              background: '#FFFFFF',
               padding: 'clamp(40px, 6vw, 60px) clamp(28px, 5vw, 48px)',
               display: 'flex',
               flexDirection: 'column',
@@ -370,7 +370,7 @@ export default function Contact() {
               </span>
               <h2 style={{
                 fontFamily: 'Cormorant Garamond, serif', fontWeight: 300,
-                fontSize: 'clamp(32px, 4vw, 42px)', color: '#F5F0E8',
+                fontSize: 'clamp(32px, 4vw, 42px)', color: '#1C2B1E',
                 margin: '12px 0 0', lineHeight: 1.15, letterSpacing: '0.01em',
               }}>
                 We'd love to hear from you
@@ -394,7 +394,7 @@ export default function Contact() {
                     <p style={{
                       fontFamily: 'Jost, sans-serif', fontSize: '0.65rem',
                       letterSpacing: '0.22em', textTransform: 'uppercase',
-                      color: 'rgba(245,240,232,0.4)', margin: '0 0 6px',
+                      color: 'rgba(28,43,30,0.45)', margin: '0 0 6px',
                     }}>
                       {label}
                     </p>
@@ -409,12 +409,12 @@ export default function Contact() {
                             display: 'block',
                             fontFamily: 'Cormorant Garamond, serif',
                             fontSize: '1.05rem', fontWeight: 400,
-                            color: '#F5F0E8', textDecoration: 'none',
+                            color: '#1C2B1E', textDecoration: 'none',
                             transition: 'color 0.2s ease',
                             lineHeight: 1.5,
                           }}
                           onMouseEnter={e => (e.currentTarget.style.color = '#C17A3A')}
-                          onMouseLeave={e => (e.currentTarget.style.color = '#F5F0E8')}
+                          onMouseLeave={e => (e.currentTarget.style.color = '#1C2B1E')}
                         >
                           {line}
                         </a>
@@ -425,7 +425,7 @@ export default function Contact() {
                             display: 'block',
                             fontFamily: 'Cormorant Garamond, serif',
                             fontSize: '1.05rem', fontWeight: 400,
-                            color: i === 0 ? '#F5F0E8' : 'rgba(245,240,232,0.6)',
+                            color: i === 0 ? '#1C2B1E' : 'rgba(28,43,30,0.62)',
                             lineHeight: 1.5,
                           }}
                         >
@@ -443,7 +443,7 @@ export default function Contact() {
               <p style={{
                 fontFamily: 'Jost, sans-serif', fontSize: '0.65rem',
                 letterSpacing: '0.22em', textTransform: 'uppercase',
-                color: 'rgba(245,240,232,0.4)', marginBottom: 14,
+                color: 'rgba(28,43,30,0.45)', marginBottom: 14,
               }}>
                 Follow Us
               </p>
@@ -459,9 +459,9 @@ export default function Contact() {
                     className="soc-btn"
                     style={{
                       width: 38, height: 38, borderRadius: '50%',
-                      border: '1px solid rgba(245,240,232,0.2)',
+                      border: '1px solid rgba(28,43,30,0.25)',
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      color: '#F5F0E8', textDecoration: 'none',
+                      color: '#1C2B1E', textDecoration: 'none',
                     }}
                   >
                     <Icon size={16} strokeWidth={1.5} />
@@ -477,7 +477,7 @@ export default function Contact() {
             className="c-hidden"
             style={{
               flex: '1 1 400px',
-              background: '#1C2B1E',
+              background: 'transparent',
               padding: 'clamp(40px, 6vw, 60px) clamp(28px, 5vw, 48px)',
             }}
           >
@@ -492,14 +492,14 @@ export default function Contact() {
                 <CheckCircle size={52} color="#C17A3A" strokeWidth={1.2} />
                 <h3 style={{
                   fontFamily: 'Cormorant Garamond, serif', fontWeight: 400,
-                  fontSize: '2rem', color: '#F5F0E8', margin: 0,
+                  fontSize: '2rem', color: '#1C2B1E', margin: 0,
                 }}>
                   Message Received
                 </h3>
                 <div style={{ width: 36, height: 1, background: '#C17A3A' }} />
                 <p style={{
                   fontFamily: 'Jost, sans-serif', fontWeight: 300,
-                  color: 'rgba(245,240,232,0.65)', fontSize: '0.9rem',
+                  color: 'rgba(28,43,30,0.65)', fontSize: '0.9rem',
                   lineHeight: 1.8, maxWidth: 360,
                 }}>
                   Thank you for reaching out. A member of our team will be in touch within 24 hours.
@@ -543,7 +543,7 @@ export default function Contact() {
                   </span>
                   <h2 style={{
                     fontFamily: 'Cormorant Garamond, serif', fontWeight: 300,
-                    fontSize: 'clamp(32px, 4vw, 42px)', color: '#F5F0E8',
+                    fontSize: 'clamp(32px, 4vw, 42px)', color: '#1C2B1E',
                     margin: '12px 0 0', lineHeight: 1.15, letterSpacing: '0.01em',
                   }}>
                     How can we help?
@@ -587,7 +587,7 @@ export default function Contact() {
                     style={{
                       width: '100%',
                       background: sending ? 'rgba(193,122,58,0.2)' : 'transparent',
-                      color: sending ? 'rgba(245,240,232,0.5)' : '#C17A3A',
+                      color: sending ? 'rgba(28,43,30,0.5)' : '#C17A3A',
                       border: '1px solid rgba(193,122,58,0.5)',
                       fontFamily: 'Jost, sans-serif',
                       fontSize: '0.72rem',
@@ -643,7 +643,7 @@ export default function Contact() {
             src="https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d2795.0!2d-122.6784!3d45.5231!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x54950a0b5d37e9b3%3A0x3c5c6b7c7c7c7c7c!2sPortland%2C%20OR%2097204!5e0!3m2!1sen!2sus!4v1"
             width="100%"
             height="400"
-            style={{ border: 0, display: 'block', filter: 'invert(0.9) hue-rotate(180deg) saturate(0.7) brightness(0.75)' }}
+            style={{ border: 0, display: 'block' }}
             allowFullScreen
             loading="lazy"
             referrerPolicy="no-referrer-when-downgrade"
