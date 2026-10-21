@@ -2,21 +2,35 @@ import { useEffect, useState } from 'react';
 import { adminGet } from '../../services/adminApi';
 import { useAuth } from '../../context/AuthContext';
 import { useCurrency } from '../../context/CurrencyContext';
-import { AdminsOnly, Avatar, Card, EmptyNote, ErrorNote, LoadingNote, PageTitle, money, tableCls, tdCls, thCls } from '../../components/admin/ui';
+import { AdminsOnly, Avatar, Card, EmptyNote, ErrorNote, LoadingNote, PageTitle, ghostBtn, money, tableCls, tdCls, thCls } from '../../components/admin/ui';
 
 interface Customer { id: string; email: string | null; fullName: string | null; phone: string | null; role: string; createdAt: string; orderCount: number; totalSpent: number }
+
+const PAGE_SIZE = 100;
 
 export default function AdminCustomers() {
   const { profile } = useAuth();
   const isAdmin = profile?.role === 'admin';
   const [rows, setRows] = useState<Customer[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState('');
   const [loaded, setLoaded] = useState(false);
   const { currency } = useCurrency();
   useEffect(() => {
     if (!isAdmin) return;
-    adminGet<{ customers: Customer[] }>('/api/v1/admin/customers').then((d) => setRows(d.customers)).catch((e: Error) => setError(e.message)).finally(() => setLoaded(true));
+    adminGet<{ customers: Customer[]; total: number }>(`/api/v1/admin/customers?limit=${PAGE_SIZE}&offset=0`)
+      .then((d) => { setRows(d.customers); setTotal(d.total); })
+      .catch((e: Error) => setError(e.message))
+      .finally(() => setLoaded(true));
   }, [isAdmin]);
+  const loadMore = () => {
+    setLoadingMore(true);
+    adminGet<{ customers: Customer[]; total: number }>(`/api/v1/admin/customers?limit=${PAGE_SIZE}&offset=${rows.length}`)
+      .then((d) => { setRows((prev) => [...prev, ...d.customers]); setTotal(d.total); })
+      .catch((e: Error) => setError(e.message))
+      .finally(() => setLoadingMore(false));
+  };
   if (!isAdmin) return <AdminsOnly />;
   return (
     <div>
@@ -48,6 +62,16 @@ export default function AdminCustomers() {
           </div>
         )}
       </Card>
+      {loaded && total > 0 && (
+        <p className="font-bodytext text-[12.5px] text-[#98A096] mt-4">Showing {rows.length} of {total} customers</p>
+      )}
+      {loaded && rows.length < total && (
+        <div className="mt-3">
+          <button type="button" className={ghostBtn} disabled={loadingMore} onClick={loadMore}>
+            {loadingMore ? 'Loading…' : 'Load more'}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

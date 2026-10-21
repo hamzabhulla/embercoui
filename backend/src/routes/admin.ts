@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type Request } from 'express';
 import { z } from 'zod';
 import { ApiError, notConfigured } from '../lib/errors';
 import { requireAuth, requireRole } from '../lib/auth';
@@ -7,7 +7,27 @@ import { validateBody } from '../middleware/validate';
 import { assertImageUpload, type StorageService } from '../lib/storage';
 import { isValidCurrencyCode, roundMajorUnits } from '../lib/currency';
 import { isLegalOrderTransition, isLegalReservationTransition } from '../lib/statusTransitions';
-import type { OrderStatus, Repository, ReservationDTO } from '../repositories/types';
+import type { OrderStatus, PageParams, Repository, ReservationDTO } from '../repositories/types';
+
+// Paged admin lists (audit Fix 9): the screens page with limit/offset
+// and report the exact total, so nothing silently truncates at
+// PostgREST's 1000-row cap. Non-numeric or negative values are a client
+// error (400); a limit above the max is clamped, not rejected.
+const DEFAULT_PAGE_LIMIT = 100;
+const MAX_PAGE_LIMIT = 500;
+function parsePage(req: Request): PageParams {
+  const parse = (raw: unknown, name: string, fallback: number): number => {
+    if (raw === undefined) return fallback;
+    if (typeof raw !== 'string' || !/^\d+$/.test(raw)) {
+      throw new ApiError(400, `Invalid ${name} — use a non-negative integer`);
+    }
+    return Number(raw);
+  };
+  const limit = parse(req.query.limit, 'limit', DEFAULT_PAGE_LIMIT);
+  if (limit < 1) throw new ApiError(400, 'Invalid limit — use a positive integer');
+  const offset = parse(req.query.offset, 'offset', 0);
+  return { limit: Math.min(limit, MAX_PAGE_LIMIT), offset };
+}
 
 const ORDER_STATUSES = ['pending', 'confirmed', 'preparing', 'ready', 'out_for_delivery', 'delivered', 'cancelled'] as const;
 const RESERVATION_STATUSES = ['pending', 'confirmed', 'cancelled', 'completed'] as const;
@@ -142,7 +162,9 @@ export function adminRouter(deps: AdminDeps) {
       if (status && !(ORDER_STATUSES as readonly string[]).includes(status)) {
         throw new ApiError(400, 'Unknown order status');
       }
-      res.json({ orders: await repo().adminListOrders(status) });
+      const page = parsePage(req);
+      const { items, total } = await repo().adminListOrders(status, page);
+      res.json({ orders: items, total, limit: page.limit, offset: page.offset });
     } catch (err) { next(err); }
   });
 
@@ -213,8 +235,12 @@ export function adminRouter(deps: AdminDeps) {
     } catch (err) { next(err); }
   });
 
-  router.get('/reservations', async (_req, res, next) => {
-    try { res.json({ reservations: await repo().adminListReservations() }); } catch (err) { next(err); }
+  router.get('/reservations', async (req, res, next) => {
+    try {
+      const page = parsePage(req);
+      const { items, total } = await repo().adminListReservations(page);
+      res.json({ reservations: items, total, limit: page.limit, offset: page.offset });
+    } catch (err) { next(err); }
   });
 
   router.post('/reservations', validateBody(adminReservationSchema), async (req, res, next) => {
@@ -239,9 +265,10 @@ export function adminRouter(deps: AdminDeps) {
       const r = repo();
       const target = req.body.status as ReservationDTO['status'];
       // Same enforcement as orders (audit Fix 8): current state first,
-      // then the transition table. No getReservation exists on the
-      // repository, so the current row comes from the admin list.
-      const current = (await r.adminListReservations()).find((x) => x.id === req.params.id);
+      // then the transition table. The current row is fetched by id
+      // (audit Fix 9) — scanning the admin list silently lost rows once
+      // the list outgrew a single page.
+      const current = await r.getReservation(req.params.id);
       if (!current) throw new ApiError(404, 'Reservation not found');
       if (target !== current.status && !isLegalReservationTransition(current.status, target)) {
         throw new ApiError(400, `Cannot move a reservation from '${current.status}' to '${target}'`);
@@ -256,8 +283,12 @@ export function adminRouter(deps: AdminDeps) {
   // list (+ CSV export), staff accounts, finance and settings are admin-only.
   // Staff keep dashboard, orders, menu (per existing gates), reservations,
   // reviews and coupon reads.
-  router.get('/customers', requireRole('admin'), async (_req, res, next) => {
-    try { res.json({ customers: await repo().adminListCustomers() }); } catch (err) { next(err); }
+  router.get('/customers', requireRole('admin'), async (req, res, next) => {
+    try {
+      const page = parsePage(req);
+      const { items, total } = await repo().adminListCustomers(page);
+      res.json({ customers: items, total, limit: page.limit, offset: page.offset });
+    } catch (err) { next(err); }
   });
 
   router.get('/reviews', async (_req, res, next) => {
@@ -280,8 +311,12 @@ export function adminRouter(deps: AdminDeps) {
     } catch (err) { next(err); }
   });
 
-  router.get('/newsletter', requireRole('admin'), async (_req, res, next) => {
-    try { res.json({ subscribers: await repo().adminListNewsletter() }); } catch (err) { next(err); }
+  router.get('/newsletter', requireRole('admin'), async (req, res, next) => {
+    try {
+      const page = parsePage(req);
+      const { items, total } = await repo().adminListNewsletter(page);
+      res.json({ subscribers: items, total, limit: page.limit, offset: page.offset });
+    } catch (err) { next(err); }
   });
 
   router.get('/newsletter.csv', requireRole('admin'), async (_req, res, next) => {

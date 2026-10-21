@@ -46,6 +46,32 @@ export interface ProfileDTO {
 
 export type StaffDTO = ProfileDTO & { email: string | null };
 
+export type CustomerDTO = ProfileDTO & { email: string | null; orderCount: number; totalSpent: number };
+
+export interface NewsletterSubscriberDTO {
+  id: string;
+  email: string;
+  createdAt: string;
+}
+
+/**
+ * Paging for the admin list methods (audit Fix 9). PostgREST silently
+ * caps every response at 1000 rows, so list methods take an optional
+ * page: WITH a page they return one slice plus the exact total; WITHOUT
+ * one they return the COMPLETE list (fetching every page internally) —
+ * the unpaged form is what aggregations (dashboard, finance, CSV export)
+ * must use so their numbers never truncate at scale.
+ */
+export interface PageParams {
+  limit: number;
+  offset: number;
+}
+
+export interface Page<T> {
+  items: T[];
+  total: number;
+}
+
 export interface ReservationInput {
   userId: string | null;
   name: string;
@@ -189,18 +215,23 @@ export interface Repository {
 
   // Admin (Phase 4)
   adminListOrders(status?: string): Promise<OrderDTO[]>;
+  adminListOrders(status: string | undefined, page: PageParams): Promise<Page<OrderDTO>>;
   updateOrderStatus(orderId: string, status: OrderStatus): Promise<OrderDTO | null>;
   createMenuItem(data: Omit<MenuItemDTO, 'id'> & { isAvailable: boolean; sortOrder: number }): Promise<MenuItemDTO & { isAvailable: boolean; sortOrder: number }>;
   updateMenuItem(id: number, patch: Partial<MenuItemDTO> & { isAvailable?: boolean; sortOrder?: number }): Promise<(MenuItemDTO & { isAvailable: boolean; sortOrder: number }) | null>;
   deleteMenuItem(id: number): Promise<boolean>;
   adminListReservations(): Promise<ReservationDTO[]>;
+  adminListReservations(page: PageParams): Promise<Page<ReservationDTO>>;
+  getReservation(id: string): Promise<ReservationDTO | null>;
   adminCreateReservation(input: AdminReservationInput): Promise<ReservationDTO>;
   updateReservationStatus(id: string, status: ReservationDTO['status']): Promise<ReservationDTO | null>;
-  adminListCustomers(): Promise<(ProfileDTO & { email: string | null; orderCount: number; totalSpent: number })[]>;
+  adminListCustomers(): Promise<CustomerDTO[]>;
+  adminListCustomers(page: PageParams): Promise<Page<CustomerDTO>>;
   adminListReviews(): Promise<(ReviewDTO & { isApproved: boolean })[]>;
   setReviewApproved(id: string, approved: boolean): Promise<boolean>;
   deleteReview(id: string): Promise<boolean>;
-  adminListNewsletter(): Promise<{ id: string; email: string; createdAt: string }[]>;
+  adminListNewsletter(): Promise<NewsletterSubscriberDTO[]>;
+  adminListNewsletter(page: PageParams): Promise<Page<NewsletterSubscriberDTO>>;
   adminListCoupons(): Promise<CouponDTO[]>;
   createCoupon(data: Omit<CouponDTO, 'id'>): Promise<CouponDTO>;
   updateCoupon(id: string, patch: Partial<Omit<CouponDTO, 'id'>>): Promise<CouponDTO | null>;

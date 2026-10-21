@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { adminGet, adminSend } from '../../services/adminApi';
-import { Card, EmptyNote, ErrorNote, FChip, LoadingNote, PageTitle, StatusPill, chipBtn, chipDangerBtn, fmtDate, money } from '../../components/admin/ui';
+import { Card, EmptyNote, ErrorNote, FChip, LoadingNote, PageTitle, StatusPill, chipBtn, chipDangerBtn, fmtDate, ghostBtn, money } from '../../components/admin/ui';
+
+const PAGE_SIZE = 100;
 
 interface Order {
   id: string; customerName: string; customerEmail: string; customerPhone: string | null;
@@ -22,19 +24,29 @@ const chipLabel = (s: string) => (s === 'all' ? 'All' : s.replace(/_/g, ' ').rep
 
 export default function AdminOrders() {
   const [orders, setOrders] = useState<Order[]>([]);
+  const [total, setTotal] = useState(0);
   const [filter, setFilter] = useState('all');
   const [error, setError] = useState('');
   const [busyId, setBusyId] = useState('');
   const [loaded, setLoaded] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
 
-  const load = useCallback(() => {
-    const q = filter === 'all' ? '' : `?status=${filter}`;
-    adminGet<{ orders: Order[] }>(`/api/v1/admin/orders${q}`)
-      .then((d) => setOrders(d.orders))
+  const fetchPage = useCallback((offset: number, append: boolean) => {
+    const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(offset) });
+    if (filter !== 'all') params.set('status', filter);
+    adminGet<{ orders: Order[]; total: number }>(`/api/v1/admin/orders?${params}`)
+      .then((d) => {
+        setTotal(d.total);
+        setOrders((prev) => (append ? [...prev, ...d.orders] : d.orders));
+      })
       .catch((e: Error) => setError(e.message))
-      .finally(() => setLoaded(true));
+      .finally(() => { setLoaded(true); setLoadingMore(false); });
   }, [filter]);
+
+  const load = useCallback(() => fetchPage(0, false), [fetchPage]);
   useEffect(() => { load(); }, [load]);
+
+  const loadMore = () => { setLoadingMore(true); fetchPage(orders.length, true); };
 
   const setStatus = async (id: string, status: string) => {
     setBusyId(id); setError('');
@@ -83,6 +95,16 @@ export default function AdminOrders() {
           </Card>
         ))}
       </div>
+      {loaded && total > 0 && (
+        <p className="font-bodytext text-[12.5px] text-[#98A096] mt-5">Showing {orders.length} of {total} orders</p>
+      )}
+      {loaded && orders.length < total && (
+        <div className="mt-3">
+          <button type="button" className={ghostBtn} disabled={loadingMore} onClick={loadMore}>
+            {loadingMore ? 'Loading…' : 'Load more'}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

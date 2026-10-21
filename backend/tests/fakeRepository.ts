@@ -1,6 +1,7 @@
 import { ApiError } from '../src/lib/errors';
 import type {
-  AdminReservationInput, CouponDTO, CreateOrderData, MenuItemDTO, OrderDTO, ProfileDTO, PublicSettingsDTO,
+  AdminReservationInput, CouponDTO, CreateOrderData, CustomerDTO, MenuItemDTO, NewsletterSubscriberDTO,
+  OrderDTO, Page, PageParams, ProfileDTO, PublicSettingsDTO,
   Repository, ReservationDTO, ReservationInput, ReviewDTO,
 } from '../src/repositories/types';
 
@@ -86,7 +87,13 @@ export class FakeRepository implements Repository {
     this.reviews.push(review);
     return { id: review.id, name: review.name, rating: review.rating, comment: review.comment, country: review.country, createdAt: review.createdAt };
   }
-  async listOrdersForUser(userId: string) { return this.orders.filter((o) => o.userId === userId); }
+  async listOrdersForUser(userId: string) {
+    // Mirrors the real repository: most recent first, capped at 100.
+    return this.orders
+      .filter((o) => o.userId === userId)
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))
+      .slice(0, 100);
+  }
 
   async createOrder(data: CreateOrderData): Promise<OrderDTO> {
     // Same idempotency semantics as the Supabase repository: when a key is
@@ -140,9 +147,14 @@ export class FakeRepository implements Repository {
   }
   async getCouponByCode(code: string) { return this.coupons.find((c) => c.code === code.toUpperCase()) ?? null; }
 
-  async adminListOrders(status?: string) {
+  async adminListOrders(status?: string): Promise<OrderDTO[]>;
+  async adminListOrders(status: string | undefined, page: PageParams): Promise<Page<OrderDTO>>;
+  async adminListOrders(status?: string, page?: PageParams): Promise<OrderDTO[] | Page<OrderDTO>> {
     const sorted = [...this.orders].sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
-    return status ? sorted.filter((o) => o.status === status) : sorted;
+    const filtered = status ? sorted.filter((o) => o.status === status) : sorted;
+    // No page = the complete list (the fake has no 1000-row cap to hide).
+    if (!page) return filtered;
+    return { items: filtered.slice(page.offset, page.offset + page.limit), total: filtered.length };
   }
   async updateOrderStatus(orderId: string, status: OrderDTO['status']) {
     const order = this.orders.find((o) => o.id === orderId);
@@ -167,15 +179,29 @@ export class FakeRepository implements Repository {
     this.menu = this.menu.filter((m) => m.id !== id);
     return this.menu.length < before;
   }
-  async adminListReservations() { return [...this.reservations]; }
+  async adminListReservations(): Promise<ReservationDTO[]>;
+  async adminListReservations(page: PageParams): Promise<Page<ReservationDTO>>;
+  async adminListReservations(page?: PageParams): Promise<ReservationDTO[] | Page<ReservationDTO>> {
+    // Same deterministic order as the real repository: date desc,
+    // time asc, created_at desc — so paged slices tile without overlap.
+    const sorted = [...this.reservations].sort((a, b) =>
+      (a.date < b.date ? 1 : a.date > b.date ? -1 : 0) ||
+      (a.time < b.time ? -1 : a.time > b.time ? 1 : 0) ||
+      (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
+    if (!page) return sorted;
+    return { items: sorted.slice(page.offset, page.offset + page.limit), total: sorted.length };
+  }
+  async getReservation(id: string) { return this.reservations.find((r) => r.id === id) ?? null; }
   async updateReservationStatus(id: string, status: ReservationDTO['status']) {
     const r = this.reservations.find((x) => x.id === id);
     if (!r) return null;
     r.status = status;
     return r;
   }
-  async adminListCustomers() {
-    return [...this.profiles.values()]
+  async adminListCustomers(): Promise<CustomerDTO[]>;
+  async adminListCustomers(page: PageParams): Promise<Page<CustomerDTO>>;
+  async adminListCustomers(page?: PageParams): Promise<CustomerDTO[] | Page<CustomerDTO>> {
+    const all = [...this.profiles.values()]
       .filter((p) => p.role === 'customer')
       .map((p) => {
         const userOrders = this.orders.filter((o) => o.userId === p.id);
@@ -186,6 +212,8 @@ export class FakeRepository implements Repository {
           totalSpent: Math.round(userOrders.filter((o) => o.paymentStatus === 'paid' && o.currency === this.settings.currency).reduce((sum, o) => sum + o.total, 0) * 100) / 100,
         };
       });
+    if (!page) return all;
+    return { items: all.slice(page.offset, page.offset + page.limit), total: all.length };
   }
   async adminListReviews() { return this.reviews.map((r) => ({ id: r.id, name: r.name, rating: r.rating, comment: r.comment, country: r.country, createdAt: r.createdAt, isApproved: r.isApproved })); }
   async setReviewApproved(id: string, approved: boolean) {
@@ -199,8 +227,12 @@ export class FakeRepository implements Repository {
     this.reviews = this.reviews.filter((r) => r.id !== id);
     return this.reviews.length < before;
   }
-  async adminListNewsletter() {
-    return [...this.newsletter].map((email, i) => ({ id: `nl-${i}`, email, createdAt: '2026-01-01T00:00:00Z' }));
+  async adminListNewsletter(): Promise<NewsletterSubscriberDTO[]>;
+  async adminListNewsletter(page: PageParams): Promise<Page<NewsletterSubscriberDTO>>;
+  async adminListNewsletter(page?: PageParams): Promise<NewsletterSubscriberDTO[] | Page<NewsletterSubscriberDTO>> {
+    const all = [...this.newsletter].map((email, i) => ({ id: `nl-${i}`, email, createdAt: '2026-01-01T00:00:00Z' }));
+    if (!page) return all;
+    return { items: all.slice(page.offset, page.offset + page.limit), total: all.length };
   }
   async adminListCoupons() { return [...this.coupons]; }
   async createCoupon(data: Omit<CouponDTO, 'id'>) {

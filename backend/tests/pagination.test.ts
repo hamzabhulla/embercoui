@@ -1,0 +1,247 @@
+import request from 'supertest';
+import { describe, expect, it } from 'vitest';
+import { createApp } from '../src/app';
+import type { OrderDTO, ReservationDTO } from '../src/repositories/types';
+import { FakeRepository, fakeVerifyToken, testEnv } from './fakeRepository';
+import { FakeStripeService } from './fakeStripe';
+import { FakeStorageService } from './fakeStorage';
+
+// Audit Fix 9 — pagination + scale. The admin list endpoints page with
+// limit/offset and report exact totals; unpaged repository calls (what
+// dashboard / finance / CSV export use) return the COMPLETE set, so
+// nothing silently truncates at PostgREST's 1000-row cap anymore.
+
+const as = (r: request.Test, token: string) => r.set('Authorization', `Bearer ${token}`);
+const ADMIN = 'token-admin';
+
+function setup() {
+  const repo = new FakeRepository();
+  const app = createApp({
+    env: testEnv(), repo, verifyToken: fakeVerifyToken,
+    stripe: new FakeStripeService(), storage: new FakeStorageService(),
+  });
+  return { repo, app };
+}
+
+const at = (sec: number) => new Date(Date.UTC(2026, 0, 1) + sec * 1000).toISOString();
+
+let orderSeq = 0;
+function makeOrder(patch: Partial<OrderDTO> = {}): OrderDTO {
+  const n = ++orderSeq;
+  return {
+    id: `seed-order-${n}`, userId: 'user-1', customerName: 'Seed Customer',
+    customerEmail: 'seed@example.com', customerPhone: null, status: 'pending',
+    paymentStatus: 'paid', paymentIntentId: null, currency: 'USD',
+    subtotal: 10, deliveryFee: 0, discount: 0, total: 10, couponCode: null,
+    address: null, notes: null, items: [],
+    createdAt: at(n), updatedAt: at(n), ...patch,
+  };
+}
+
+let resSeq = 0;
+function makeReservation(patch: Partial<ReservationDTO> = {}): ReservationDTO {
+  const n = ++resSeq;
+  return {
+    id: `seed-res-${n}`, userId: null, name: 'Seed Guest', email: 'guest@example.com',
+    phone: '1234567', date: '2026-12-01', time: '19:00', guests: 2,
+    source: 'website', notes: null, status: 'pending',
+    createdAt: '2026-01-01T00:00:00.000Z', ...patch,
+  };
+}
+
+describe('paged admin orders endpoint', () => {
+  const { repo, app } = setup();
+  for (let i = 1; i <= 7; i++) {
+    repo.orders.push(makeOrder({ createdAt: at(i), status: i >= 6 ? 'delivered' : 'pending' }));
+  }
+
+  it('returns the first page with the exact total and echoes limit/offset', async () => {
+    const res = await as(request(app).get('/api/v1/admin/orders?limit=3&offset=0'), ADMIN);
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(7);
+    expect(res.body.limit).toBe(3);
+    expect(res.body.offset).toBe(0);
+    // Newest first.
+    expect(res.body.orders.map((o: OrderDTO) => o.createdAt)).toEqual([at(7), at(6), at(5)]);
+  });
+
+  it('pages tile the full set without overlap (load-more contract)', async () => {
+    const seen: string[] = [];
+    for (const offset of [0, 3, 6]) {
+      const res = await as(request(app).get(`/api/v1/admin/orders?limit=3&offset=${offset}`), ADMIN);
+      expect(res.status).toBe(200);
+      seen.push(...res.body.orders.map((o: OrderDTO) => o.id));
+    }
+    expect(seen).toHaveLength(7);
+    expect(new Set(seen).size).toBe(7);
+  });
+
+  it('defaults to limit=100/offset=0 and totals respect the status filter', async () => {
+    const all = await as(request(app).get('/api/v1/admin/orders'), ADMIN);
+    expect(all.body.limit).toBe(100);
+    expect(all.body.offset).toBe(0);
+    expect(all.body.orders).toHaveLength(7);
+    const delivered = await as(request(app).get('/api/v1/admin/orders?status=delivered&limit=1'), ADMIN);
+    expect(delivered.body.total).toBe(2);
+    expect(delivered.body.orders).toHaveLength(1);
+  });
+
+  it('rejects invalid paging params with 400', async () => {
+    for (const q of ['limit=abc', 'limit=0', 'limit=-1', 'offset=-1', 'offset=1.5']) {
+      const res = await as(request(app).get(`/api/v1/admin/orders?${q}`), ADMIN);
+      expect(res.status, q).toBe(400);
+    }
+  });
+
+  it('clamps an oversized limit to 500 instead of erroring', async () => {
+    const res = await as(request(app).get('/api/v1/admin/orders?limit=99999'), ADMIN);
+    expect(res.status).toBe(200);
+    expect(res.body.limit).toBe(500);
+    expect(res.body.orders).toHaveLength(7);
+  });
+});
+
+describe('repository paging contract (fake mirrors the real one)', () => {
+  it('paged calls return slices + total; unpaged calls return everything', async () => {
+    const { repo } = setup();
+    for (let i = 0; i < 5; i++) repo.orders.push(makeOrder());
+    const page = await repo.adminListOrders(undefined, { limit: 2, offset: 2 });
+    expect(page.items).toHaveLength(2);
+    expect(page.total).toBe(5);
+    const all = await repo.adminListOrders();
+    expect(Array.isArray(all)).toBe(true);
+    expect(all).toHaveLength(5);
+  });
+
+  it('getReservation returns the row or null', async () => {
+    const { repo } = setup();
+    repo.reservations.push(makeReservation({ id: 'res-known' }));
+    expect((await repo.getReservation('res-known'))?.id).toBe('res-known');
+    expect(await repo.getReservation('res-nope')).toBeNull();
+  });
+
+  it('listOrdersForUser caps at the 100 most recent orders', async () => {
+    const { repo } = setup();
+    for (let i = 1; i <= 105; i++) repo.orders.push(makeOrder({ userId: 'user-9', createdAt: at(i) }));
+    const mine = await repo.listOrdersForUser('user-9');
+    expect(mine).toHaveLength(100);
+    expect(mine[0].createdAt).toBe(at(105));
+  });
+});
+
+describe('reservations paging + deterministic order', () => {
+  const { repo, app } = setup();
+  // Same date, different times: time asc breaks the tie before created_at.
+  const a = makeReservation({ date: '2026-12-02', time: '19:00', createdAt: '2026-01-01T00:00:00.000Z' });
+  const b = makeReservation({ date: '2026-12-02', time: '18:00', createdAt: '2026-01-03T00:00:00.000Z' });
+  const c = makeReservation({ date: '2026-12-03', time: '09:00', createdAt: '2026-01-02T00:00:00.000Z' });
+  repo.reservations.push(a, b, c);
+
+  it('orders date desc, then time asc, and pages carry the total', async () => {
+    const first = await as(request(app).get('/api/v1/admin/reservations?limit=2&offset=0'), ADMIN);
+    expect(first.status).toBe(200);
+    expect(first.body.total).toBe(3);
+    expect(first.body.reservations.map((r: ReservationDTO) => r.id)).toEqual([c.id, b.id]);
+    const rest = await as(request(app).get('/api/v1/admin/reservations?limit=2&offset=2'), ADMIN);
+    expect(rest.body.reservations.map((r: ReservationDTO) => r.id)).toEqual([a.id]);
+  });
+
+  it('rejects invalid paging params with 400', async () => {
+    expect((await as(request(app).get('/api/v1/admin/reservations?limit=nope'), ADMIN)).status).toBe(400);
+    expect((await as(request(app).get('/api/v1/admin/reservations?offset=-2'), ADMIN)).status).toBe(400);
+  });
+});
+
+describe('reservation status PATCH reaches rows beyond the first page', () => {
+  const { repo, app } = setup();
+  for (let i = 0; i < 149; i++) {
+    repo.reservations.push(makeReservation({ date: '2026-12-15', createdAt: at(i + 1) }));
+  }
+  // Earliest date → sorts last, far outside the default 100-row page.
+  const target = makeReservation({ date: '2026-01-05', name: 'Old Booking' });
+  repo.reservations.push(target);
+
+  it('the default page really does not contain the target…', async () => {
+    const res = await as(request(app).get('/api/v1/admin/reservations'), ADMIN);
+    expect(res.body.total).toBe(150);
+    expect(res.body.reservations).toHaveLength(100);
+    expect(res.body.reservations.some((r: ReservationDTO) => r.id === target.id)).toBe(false);
+  });
+
+  it('…but the status PATCH still finds it by id', async () => {
+    const res = await as(request(app).patch(`/api/v1/admin/reservations/${target.id}/status`).send({ status: 'confirmed' }), ADMIN);
+    expect(res.status).toBe(200);
+    expect(res.body.reservation.status).toBe('confirmed');
+    const missing = await as(request(app).patch('/api/v1/admin/reservations/res-nope/status').send({ status: 'confirmed' }), ADMIN);
+    expect(missing.status).toBe(404);
+  });
+});
+
+describe('customers + newsletter paging', () => {
+  const { repo, app } = setup();
+
+  it('customers page with totals, emails and counts intact', async () => {
+    const first = await as(request(app).get('/api/v1/admin/customers?limit=1&offset=0'), ADMIN);
+    expect(first.status).toBe(200);
+    expect(first.body.total).toBe(2); // user-1 + user-2 in the fake seeds
+    expect(first.body.customers).toHaveLength(1);
+    const second = await as(request(app).get('/api/v1/admin/customers?limit=1&offset=1'), ADMIN);
+    expect(second.body.customers).toHaveLength(1);
+    expect(second.body.customers[0].id).not.toBe(first.body.customers[0].id);
+    for (const c of [...first.body.customers, ...second.body.customers]) {
+      expect(c.email).toContain('@');
+      expect(typeof c.orderCount).toBe('number');
+      expect(typeof c.totalSpent).toBe('number');
+    }
+  });
+
+  it('newsletter pages tile the subscriber set', async () => {
+    for (let i = 0; i < 5; i++) await repo.addNewsletterSubscriber(`fan${i}@example.com`);
+    const seen = new Set<string>();
+    for (const offset of [0, 2, 4]) {
+      const res = await as(request(app).get(`/api/v1/admin/newsletter?limit=2&offset=${offset}`), ADMIN);
+      expect(res.status).toBe(200);
+      expect(res.body.total).toBe(5);
+      for (const s of res.body.subscribers as { email: string }[]) seen.add(s.email);
+    }
+    expect(seen.size).toBe(5);
+  });
+});
+
+describe('aggregation completeness past 1000 rows', () => {
+  const { repo, app } = setup();
+  for (let i = 0; i < 1005; i++) repo.orders.push(makeOrder({ total: 2 }));
+
+  it('dashboard counts and sums ALL orders, not the first 1000', async () => {
+    const res = await as(request(app).get('/api/v1/admin/dashboard'), ADMIN);
+    expect(res.status).toBe(200);
+    expect(res.body.stats.totalOrders).toBe(1005);
+    expect(res.body.stats.revenue).toBe(2010);
+  });
+
+  it('finance aggregates ALL paid orders', async () => {
+    const res = await as(request(app).get('/api/v1/admin/finance'), ADMIN);
+    expect(res.status).toBe(200);
+    expect(res.body.totalPaidOrders).toBe(1005);
+    expect(res.body.totalRevenue).toBe(2010);
+  });
+
+  it('the unpaged repository list is complete; a deep page still slices', async () => {
+    expect(await repo.adminListOrders()).toHaveLength(1005);
+    const tail = await repo.adminListOrders(undefined, { limit: 1000, offset: 1000 });
+    expect(tail.total).toBe(1005);
+    expect(tail.items).toHaveLength(5);
+  });
+});
+
+describe('newsletter CSV export past 1000 subscribers', () => {
+  const { repo, app } = setup();
+  for (let i = 0; i < 1005; i++) repo.newsletter.add(`sub${i}@example.com`);
+
+  it('exports every subscriber, including the 1005th', async () => {
+    const res = await as(request(app).get('/api/v1/admin/newsletter.csv'), ADMIN);
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('sub1004@example.com');
+    expect(res.text.split('\n')).toHaveLength(1006); // header + 1005 rows
+  });
+});

@@ -2,11 +2,29 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { currencyExponent, sanitizeCurrencyCode } from '../lib/currency';
 import { ApiError } from '../lib/errors';
 import type {
-  AdminReservationInput, CouponDTO, CreateOrderData, MenuItemDTO, OrderDTO, ProfileDTO,
-  PublicSettingsDTO, ReservationDTO, ReservationInput, Repository, ReviewDTO,
+  AdminReservationInput, CouponDTO, CreateOrderData, CustomerDTO, MenuItemDTO, NewsletterSubscriberDTO,
+  OrderDTO, Page, PageParams, ProfileDTO, PublicSettingsDTO, ReservationDTO, ReservationInput,
+  Repository, ReviewDTO,
 } from './types';
 
 type Row = Record<string, unknown>;
+
+// PostgREST caps every response at 1000 rows. "Fetch everything" callers
+// (dashboard/finance aggregation, CSV export, unpaged list methods) page
+// through in chunks of this size instead of trusting one response.
+const ALL_PAGE_SIZE = 1000;
+// Hard bound so a pathological count can never loop forever: 50k rows.
+const MAX_ALL_PAGES = 50;
+
+async function fetchAllPages<T>(fetchPage: (page: PageParams) => Promise<Page<T>>): Promise<T[]> {
+  const out: T[] = [];
+  for (let p = 0; p < MAX_ALL_PAGES; p++) {
+    const { items, total } = await fetchPage({ limit: ALL_PAGE_SIZE, offset: p * ALL_PAGE_SIZE });
+    out.push(...items);
+    if (items.length === 0 || out.length >= total) break;
+  }
+  return out;
+}
 
 const num = (v: unknown): number => (typeof v === 'number' ? v : Number(v ?? 0));
 const str = (v: unknown): string => (typeof v === 'string' ? v : v == null ? '' : String(v));
@@ -128,6 +146,112 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
     return orders.map((o) => orderDTO(o, byOrder.get(str(o.id)) ?? []));
   }
 
+  // One paged pass over auth.users building an id → email map. The admin
+  // customers/staff lists used to call getUserById once PER profile
+  // (an N+1 against the Auth API); this replaces that with a single
+  // listUsers sweep. Email stays best-effort, exactly as before: any
+  // failure leaves the map (partially) empty and emails render as null.
+  async function fetchEmailMap(): Promise<Map<string, string>> {
+    const map = new Map<string, string>();
+    try {
+      for (let page = 1; page <= MAX_ALL_PAGES; page++) {
+        const { data, error } = await db.auth.admin.listUsers({ page, perPage: ALL_PAGE_SIZE });
+        if (error || !data) break;
+        for (const u of data.users) if (u.email) map.set(u.id, u.email);
+        if (data.users.length < ALL_PAGE_SIZE) break;
+      }
+    } catch { /* best-effort — see above */ }
+    return map;
+  }
+
+  async function adminListOrders(status?: string): Promise<OrderDTO[]>;
+  async function adminListOrders(status: string | undefined, page: PageParams): Promise<Page<OrderDTO>>;
+  async function adminListOrders(status?: string, page?: PageParams): Promise<OrderDTO[] | Page<OrderDTO>> {
+    if (!page) return fetchAllPages((p) => adminListOrders(status, p));
+    let query = db.from('orders').select('*', { count: 'exact' }).order('created_at', { ascending: false });
+    if (status) query = query.eq('status', status);
+    const { data, error, count } = await query.range(page.offset, page.offset + page.limit - 1);
+    if (error) throw new Error(`orders query failed: ${error.message}`);
+    return { items: await attachItems((data ?? []) as Row[]), total: count ?? 0 };
+  }
+
+  async function adminListReservations(): Promise<ReservationDTO[]>;
+  async function adminListReservations(page: PageParams): Promise<Page<ReservationDTO>>;
+  async function adminListReservations(page?: PageParams): Promise<ReservationDTO[] | Page<ReservationDTO>> {
+    if (!page) return fetchAllPages((p) => adminListReservations(p));
+    const { data, error, count } = await db
+      .from('reservations')
+      .select('*', { count: 'exact' })
+      // Deterministic order for paging: newest date first; within a date,
+      // earliest seating first (the day board's view); created_at breaks
+      // the remaining ties so pages never overlap or skip a row.
+      .order('reservation_date', { ascending: false })
+      .order('reservation_time', { ascending: true })
+      .order('created_at', { ascending: false })
+      .range(page.offset, page.offset + page.limit - 1);
+    if (error) throw new Error(`reservations query failed: ${error.message}`);
+    return { items: ((data ?? []) as Row[]).map(reservationDTO), total: count ?? 0 };
+  }
+
+  async function adminListNewsletter(): Promise<NewsletterSubscriberDTO[]>;
+  async function adminListNewsletter(page: PageParams): Promise<Page<NewsletterSubscriberDTO>>;
+  async function adminListNewsletter(page?: PageParams): Promise<NewsletterSubscriberDTO[] | Page<NewsletterSubscriberDTO>> {
+    if (!page) return fetchAllPages((p) => adminListNewsletter(p));
+    const { data, error, count } = await db
+      .from('newsletter_subscribers')
+      .select('*', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .range(page.offset, page.offset + page.limit - 1);
+    if (error) throw new Error(`newsletter query failed: ${error.message}`);
+    const items = ((data ?? []) as Row[]).map((r) => ({ id: str(r.id), email: str(r.email), createdAt: str(r.created_at) }));
+    return { items, total: count ?? 0 };
+  }
+
+  async function adminListCustomers(): Promise<CustomerDTO[]>;
+  async function adminListCustomers(page: PageParams): Promise<Page<CustomerDTO>>;
+  async function adminListCustomers(page?: PageParams): Promise<CustomerDTO[] | Page<CustomerDTO>> {
+    if (!page) return fetchAllPages((p) => adminListCustomers(p));
+    // Lifetime spend is reported in the CURRENT settings currency only —
+    // orders placed in another currency are counted, never summed in,
+    // so two currencies are never silently added together.
+    const settings = await repo.getSettings();
+    // The aggregation runs over the COMPLETE orders table (paged
+    // internally): a customer's totals must not shrink because the
+    // profiles list itself is being viewed one page at a time.
+    const counts = new Map<string, { count: number; spent: number }>();
+    for (let p = 0; p < MAX_ALL_PAGES; p++) {
+      const from = p * ALL_PAGE_SIZE;
+      const { data: orderRows, error: ordersError } = await db
+        .from('orders')
+        .select('user_id, total, payment_status, currency')
+        .range(from, from + ALL_PAGE_SIZE - 1);
+      if (ordersError) throw new Error(`customer order aggregation failed: ${ordersError.message}`);
+      for (const o of (orderRows ?? []) as Row[]) {
+        if (!o.user_id) continue;
+        const entry = counts.get(str(o.user_id)) ?? { count: 0, spent: 0 };
+        entry.count += 1;
+        if (o.payment_status === 'paid' && sanitizeCurrencyCode(o.currency) === settings.currency) entry.spent += num(o.total);
+        counts.set(str(o.user_id), entry);
+      }
+      if ((orderRows ?? []).length < ALL_PAGE_SIZE) break;
+    }
+    const emails = await fetchEmailMap();
+    const { data: profiles, error, count } = await db
+      .from('profiles')
+      .select('*', { count: 'exact' })
+      .eq('role', 'customer')
+      .order('created_at', { ascending: false })
+      .range(page.offset, page.offset + page.limit - 1);
+    if (error) throw new Error(`profiles query failed: ${error.message}`);
+    const expFactor = 10 ** currencyExponent(settings.currency);
+    const items = ((profiles ?? []) as Row[]).map((p) => {
+      const dto = profileDTO(p);
+      const c = counts.get(dto.id) ?? { count: 0, spent: 0 };
+      return { ...dto, email: emails.get(dto.id) ?? null, orderCount: c.count, totalSpent: Math.round(c.spent * expFactor) / expFactor };
+    });
+    return { items, total: count ?? 0 };
+  }
+
   const repo: Repository = {
     async listMenuItems() {
       const { data, error } = await db.from('menu_items').select('*').eq('is_available', true).order('sort_order').order('id');
@@ -223,7 +347,12 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
       return reviewDTO(data as Row);
     },
     async listOrdersForUser(userId) {
-      const { data, error } = await db.from('orders').select('*').eq('user_id', userId).order('created_at', { ascending: false });
+      // The account page shows recent history, not an archive: cap the
+      // select at the 100 most recent orders so the query stays bounded
+      // no matter how long the account lives.
+      const { data, error } = await db
+        .from('orders').select('*').eq('user_id', userId)
+        .order('created_at', { ascending: false }).limit(100);
       if (error) throw new Error(`orders query failed: ${error.message}`);
       return attachItems((data ?? []) as Row[]);
     },
@@ -372,13 +501,7 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
       return data ? couponDTO(data as Row) : null;
     },
 
-    async adminListOrders(status) {
-      let query = db.from('orders').select('*').order('created_at', { ascending: false });
-      if (status) query = query.eq('status', status);
-      const { data, error } = await query;
-      if (error) throw new Error(`orders query failed: ${error.message}`);
-      return attachItems((data ?? []) as Row[]);
-    },
+    adminListOrders,
     async updateOrderStatus(orderId, status) {
       const { error } = await db.from('orders').update({ status }).eq('id', orderId);
       if (error) throw new Error(`order status update failed: ${error.message}`);
@@ -415,10 +538,11 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
       if (error) throw new Error(`menu delete failed: ${error.message}`);
       return (data ?? []).length > 0;
     },
-    async adminListReservations() {
-      const { data, error } = await db.from('reservations').select('*').order('reservation_date', { ascending: false });
-      if (error) throw new Error(`reservations query failed: ${error.message}`);
-      return ((data ?? []) as Row[]).map(reservationDTO);
+    adminListReservations,
+    async getReservation(id) {
+      const { data, error } = await db.from('reservations').select('*').eq('id', id).maybeSingle();
+      if (error) throw new Error(`reservation query failed: ${error.message}`);
+      return data ? reservationDTO(data as Row) : null;
     },
     async updateReservationStatus(id, status) {
       const { data, error } = await db.from('reservations').update({ status }).eq('id', id).select('*').maybeSingle();
@@ -438,37 +562,7 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
       if (error) throw new Error(`admin reservation insert failed: ${error.message}`);
       return reservationDTO(data as Row);
     },
-    async adminListCustomers() {
-      const { data: profiles, error } = await db.from('profiles').select('*').eq('role', 'customer').order('created_at', { ascending: false });
-      if (error) throw new Error(`profiles query failed: ${error.message}`);
-      // Lifetime spend is reported in the CURRENT settings currency only —
-      // orders placed in another currency are counted, never summed in,
-      // so two currencies are never silently added together.
-      const settings = await repo.getSettings();
-      const { data: orders, error: ordersError } = await db.from('orders').select('user_id, total, payment_status, currency');
-      if (ordersError) throw new Error(`customer order aggregation failed: ${ordersError.message}`);
-      const counts = new Map<string, { count: number; spent: number }>();
-      for (const o of (orders ?? []) as Row[]) {
-        if (!o.user_id) continue;
-        const entry = counts.get(str(o.user_id)) ?? { count: 0, spent: 0 };
-        entry.count += 1;
-        if (o.payment_status === 'paid' && sanitizeCurrencyCode(o.currency) === settings.currency) entry.spent += num(o.total);
-        counts.set(str(o.user_id), entry);
-      }
-      const out = [];
-      for (const p of (profiles ?? []) as Row[]) {
-        const dto = profileDTO(p);
-        let email: string | null = null;
-        try {
-          const { data: authUser } = await db.auth.admin.getUserById(dto.id);
-          email = authUser?.user?.email ?? null;
-        } catch { /* email is best-effort */ }
-        const c = counts.get(dto.id) ?? { count: 0, spent: 0 };
-        const expFactor = 10 ** currencyExponent(settings.currency);
-        out.push({ ...dto, email, orderCount: c.count, totalSpent: Math.round(c.spent * expFactor) / expFactor });
-      }
-      return out;
-    },
+    adminListCustomers,
     async adminListReviews() {
       const { data, error } = await db.from('reviews').select('*').order('created_at', { ascending: false });
       if (error) throw new Error(`reviews query failed: ${error.message}`);
@@ -484,11 +578,7 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
       if (error) throw new Error(`review delete failed: ${error.message}`);
       return (data ?? []).length > 0;
     },
-    async adminListNewsletter() {
-      const { data, error } = await db.from('newsletter_subscribers').select('*').order('created_at', { ascending: false });
-      if (error) throw new Error(`newsletter query failed: ${error.message}`);
-      return ((data ?? []) as Row[]).map((r) => ({ id: str(r.id), email: str(r.email), createdAt: str(r.created_at) }));
-    },
+    adminListNewsletter,
     async adminListCoupons() {
       const { data, error } = await db.from('coupons').select('*').order('created_at', { ascending: false });
       if (error) throw new Error(`coupons query failed: ${error.message}`);
@@ -534,19 +624,21 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
     },
     async adminListStaff() {
       // All profiles: the Staff screen is where customers get promoted.
-      const { data, error } = await db.from('profiles').select('*').order('created_at');
-      if (error) throw new Error(`staff query failed: ${error.message}`);
-      const profiles = ((data ?? []) as Row[]).map(profileDTO);
-      return Promise.all(
-        profiles.map(async (profile) => {
-          let email: string | null = null;
-          try {
-            const { data: userData } = await db.auth.admin.getUserById(profile.id);
-            email = userData?.user?.email ?? null;
-          } catch { email = null; }
-          return { ...profile, email };
-        }),
-      );
+      // Paged internally so the list stays complete past 1000 profiles,
+      // with emails from the single listUsers sweep (no per-profile N+1).
+      const emails = await fetchEmailMap();
+      const profiles: ProfileDTO[] = [];
+      for (let p = 0; p < MAX_ALL_PAGES; p++) {
+        const from = p * ALL_PAGE_SIZE;
+        const { data, error } = await db
+          .from('profiles').select('*').order('created_at')
+          .range(from, from + ALL_PAGE_SIZE - 1);
+        if (error) throw new Error(`staff query failed: ${error.message}`);
+        const rows = ((data ?? []) as Row[]).map(profileDTO);
+        profiles.push(...rows);
+        if (rows.length < ALL_PAGE_SIZE) break;
+      }
+      return profiles.map((profile) => ({ ...profile, email: emails.get(profile.id) ?? null }));
     },
     async updateProfileRole(userId, role) {
       const { data, error } = await db.from('profiles').update({ role }).eq('id', userId).select('*').maybeSingle();

@@ -1,20 +1,34 @@
 import { useEffect, useState } from 'react';
 import { adminDownloadCsv, adminGet } from '../../services/adminApi';
 import { useAuth } from '../../context/AuthContext';
-import { AdminsOnly, Card, EmptyNote, ErrorNote, LoadingNote, PageTitle, StatCard, fmtDate, primaryBtn, tableCls, tdCls, thCls } from '../../components/admin/ui';
+import { AdminsOnly, Card, EmptyNote, ErrorNote, LoadingNote, PageTitle, StatCard, fmtDate, ghostBtn, primaryBtn, tableCls, tdCls, thCls } from '../../components/admin/ui';
 
 interface Sub { email: string; createdAt: string }
+
+const PAGE_SIZE = 100;
 
 export default function AdminNewsletter() {
   const { profile } = useAuth();
   const isAdmin = profile?.role === 'admin';
   const [rows, setRows] = useState<Sub[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState('');
   const [loaded, setLoaded] = useState(false);
   useEffect(() => {
     if (!isAdmin) return;
-    adminGet<{ subscribers: Sub[] }>('/api/v1/admin/newsletter').then((d) => setRows(d.subscribers)).catch((e: Error) => setError(e.message)).finally(() => setLoaded(true));
+    adminGet<{ subscribers: Sub[]; total: number }>(`/api/v1/admin/newsletter?limit=${PAGE_SIZE}&offset=0`)
+      .then((d) => { setRows(d.subscribers); setTotal(d.total); })
+      .catch((e: Error) => setError(e.message))
+      .finally(() => setLoaded(true));
   }, [isAdmin]);
+  const loadMore = () => {
+    setLoadingMore(true);
+    adminGet<{ subscribers: Sub[]; total: number }>(`/api/v1/admin/newsletter?limit=${PAGE_SIZE}&offset=${rows.length}`)
+      .then((d) => { setRows((prev) => [...prev, ...d.subscribers]); setTotal(d.total); })
+      .catch((e: Error) => setError(e.message))
+      .finally(() => setLoadingMore(false));
+  };
   const download = async () => {
     try { await adminDownloadCsv('/api/v1/admin/newsletter.csv'); }
     catch (e) { setError((e as Error).message); }
@@ -24,10 +38,10 @@ export default function AdminNewsletter() {
   if (!isAdmin) return <AdminsOnly />;
   return (
     <div>
-      <PageTitle sub={`${rows.length} subscribers`} actions={<button className={primaryBtn} onClick={() => void download()}>Export CSV</button>}>Newsletter</PageTitle>
+      <PageTitle sub={`${total} subscribers`} actions={<button className={primaryBtn} onClick={() => void download()}>Export CSV</button>}>Newsletter</PageTitle>
       {error && <ErrorNote message={error} />}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 mb-6 max-w-xl">
-        <StatCard label="Subscribers" value={rows.length} />
+        <StatCard label="Subscribers" value={total} />
         <StatCard label="New this week" value={newThisWeek} />
       </div>
       <Card className="overflow-hidden">
@@ -49,6 +63,16 @@ export default function AdminNewsletter() {
           </div>
         )}
       </Card>
+      {loaded && total > 0 && (
+        <p className="font-bodytext text-[12.5px] text-[#98A096] mt-4">Showing {rows.length} of {total} subscribers</p>
+      )}
+      {loaded && rows.length < total && (
+        <div className="mt-3">
+          <button type="button" className={ghostBtn} disabled={loadingMore} onClick={loadMore}>
+            {loadingMore ? 'Loading…' : 'Load more'}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

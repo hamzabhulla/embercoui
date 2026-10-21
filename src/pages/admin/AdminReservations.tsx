@@ -18,11 +18,14 @@ const localDate = (d = new Date()) =>
 /** Postgres time values can arrive as HH:MM:SS — the board groups by HH:MM. */
 const slotTime = (t: string) => t.slice(0, 5);
 const ACTIVE = ['pending', 'confirmed'];
+const PAGE_SIZE = 100;
 
 const EMPTY_FORM = { name: '', phone: '', email: '', date: '', time: '19:00', guests: 2, status: 'confirmed', notes: '' };
 
 export default function AdminReservations() {
   const [rows, setRows] = useState<Reservation[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [capacity, setCapacity] = useState(40);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -35,7 +38,7 @@ export default function AdminReservations() {
 
   const load = () => {
     Promise.all([
-      adminGet<{ reservations: Reservation[] }>('/api/v1/admin/reservations'),
+      adminGet<{ reservations: Reservation[]; total: number }>(`/api/v1/admin/reservations?limit=${PAGE_SIZE}&offset=0`),
       // Capacity comes from the PUBLIC settings DTO (it already exposes
       // reservationSlotCapacity): /admin/settings is admin-only, and staff
       // still need the real capacity for an accurate day board.
@@ -43,12 +46,26 @@ export default function AdminReservations() {
     ])
       .then(([d, s]) => {
         setRows(d.reservations);
+        setTotal(d.total);
         if (s?.settings.reservationSlotCapacity) setCapacity(s.settings.reservationSlotCapacity);
       })
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoaded(true));
   };
   useEffect(load, []);
+
+  // The day board and stats above work on the loaded rows; Load more
+  // appends the next page so older bookings can be reached too.
+  const loadMore = () => {
+    setLoadingMore(true);
+    adminGet<{ reservations: Reservation[]; total: number }>(`/api/v1/admin/reservations?limit=${PAGE_SIZE}&offset=${rows.length}`)
+      .then((d) => {
+        setRows((prev) => [...prev, ...d.reservations]);
+        setTotal(d.total);
+      })
+      .catch((e: Error) => setError(e.message))
+      .finally(() => setLoadingMore(false));
+  };
 
   const setStatus = async (id: string, status: string) => {
     setBusyId(id); setError('');
@@ -248,6 +265,16 @@ export default function AdminReservations() {
           </Card>
         ))}
       </div>
+      {loaded && total > 0 && (
+        <p className="font-bodytext text-[12.5px] text-[#98A096] mt-4">Showing {rows.length} of {total} reservations</p>
+      )}
+      {loaded && rows.length < total && (
+        <div className="mt-3">
+          <button type="button" className={ghostBtn} disabled={loadingMore} onClick={loadMore}>
+            {loadingMore ? 'Loading…' : 'Load more'}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
