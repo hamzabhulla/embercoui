@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, memo, useCallback } from 'react';
-import { Plus, Check, Search } from 'lucide-react';
+import { Check, Search } from 'lucide-react';
 import { categories, MenuItem } from '../data/menu.ts';
 import { useMenuItems } from '../services/useMenuItems.ts';
 import { useCart } from '../context/CartContext.tsx';
@@ -19,6 +19,71 @@ function getDietaryTags(item: MenuItem): string[] {
   if (desc.includes('pepper') || item.id === 8) tags.push('Spicy');
   if (item.id === 12 || item.id === 15) tags.push('Gluten Free');
   return tags;
+}
+
+/* ─── Fly-to-cart animation (approved motion mockup) ───────────────────────
+   Clones the dish image and flies it to the navbar cart button along a
+   curved path with a gold sparkle trail; the cart button and its badge
+   pulse on landing. Purely decorative — cart state is updated separately
+   and immediately, and the clone is always cleaned up. */
+function flyToCart(img: HTMLImageElement | null) {
+  if (!img || typeof window === 'undefined') return;
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const target = Array.from(document.querySelectorAll<HTMLElement>('[data-cart-target]'))
+    .find((el) => el.getBoundingClientRect().width > 0);
+  if (!target) return;
+  const r1 = img.getBoundingClientRect();
+  if (r1.width === 0) return;
+  const r2 = target.getBoundingClientRect();
+  const flyer = img.cloneNode() as HTMLImageElement;
+  flyer.removeAttribute('id');
+  Object.assign(flyer.style, {
+    position: 'fixed', left: `${r1.left}px`, top: `${r1.top}px`,
+    width: `${r1.width}px`, height: `${r1.height}px`, margin: '0',
+    borderRadius: '12px', objectFit: 'cover', pointerEvents: 'none', zIndex: 200,
+    boxShadow: '0 18px 44px rgba(0,0,0,0.55)', border: '1px solid rgba(233,196,140,0.6)',
+  });
+  document.body.appendChild(flyer);
+  const dx = (r2.left + r2.width / 2) - (r1.left + r1.width / 2);
+  const dy = (r2.top + r2.height / 2) - (r1.top + r1.height / 2);
+  let sparks = 0;
+  const trail = window.setInterval(() => {
+    sparks += 1;
+    if (sparks > 7 || !flyer.isConnected) { window.clearInterval(trail); return; }
+    const p = flyer.getBoundingClientRect();
+    const dot = document.createElement('span');
+    Object.assign(dot.style, {
+      position: 'fixed', left: `${p.left + p.width / 2}px`, top: `${p.top + p.height / 2}px`,
+      width: '7px', height: '7px', borderRadius: '50%', background: '#E9C48C',
+      pointerEvents: 'none', zIndex: 199, opacity: '0.85',
+    });
+    document.body.appendChild(dot);
+    dot.animate(
+      [{ transform: 'scale(1)', opacity: 0.9 }, { transform: `translate(${(Math.random() * 36 - 18).toFixed(0)}px, ${(14 + Math.random() * 16).toFixed(0)}px) scale(0.2)`, opacity: 0 }],
+      { duration: 480, easing: 'ease-out' },
+    ).onfinish = () => dot.remove();
+  }, 95);
+  const anim = flyer.animate(
+    [
+      { transform: 'translate(0,0) scale(1)', opacity: 1, borderRadius: '4px' },
+      { transform: `translate(${dx * 0.45}px, ${dy - 120}px) scale(0.55)`, opacity: 1, offset: 0.45 },
+      { transform: `translate(${dx}px, ${dy}px) scale(0.06)`, opacity: 0.55, borderRadius: '50%' },
+    ],
+    { duration: 780, easing: 'cubic-bezier(.3,.7,.3,1)' },
+  );
+  anim.onfinish = () => {
+    flyer.remove();
+    window.clearInterval(trail);
+    target.animate(
+      [{ transform: 'scale(1) rotate(0deg)' }, { transform: 'scale(1.18) rotate(-7deg)', offset: 0.25 }, { transform: 'scale(0.94) rotate(5deg)', offset: 0.55 }, { transform: 'scale(1) rotate(0deg)' }],
+      { duration: 600, easing: 'cubic-bezier(.2,2,.4,1)' },
+    );
+    const badge = target.querySelector('[data-cart-badge]');
+    badge?.animate(
+      [{ transform: 'scale(1)' }, { transform: 'scale(1.55)', offset: 0.35 }, { transform: 'scale(1)' }],
+      { duration: 550, easing: 'cubic-bezier(.2,2.2,.4,1)' },
+    );
+  };
 }
 
 /* ─── Scroll reveal hook ─────────────────────────────────────────────────── */
@@ -55,8 +120,8 @@ function useReveal<T extends HTMLElement>(delay = 0) {
 
 // ─── Skeleton card ────────────────────────────────────────────────────────────
 const SkeletonCard = memo(() => (
-  <div className="overflow-hidden flex flex-col animate-pulse" style={{ background: '#1C2B1E' }}>
-    <div className="h-[160px] md:h-52 flex-shrink-0" style={{ background: '#0D1A0E' }} />
+  <div className="overflow-hidden flex flex-col animate-pulse" style={{ background: 'linear-gradient(180deg, rgba(245,240,232,0.045), rgba(245,240,232,0.015))', border: '1px solid rgba(245,240,232,0.09)', borderRadius: '18px' }}>
+    <div className="h-[172px] flex-shrink-0" style={{ background: '#0D1A0E' }} />
     <div className="p-0 pb-[14px] md:p-5 flex flex-col gap-3 flex-1">
       <div className="flex flex-col md:flex-row justify-between gap-1 md:gap-3 pt-2 md:pt-0">
         <div className="h-4 md:h-5 rounded w-2/3" style={{ background: 'rgba(245,240,232,0.1)' }} />
@@ -76,19 +141,27 @@ const SkeletonCard = memo(() => (
 const MenuCard = memo(({ item, isAdded, onAdd, index }: {
   item: MenuItem;
   isAdded: boolean;
-  onAdd: (item: MenuItem) => void;
+  onAdd: (item: MenuItem, img: HTMLImageElement | null) => void;
   index: number;
 }) => {
   const { format } = useCurrency();
-  const tags = useMemo(() => getDietaryTags(item), [item]);
   const ref = useReveal<HTMLDivElement>((index % 3) * 100);
+  const imgRef = useRef<HTMLImageElement>(null);
 
   return (
-    <div ref={ref} className="c-hidden group overflow-hidden flex flex-col transition-all duration-500 hover:-translate-y-1" style={{ background: '#1C2B1E', border: '1px solid rgba(245,240,232,0.05)' }}>
-      <div className="relative h-[160px] md:h-52 overflow-hidden flex-shrink-0">
+    <div
+      ref={ref}
+      className="c-hidden group overflow-hidden flex flex-col transition-all duration-500 hover:-translate-y-[3px] hover:border-[rgba(193,122,58,0.4)]"
+      style={{
+        background: 'linear-gradient(180deg, rgba(245,240,232,0.045), rgba(245,240,232,0.015))',
+        border: '1px solid rgba(245,240,232,0.09)',
+        borderRadius: '18px',
+      }}
+    >
+      <div className="relative h-[172px] overflow-hidden flex-shrink-0">
         <FavoriteButton itemId={item.id} />
-        <div className="absolute inset-0 bg-black/20 group-hover:bg-transparent transition-colors duration-500 z-10" />
         <img
+          ref={imgRef}
           src={item.image}
           alt={item.name}
           loading="lazy"
@@ -98,57 +171,42 @@ const MenuCard = memo(({ item, isAdded, onAdd, index }: {
           className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700 ease-out"
         />
       </div>
-      <div className="p-0 pb-[14px] md:p-6 flex flex-col flex-1">
-        <div className="flex flex-col md:flex-row md:items-start justify-between gap-1 md:gap-3 mb-3 md:mb-3 pt-2 md:pt-0">
-          <h3
-            className="text-[#F5F0E8] text-[15px] md:text-xl leading-tight tracking-wide mb-1 md:mb-0 min-h-[48px] md:min-h-0"
-            style={{ fontFamily: 'Cormorant Garamond, serif', fontWeight: 400 }}
-          >
-            {item.name}
-          </h3>
-          <span
-            className="text-[#C17A3A] font-medium text-[14px] md:text-base flex-shrink-0"
-            style={{ fontFamily: 'Jost, sans-serif' }}
-          >
-            {format(item.price)}
-          </span>
+      <div className="px-[18px] pb-[18px] pt-4 flex flex-col flex-1">
+        <h3
+          className="text-[#F5F0E8] text-[21px] leading-[1.15]"
+          style={{ fontFamily: 'Cormorant Garamond, serif', fontWeight: 500 }}
+        >
+          {item.name}
+        </h3>
+        <div
+          className="text-[#C17A3A] text-[10px] uppercase mt-[2px]"
+          style={{ fontFamily: 'Jost, sans-serif', letterSpacing: '0.24em' }}
+        >
+          {item.category}
         </div>
         <p
-          className="hidden md:block text-[#F5F0E8]/60 text-[0.85rem] leading-relaxed mb-6 flex-1 font-light"
+          className="text-[#F5F0E8]/60 text-[13px] leading-relaxed mt-[10px] font-light line-clamp-2"
           style={{ fontFamily: 'Jost, sans-serif' }}
         >
           {item.description}
         </p>
-
-        {tags.length > 0 && (
-          <div className="hidden md:flex flex-wrap gap-2 mb-6">
-            {tags.map(tag => (
-              <span
-                key={tag}
-                className="px-2.5 py-1 bg-[#0D1A0E] text-[#C17A3A] text-[9px] uppercase tracking-[0.2em] font-medium border border-[#C17A3A]/20"
-                style={{ fontFamily: 'Jost, sans-serif' }}
-              >
-                {tag}
-              </span>
-            ))}
-          </div>
-        )}
-
-        <div className="mt-auto">
-          <button
-            onClick={() => onAdd(item)}
-            className={`w-full flex items-center justify-center gap-[8px] p-[10px] md:px-[20px] md:py-[14px] text-[10px] md:text-[10px] tracking-[0.1em] md:tracking-[0.15em] rounded-none uppercase transition-all duration-300 ease-out border ${
-              isAdded
-                ? 'bg-[#2E7D32] border-[#2E7D32] text-[#F5F0E8]'
-                : 'bg-transparent text-[#C17A3A] border-[#C17A3A]/30 hover:bg-[#C17A3A] hover:border-[#C17A3A] hover:text-white'
-            }`}
-            style={{ fontFamily: 'Jost, sans-serif' }}
+        <div className="flex items-center justify-between mt-auto pt-[14px]">
+          <span
+            className="text-[#E9C48C] text-[21px]"
+            style={{ fontFamily: 'Cormorant Garamond, serif' }}
           >
-            {isAdded ? (
-              <><Check size={14} /> <span className="hidden md:inline">Added</span></>
-            ) : (
-              <><Plus size={14} /> Add to Cart</>
-            )}
+            {format(item.price)}
+          </span>
+          <button
+            onClick={() => onAdd(item, imgRef.current)}
+            className={`flex items-center gap-2 rounded-full uppercase transition-all duration-300 ${
+              isAdded
+                ? 'border border-[#58B368] bg-[#58B368] text-white'
+                : 'border border-[rgba(193,122,58,0.6)] bg-[rgba(193,122,58,0.10)] text-[#EBCB9C] hover:bg-[#C17A3A] hover:text-white hover:shadow-[0_10px_26px_rgba(193,122,58,0.35)]'
+            }`}
+            style={{ fontFamily: 'Jost, sans-serif', fontSize: '10.5px', letterSpacing: '0.2em', padding: '11px 18px' }}
+          >
+            {isAdded ? <><Check size={13} /> Added</> : 'Add to Cart'}
           </button>
         </div>
       </div>
@@ -175,8 +233,9 @@ export default function MenuPage() {
     return () => clearTimeout(t);
   }, []);
 
-  const handleAdd = useCallback((item: MenuItem) => {
+  const handleAdd = useCallback((item: MenuItem, img?: HTMLImageElement | null) => {
     addItem({ id: item.id, name: item.name, price: item.price, image: item.image });
+    flyToCart(img ?? null);
     setAdded(item.id);
     setTimeout(() => setAdded(null), 1500);
   }, [addItem]);

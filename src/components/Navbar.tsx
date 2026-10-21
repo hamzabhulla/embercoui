@@ -130,12 +130,13 @@ export default function Navbar({ forceDark = false }: { forceDark?: boolean }) {
               <User size={18} />
             </button>
             <button
+              data-cart-target
               onClick={() => setIsOpen(true)}
               className={`relative ${iconColor} opacity-80 hover:opacity-100 transition-opacity`}
             >
               <ShoppingBag size={18} />
               {totalCount > 0 && (
-                <span className="absolute -top-1.5 -right-1.5 bg-ember text-white text-[9px] font-bold w-4 h-4 rounded-full flex items-center justify-center border-0">
+                <span data-cart-badge className="absolute -top-1.5 -right-1.5 bg-ember text-white text-[9px] font-bold w-4 h-4 rounded-full flex items-center justify-center border-0">
                   {totalCount}
                 </span>
               )}
@@ -158,12 +159,13 @@ export default function Navbar({ forceDark = false }: { forceDark?: boolean }) {
               <User size={20} />
             </button>
             <button
+              data-cart-target
               onClick={() => setIsOpen(true)}
               className={`relative ${iconColor} opacity-90 hover:opacity-100 transition-opacity`}
             >
               <ShoppingBag size={20} />
               {totalCount > 0 && (
-                <span className="absolute -top-1.5 -right-1.5 bg-ember text-white text-[9px] font-bold w-4 h-4 rounded-full flex items-center justify-center border-0">
+                <span data-cart-badge className="absolute -top-1.5 -right-1.5 bg-ember text-white text-[9px] font-bold w-4 h-4 rounded-full flex items-center justify-center border-0">
                   {totalCount}
                 </span>
               )}
