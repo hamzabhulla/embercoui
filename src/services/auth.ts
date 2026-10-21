@@ -56,3 +56,27 @@ export async function signOut(): Promise<void> {
   if (!supabase) return;
   await supabase.auth.signOut();
 }
+
+/**
+ * Google sign-in / sign-up via Supabase OAuth (full-page redirect).
+ * The provider must be enabled in Supabase Dashboard -> Authentication ->
+ * Providers -> Google, with the site origin allow-listed under
+ * Authentication -> URL Configuration. On return, AuthContext picks the
+ * session up automatically and the profile row is created by the
+ * handle_new_user trigger (full_name comes from the Google profile).
+ */
+export async function signInWithGoogle(): Promise<AuthResult> {
+  if (!supabase) return { error: NOT_AVAILABLE };
+  const { error } = await supabase.auth.signInWithOAuth({
+    provider: 'google',
+    options: { redirectTo: `${window.location.origin}/` },
+  });
+  return { error: error ? friendly(error) : null };
+}
+
+/** Re-send the signup confirmation email (used by the "Check your email" screen). */
+export async function resendConfirmation(email: string): Promise<AuthResult> {
+  if (!supabase) return { error: NOT_AVAILABLE };
+  const { error } = await supabase.auth.resend({ type: 'signup', email });
+  return { error: error ? friendly(error) : null };
+}

@@ -1,65 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
 import { sendPasswordReset } from '../../services/auth.ts';
+import InputField from './InputField.tsx';
 
 interface Props {
   onClose: () => void;
   onNavigate: (path: string) => void;
 }
-
-interface InputFieldProps extends React.InputHTMLAttributes<HTMLInputElement> {
-  label: string;
-  error?: string;
-}
-
-const InputField = ({ label, type = 'text', value, onChange, error, ...props }: InputFieldProps) => {
-  const [focused, setFocused] = useState(false);
-  const active = focused || String(value ?? '').length > 0;
-  
-  return (
-    <div className="relative mb-5">
-      <label 
-        className={`absolute left-0 transition-all duration-250 ease-in-out pointer-events-none ${
-          active 
-            ? '-top-4 text-[10px] text-[#C17A3A]' 
-            : 'top-3 text-[12px] md:text-sm text-[rgba(245,240,232,0.4)]'
-        }`}
-        style={{ 
-          fontFamily: 'Jost, sans-serif', 
-          textTransform: 'uppercase', 
-          letterSpacing: '0.1em' 
-        }}
-      >
-        {label}
-      </label>
-      <input
-        type={type}
-        value={value}
-        onChange={onChange}
-        onFocus={() => setFocused(true)}
-        onBlur={() => setFocused(false)}
-        className={`w-full bg-transparent outline-none transition-colors duration-250 ease-in-out text-[#F5F0E8] text-[16px] md:text-[14px] min-h-[48px] md:min-h-0 ${
-          error ? 'border-[#ef4444]' : focused ? 'border-[#C17A3A]' : 'border-[rgba(255,255,255,0.15)]'
-        }`}
-        style={{
-          borderBottomWidth: '1px',
-          borderBottomStyle: 'solid',
-          paddingBottom: '8px',
-          paddingTop: active ? '8px' : '12px'
-        }}
-        {...props}
-      />
-      {error && (
-        <span 
-          className="absolute -bottom-5 left-0 text-[#ef4444]" 
-          style={{ fontFamily: 'Jost, sans-serif', fontSize: '11px' }}
-        >
-          {error}
-        </span>
-      )}
-    </div>
-  );
-};
 
 export default function ForgotPasswordModal({ onClose, onNavigate }: Props) {
   const [mounted, setMounted] = useState(false);
@@ -75,10 +22,15 @@ export default function ForgotPasswordModal({ onClose, onNavigate }: Props) {
   useEffect(() => {
     setMounted(true);
     document.body.style.overflow = 'hidden';
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
     return () => {
       document.body.style.overflow = '';
+      window.removeEventListener('keydown', onKey);
     };
-  }, []);
+  }, [onClose]);
 
   useEffect(() => {
     if (isSuccess) {
@@ -128,8 +80,9 @@ export default function ForgotPasswordModal({ onClose, onNavigate }: Props) {
           boxShadow: '0 40px 80px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.04)'
         }}
       >
-        <button 
+        <button
           onClick={onClose}
+          aria-label="Close"
           className="absolute top-6 right-6 text-white hover:text-[#C17A3A] transition-colors z-10"
         >
           <X size={20} />
@@ -239,11 +192,21 @@ export default function ForgotPasswordModal({ onClose, onNavigate }: Props) {
               </div>
 
               <form onSubmit={handleSubmit} className="flex flex-col gap-2">
-                <InputField 
-                  label="Email Address" 
-                  type="email" 
-                  value={email} 
-                  onChange={(e) => setEmail(e.target.value)} 
+                <InputField
+                  label="Email Address"
+                  type="email"
+                  name="email"
+                  autoComplete="email"
+                  value={email}
+                  onChange={(e) => {
+                    setEmail(e.target.value);
+                    setErrors((prev) => {
+                      if (!prev.email) return prev;
+                      const next = { ...prev };
+                      delete next.email;
+                      return next;
+                    });
+                  }}
                   error={errors.email}
                 />
                 
