@@ -123,6 +123,28 @@ describe('admin reservations, reviews, newsletter, coupons, finance, staff, sett
     expect(edited.body.coupon.isActive).toBe(false);
     expect((await as(request(app).delete(`/api/v1/admin/coupons/${id}`), 'token-admin')).status).toBe(200);
   });
+  it('rejects duplicate coupon codes with 409 (create and rename)', async () => {
+    const body = { code: 'dupe10', type: 'percent', value: 10 };
+    const first = await as(request(app).post('/api/v1/admin/coupons').send(body), 'token-admin');
+    expect(first.status).toBe(201);
+    // Same code again — and codes are stored upper-case, so case is no dodge.
+    const dupe = await as(request(app).post('/api/v1/admin/coupons').send(body), 'token-admin');
+    expect(dupe.status).toBe(409);
+    expect(dupe.body.error).toBe('A coupon with this code already exists');
+    expect((await as(request(app).post('/api/v1/admin/coupons').send({ ...body, code: 'DUPE10' }), 'token-admin')).status).toBe(409);
+    // Renaming another coupon onto the taken code conflicts the same way.
+    const other = await as(request(app).post('/api/v1/admin/coupons').send({ code: 'other5', type: 'fixed', value: 5 }), 'token-admin');
+    expect(other.status).toBe(201);
+    const renamed = await as(request(app).patch(`/api/v1/admin/coupons/${other.body.coupon.id}`).send({ code: 'dupe10' }), 'token-admin');
+    expect(renamed.status).toBe(409);
+    expect(renamed.body.error).toBe('A coupon with this code already exists');
+    // A normal create still works, and cleanup keeps the list tidy.
+    const fine = await as(request(app).post('/api/v1/admin/coupons').send({ code: 'fresh15', type: 'percent', value: 15 }), 'token-admin');
+    expect(fine.status).toBe(201);
+    for (const created of [first, other, fine]) {
+      expect((await as(request(app).delete(`/api/v1/admin/coupons/${created.body.coupon.id}`), 'token-admin')).status).toBe(200);
+    }
+  });
   it('reports finance from paid orders only', async () => {
     const res = await as(request(app).get('/api/v1/admin/finance'), 'token-admin');
     expect(res.status).toBe(200);

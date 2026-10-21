@@ -58,6 +58,17 @@ describe('Admin-created (walk-in / phone) reservations', () => {
     const res = await request(app).post('/api/v1/admin/reservations').set('Authorization', ['Bearer', 'token-user'].join(' ')).send(walkIn);
     expect(res.status).toBe(403);
   });
+
+  it('rejects walk-in dates in the past but accepts today and tomorrow', async () => {
+    const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+    const past = await postReservation({ ...walkIn, date: yesterday });
+    expect(past.status).toBe(400);
+    expect(past.body.error).toBe('Please choose a date that is not in the past');
+    const today = new Date().toISOString().slice(0, 10);
+    const tomorrow = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+    expect((await postReservation({ ...walkIn, name: 'Today Booking', date: today })).status).toBe(201);
+    expect((await postReservation({ ...walkIn, name: 'Tomorrow Booking', date: tomorrow })).status).toBe(201);
+  });
 });
 
 describe('Reservation slot capacity in settings', () => {

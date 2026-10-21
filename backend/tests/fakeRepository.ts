@@ -204,13 +204,25 @@ export class FakeRepository implements Repository {
   }
   async adminListCoupons() { return [...this.coupons]; }
   async createCoupon(data: Omit<CouponDTO, 'id'>) {
-    const coupon: CouponDTO = { ...data, id: `cpn-${++this.seq}`, code: data.code.toUpperCase() };
+    const code = data.code.toUpperCase();
+    // Mirror the real repository: the coupons.code unique index makes a
+    // duplicate write a 409 conflict, never a silent second coupon.
+    if (this.coupons.some((c) => c.code === code)) {
+      throw new ApiError(409, 'A coupon with this code already exists');
+    }
+    const coupon: CouponDTO = { ...data, id: `cpn-${++this.seq}`, code };
     this.coupons.push(coupon);
     return coupon;
   }
   async updateCoupon(id: string, patch: Partial<Omit<CouponDTO, 'id'>>) {
     const c = this.coupons.find((x) => x.id === id);
     if (!c) return null;
+    if (patch.code) {
+      const code = patch.code.toUpperCase();
+      if (this.coupons.some((x) => x.id !== id && x.code === code)) {
+        throw new ApiError(409, 'A coupon with this code already exists');
+      }
+    }
     Object.assign(c, patch);
     if (patch.code) c.code = patch.code.toUpperCase();
     return c;

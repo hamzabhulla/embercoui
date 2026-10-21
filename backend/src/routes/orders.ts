@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
 import { ApiError, notConfigured } from '../lib/errors';
 import { optionalAuth, type AuthedRequest } from '../lib/auth';
@@ -8,7 +9,7 @@ import { fromMinorUnits, toMinorUnits } from '../lib/currency';
 import type { OrderDTO, Repository } from '../repositories/types';
 
 const orderSchema = z.object({
-  customerName: z.string().trim().min(1, 'Full name is required'),
+  customerName: z.string().trim().min(1, 'Full name is required').max(120),
   customerEmail: z.string().trim().min(1, 'Email is required').email('Invalid email format'),
   customerPhone: z.string().trim().max(30).optional().nullable(),
   address: z
@@ -34,28 +35,50 @@ const orderSchema = z.object({
         quantity: z.number().int().min(1, 'Quantity must be at least 1').max(50, 'Quantity is too large'),
       })
     )
-    .min(1, 'Your cart is empty'),
+    .min(1, 'Your cart is empty')
+    // A real order never has more distinct lines than this; the cap keeps a
+    // single request from fanning out into unbounded per-line menu lookups.
+    .max(50, 'Too many items in one order'),
 });
 
 const couponSchema = z.object({ code: z.string().trim().min(1, 'Coupon code is required').max(40) });
 
-export function ordersRouter(deps: { repo: Repository | null; verifyToken: TokenVerifier }) {
+export function ordersRouter(deps: { repo: Repository | null; verifyToken: TokenVerifier; rateLimitMax?: number }) {
   const router = Router();
   const repo = () => {
     if (!deps.repo) throw notConfigured();
     return deps.repo;
   };
 
-  router.post('/orders', optionalAuth(deps), validateBody(orderSchema), async (req: AuthedRequest, res, next) => {
+  // Dedicated order-creation budget (same factory pattern as the chat
+  // limiter): generous for a household behind one NAT address, hostile to
+  // scripted order spam. Only order creation is metered — tracking reads
+  // and coupon checks stay on the global limiter.
+  const orderLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: deps.rateLimitMax ?? 30,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    message: { error: 'Too many orders — please try again in a few minutes' },
+  });
+
+  router.post('/orders', orderLimiter, optionalAuth(deps), validateBody(orderSchema), async (req: AuthedRequest, res, next) => {
     try {
       const body = req.body as z.infer<typeof orderSchema>;
       const r = repo();
 
+      const settings = await r.getSettings();
+      // A closed kitchen takes no orders. The storefront hides ordering
+      // when the toggle is off, but the API enforces it too — a stale or
+      // scripted client must not slip an order in.
+      if (!settings.kitchenOpen) {
+        throw new ApiError(400, 'The kitchen is currently closed — ordering will reopen soon');
+      }
       // The order is denominated in the restaurant's CURRENT currency and
       // snapshots it — a later currency switch never rewrites this order.
       // All math runs in that currency's minor units (USD/PKR: 100 per
       // major, JPY: 1, KWD: 1000), so no exponent can skew a total.
-      const { currency } = await r.getSettings();
+      const { currency } = settings;
 
       // Prices are ALWAYS recalculated from the database — anything the
       // client claims about prices is ignored by design.

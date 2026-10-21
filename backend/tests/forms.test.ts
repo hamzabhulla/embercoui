@@ -100,4 +100,26 @@ describe('form hardening (audit minors)', () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('For parties over 20, please contact us directly');
   });
+  it('rejects reservation dates in the past', async () => {
+    const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+    const res = await request(app).post('/api/v1/reservations').send({ ...reservation, date: yesterday });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('Please choose a date that is not in the past');
+  });
+  it('accepts reservations for today and tomorrow', async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const tomorrow = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+    expect((await request(app).post('/api/v1/reservations').send({ ...reservation, date: today })).status).toBe(201);
+    expect((await request(app).post('/api/v1/reservations').send({ ...reservation, date: tomorrow })).status).toBe(201);
+  });
+  it('rejects over-long reservation names, contact messages and review comments', async () => {
+    const longName = await request(app).post('/api/v1/reservations').send({ ...reservation, name: 'x'.repeat(121) });
+    expect(longName.status).toBe(400);
+    const longMessage = await request(app).post('/api/v1/contact').send({ name: 'A', email: 'a@b.com', message: 'x'.repeat(2001) });
+    expect(longMessage.status).toBe(400);
+    const longComment = await request(app).post('/api/v1/reviews')
+      .set('Authorization', ['Bearer', 'token-user'].join(' '))
+      .send({ rating: 5, comment: 'x'.repeat(1001) });
+    expect(longComment.status).toBe(400);
+  });
 });

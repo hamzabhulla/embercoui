@@ -500,7 +500,14 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
         .insert({ code: data.code.toUpperCase(), type: data.type, value: data.value, is_active: data.isActive, expires_at: data.expiresAt })
         .select('*')
         .single();
-      if (error) throw new Error(`coupon insert failed: ${error.message}`);
+      if (error) {
+        // The coupons.code unique index: a duplicate is the caller's
+        // conflict (409), not a server fault (500).
+        if ((error as { code?: string }).code === '23505') {
+          throw new ApiError(409, 'A coupon with this code already exists');
+        }
+        throw new Error(`coupon insert failed: ${error.message}`);
+      }
       return couponDTO(row as Row);
     },
     async updateCoupon(id, patch) {
@@ -511,7 +518,13 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
       if (patch.isActive !== undefined) update.is_active = patch.isActive;
       if (patch.expiresAt !== undefined) update.expires_at = patch.expiresAt;
       const { data, error } = await db.from('coupons').update(update).eq('id', id).select('*').maybeSingle();
-      if (error) throw new Error(`coupon update failed: ${error.message}`);
+      if (error) {
+        // Renaming onto another coupon's code hits the same unique index.
+        if ((error as { code?: string }).code === '23505') {
+          throw new ApiError(409, 'A coupon with this code already exists');
+        }
+        throw new Error(`coupon update failed: ${error.message}`);
+      }
       return data ? couponDTO(data as Row) : null;
     },
     async deleteCoupon(id) {

@@ -15,17 +15,27 @@ const formLimiter = rateLimit({
   message: { error: 'Too many submissions — please try again in a few minutes' },
 });
 
-const email = z.string().trim().min(1, 'Email is required').email('Invalid email format');
+// 254 is the maximum length of a valid email address (RFC 5321) — anything
+// longer is not a real address, just payload.
+const email = z.string().trim().min(1, 'Email is required').max(254).email('Invalid email format');
 
 const reservationSchema = z.object({
-  name: z.string().trim().min(1, 'Full name is required'),
+  name: z.string().trim().min(1, 'Full name is required').max(120),
   email,
-  phone: z.string().trim().min(7, 'Phone number is required'),
+  phone: z.string().trim().min(7, 'Phone number is required').max(32),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date is required').refine((v) => {
     const [y, m, d] = v.split('-').map(Number);
     const dt = new Date(Date.UTC(y, m - 1, d));
     return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
-  }, 'Please choose a valid date'),
+  }, 'Please choose a valid date').refine((v) => {
+    // Not in the past. Reservation dates are plain local date strings, and
+    // the string compare is exact for YYYY-MM-DD. "Today" is the server's
+    // current UTC date — a booking for today is always allowed, anything
+    // earlier names a day the kitchen can no longer honour. Malformed
+    // values pass here so the checks above report them instead.
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return true;
+    return v >= new Date().toISOString().slice(0, 10);
+  }, 'Please choose a date that is not in the past'),
   time: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/, 'Time is required').refine((v) => {
     const [h, m] = v.split(':').map(Number);
     return h >= 0 && h <= 23 && m >= 0 && m <= 59;
@@ -35,16 +45,16 @@ const reservationSchema = z.object({
 
 const newsletterSchema = z.object({ email });
 const contactSchema = z.object({
-  name: z.string().trim().min(1, 'Name is required'),
+  name: z.string().trim().min(1, 'Name is required').max(120),
   email,
   phone: z.string().trim().optional(),
   subject: z.string().trim().max(120).optional(),
-  message: z.string().trim().min(1, 'Message is required'),
+  message: z.string().trim().min(1, 'Message is required').max(2000),
 });
 const reviewSchema = z.object({
   rating: z.coerce.number().int().min(1, 'Please choose a star rating').max(5),
-  comment: z.string().trim().min(3, 'Please write a few words about your visit'),
-  country: z.string().trim().max(60).optional(),
+  comment: z.string().trim().min(3, 'Please write a few words about your visit').max(1000),
+  country: z.string().trim().max(80).optional(),
 });
 
 export function formsRouter(deps: { repo: Repository | null; verifyToken: TokenVerifier }) {

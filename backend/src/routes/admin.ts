@@ -63,14 +63,20 @@ const settingsSchema = z.object({
 // Walk-in / phone bookings created from the admin panel. Email is optional
 // (walk-ins don't always leave one); date/time rules mirror the public form.
 const adminReservationSchema = z.object({
-  name: z.string().trim().min(1, 'Full name is required'),
-  email: z.union([z.string().trim().email('Invalid email format'), z.literal('')]).optional(),
-  phone: z.string().trim().min(7, 'Phone number is required'),
+  name: z.string().trim().min(1, 'Full name is required').max(120),
+  email: z.union([z.string().trim().max(254).email('Invalid email format'), z.literal('')]).optional(),
+  phone: z.string().trim().min(7, 'Phone number is required').max(32),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date is required').refine((v) => {
     const [y, m, d] = v.split('-').map(Number);
     const dt = new Date(Date.UTC(y, m - 1, d));
     return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
-  }, 'Please choose a valid date'),
+  }, 'Please choose a valid date').refine((v) => {
+    // Same rule as the public form: not in the past. "Today" is the
+    // server's current UTC date (bookings for today always pass) and the
+    // string compare is exact for YYYY-MM-DD.
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return true;
+    return v >= new Date().toISOString().slice(0, 10);
+  }, 'Please choose a date that is not in the past'),
   time: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/, 'Time is required').refine((v) => {
     const [h, m] = v.split(':').map(Number);
     return h >= 0 && h <= 23 && m >= 0 && m <= 59;
