@@ -229,17 +229,73 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
     },
 
     async createOrder(data: CreateOrderData) {
-      const { data: row, error } = await db
-        .from('orders')
-        .insert({
-          user_id: data.userId, customer_name: data.customerName, customer_email: data.customerEmail,
-          customer_phone: data.customerPhone, delivery_address: data.address, notes: data.notes,
-          coupon_code: data.couponCode, currency: data.currency, subtotal: data.subtotal, delivery_fee: data.deliveryFee,
-          discount: data.discount, total: data.total, status: 'pending', payment_status: 'unpaid',
-        })
-        .select('*')
-        .single();
-      if (error) throw new Error(`order insert failed: ${error.message}`);
+      const key = data.idempotencyKey ?? null;
+      // Whether the idempotency_key column is usable. It only becomes false
+      // when PostgREST reports the column missing — i.e. migration 0006 has
+      // not run yet (or its schema cache has not reloaded). Two signals:
+      // filtering on an unknown column surfaces PG error 42703, and sending
+      // an unknown column in an insert payload surfaces PGRST204. In that
+      // state checkout must keep working exactly as it did before 0006,
+      // just without dedupe — the live site never breaks waiting on the
+      // owner to run the migration.
+      let keyUsable = key !== null;
+      const isMissingKeyColumn = (error: { code?: string } | null): boolean =>
+        !!error && (error.code === '42703' || error.code === 'PGRST204');
+
+      const findByKey = async (): Promise<OrderDTO | null> => {
+        const { data: existing, error } = await db
+          .from('orders')
+          .select('id')
+          .eq('idempotency_key', key as string)
+          .maybeSingle();
+        if (error) {
+          if (isMissingKeyColumn(error)) { keyUsable = false; return null; }
+          throw new Error(`order idempotency lookup failed: ${error.message}`);
+        }
+        if (!existing) return null;
+        return repo.getOrder(str((existing as Row).id));
+      };
+
+      if (keyUsable) {
+        // First write wins: a retry with the same key returns the original
+        // order untouched — even if the retry carries different items.
+        const existing = await findByKey();
+        if (existing) return existing;
+      }
+
+      const insertRow = (withKey: boolean) => ({
+        user_id: data.userId, customer_name: data.customerName, customer_email: data.customerEmail,
+        customer_phone: data.customerPhone, delivery_address: data.address, notes: data.notes,
+        coupon_code: data.couponCode, currency: data.currency, subtotal: data.subtotal, delivery_fee: data.deliveryFee,
+        discount: data.discount, total: data.total, status: 'pending', payment_status: 'unpaid',
+        ...(withKey && key ? { idempotency_key: key } : {}),
+      });
+
+      let { data: row, error } = await db.from('orders').insert(insertRow(keyUsable)).select('*').single();
+      if (error && keyUsable && isMissingKeyColumn(error)) {
+        // Pre-migration schema (or a stale PostgREST cache): retry once
+        // without the key — the plain pre-0006 insert.
+        keyUsable = false;
+        ({ data: row, error } = await db.from('orders').insert(insertRow(false)).select('*').single());
+      }
+      if (error) {
+        // Unique-index backstop: two submits raced past the pre-check with
+        // the same key; the loser lands here with 23505. The winner's
+        // order is the correct response. (A 23505 can only come from the
+        // idempotency index — orders has no other unique constraint the
+        // insert can hit besides the server-generated PK.)
+        if (keyUsable && (error as { code?: string }).code === '23505') {
+          let winner = await findByKey();
+          if (winner && winner.items.length === 0) {
+            // The winner committed its order row a moment ago and may
+            // still be inserting its items — re-read once, briefly later.
+            await new Promise((resolve) => setTimeout(resolve, 250));
+            winner = (await findByKey()) ?? winner;
+          }
+          if (winner) return winner;
+        }
+        throw new Error(`order insert failed: ${error.message}`);
+      }
       const orderId = str((row as Row).id);
       const items = data.items.map((i) => ({
         order_id: orderId, menu_item_id: i.menuItemId, name: i.name, unit_price: i.unitPrice, quantity: i.quantity,

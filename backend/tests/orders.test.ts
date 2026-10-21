@@ -64,6 +64,60 @@ describe('POST /orders — server-side pricing', () => {
   });
 });
 
+describe('POST /orders — idempotency (migration 0006)', () => {
+  it('returns the original order for a repeated key — exactly one order is stored', async () => {
+    const before = repo.orders.length;
+    const first = await createOrder({ idempotencyKey: 'checkout-attempt-0001' });
+    const retry = await createOrder({ idempotencyKey: 'checkout-attempt-0001' });
+    expect(first.status).toBe(201);
+    expect(retry.status).toBe(201);
+    expect(retry.body.order.id).toBe(first.body.order.id);
+    expect(repo.orders.length).toBe(before + 1);
+    // The returned order is complete — items included, totals intact.
+    expect(retry.body.order.items).toHaveLength(2);
+    expect(retry.body.order.total).toBe(86);
+    // The key itself is internal — never exposed on the order DTO.
+    expect(retry.body.order).not.toHaveProperty('idempotencyKey');
+    expect(retry.body.order).not.toHaveProperty('idempotency_key');
+  });
+
+  it('creates separate orders for different keys', async () => {
+    const before = repo.orders.length;
+    const a = await createOrder({ idempotencyKey: 'checkout-attempt-0002' });
+    const b = await createOrder({ idempotencyKey: 'checkout-attempt-0003' });
+    expect(a.body.order.id).not.toBe(b.body.order.id);
+    expect(repo.orders.length).toBe(before + 2);
+  });
+
+  it('behaves as before when no key is sent (every submit creates an order)', async () => {
+    const before = repo.orders.length;
+    const a = await createOrder();
+    const b = await createOrder();
+    expect(a.body.order.id).not.toBe(b.body.order.id);
+    expect(repo.orders.length).toBe(before + 2);
+  });
+
+  it('first write wins: a key reused with DIFFERENT cart contents still returns the original order', async () => {
+    const before = repo.orders.length;
+    const first = await createOrder({ idempotencyKey: 'checkout-attempt-0004' });
+    const retry = await createOrder({
+      idempotencyKey: 'checkout-attempt-0004',
+      items: [{ menuItemId: 2, quantity: 5 }],
+    });
+    expect(retry.status).toBe(201);
+    expect(retry.body.order.id).toBe(first.body.order.id);
+    expect(retry.body.order.total).toBe(first.body.order.total);
+    expect(retry.body.order.items).toEqual(first.body.order.items);
+    expect(repo.orders.length).toBe(before + 1);
+  });
+
+  it('rejects keys outside the sane length bounds', async () => {
+    expect((await createOrder({ idempotencyKey: 'short' })).status).toBe(400);
+    expect((await createOrder({ idempotencyKey: 'x'.repeat(81) })).status).toBe(400);
+    expect((await createOrder({ idempotencyKey: 'x'.repeat(80) })).status).toBe(201);
+  });
+});
+
 describe('GET /orders/:id privacy', () => {
   it('tracks guest orders by id', async () => {
     const created = await createOrder();

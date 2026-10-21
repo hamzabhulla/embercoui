@@ -125,6 +125,13 @@ export interface CreateOrderData {
   address: Record<string, unknown> | null;
   notes: string | null;
   couponCode: string | null;
+  /**
+   * Per-checkout-attempt idempotency key (migration 0006). When present,
+   * createOrder returns the ORIGINAL order for a repeated key instead of
+   * creating a duplicate — first write wins. Internal only: the key is
+   * never copied onto OrderDTO.
+   */
+  idempotencyKey?: string | null;
   /** ISO 4217 code the order's money amounts are denominated in. */
   currency: string;
   items: { menuItemId: number; name: string; unitPrice: number; quantity: number }[];

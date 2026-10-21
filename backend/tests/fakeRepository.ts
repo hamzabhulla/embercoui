@@ -30,6 +30,8 @@ export class FakeRepository implements Repository {
   newsletter = new Set<string>();
   contactMessages: unknown[] = [];
   orders: OrderDTO[] = [];
+  /** order id → idempotency key. Mirrors the real repository: the key is stored with the order but never exposed on the DTO. */
+  orderIdempotencyKeys = new Map<string, string>();
   coupons: CouponDTO[] = [
     { id: 'cpn-1', code: 'WELCOME10', type: 'percent', value: 10, isActive: true, expiresAt: null },
     { id: 'cpn-2', code: 'OLD50', type: 'percent', value: 50, isActive: true, expiresAt: '2020-01-01T00:00:00Z' },
@@ -87,6 +89,13 @@ export class FakeRepository implements Repository {
   async listOrdersForUser(userId: string) { return this.orders.filter((o) => o.userId === userId); }
 
   async createOrder(data: CreateOrderData): Promise<OrderDTO> {
+    // Same idempotency semantics as the Supabase repository: when a key is
+    // provided, first write wins — a repeated key returns the original
+    // order, even if the retry carries different items.
+    if (data.idempotencyKey) {
+      const existing = this.orders.find((o) => this.orderIdempotencyKeys.get(o.id) === data.idempotencyKey);
+      if (existing) return existing;
+    }
     const order: OrderDTO = {
       id: `order-${++this.seq}`,
       userId: data.userId, customerName: data.customerName, customerEmail: data.customerEmail,
@@ -98,6 +107,7 @@ export class FakeRepository implements Repository {
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     };
     this.orders.push(order);
+    if (data.idempotencyKey) this.orderIdempotencyKeys.set(order.id, data.idempotencyKey);
     return order;
   }
   async getOrder(id: string) { return this.orders.find((o) => o.id === id) ?? null; }

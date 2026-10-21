@@ -23,6 +23,10 @@ const orderSchema = z.object({
     .nullable(),
   notes: z.string().trim().max(300).optional().nullable(),
   couponCode: z.string().trim().max(40).optional().nullable(),
+  // One key per checkout attempt (the page generates it on mount). A retry
+  // or double submit carrying the same key returns the original order
+  // instead of duplicating it. Optional: key-less clients behave as before.
+  idempotencyKey: z.string().trim().min(8).max(80).optional().nullable(),
   items: z
     .array(
       z.object({
@@ -97,6 +101,7 @@ export function ordersRouter(deps: { repo: Repository | null; verifyToken: Token
         notes: body.notes ?? null,
         couponCode: appliedCoupon,
         currency,
+        idempotencyKey: body.idempotencyKey ?? null,
         items: lines,
         subtotal: fromMinorUnits(subtotalMinor, currency),
         deliveryFee: fromMinorUnits(deliveryFeeMinor, currency),

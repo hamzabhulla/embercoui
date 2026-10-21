@@ -9,8 +9,26 @@ import { stripePromise } from '../lib/stripe.ts';
 import { useCurrency } from '../context/CurrencyContext.tsx';
 import { fromMinorUnits, toMinorUnits } from '../lib/currency.ts';
 
-interface CreatedOrder { id: string; total: number }
+interface CreatedOrder { id: string; subtotal: number; deliveryFee: number; discount: number; total: number; currency: string }
 interface AppliedCoupon { code: string; type: 'percent' | 'fixed'; value: number }
+
+/**
+ * One idempotency key per checkout visit, generated when the page mounts.
+ * Retries of the same submission (double click, flaky network, a held
+ * review step) reuse it, so the backend returns the original order
+ * instead of creating a duplicate (migration 0006). A fresh visit to
+ * checkout generates a fresh key.
+ */
+function newIdempotencyKey(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  // Older browsers: build a UUID-shaped key from random bytes.
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
 
 const headingFont: React.CSSProperties = { fontFamily: 'Cormorant Garamond, serif', fontWeight: 300, color: '#F5F0E8' };
 const labelStyle: React.CSSProperties = {
@@ -81,9 +99,15 @@ export default function Checkout() {
   const [couponMsg, setCouponMsg] = useState<string | null>(null);
   const [placing, setPlacing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [paymentStep, setPaymentStep] = useState<{ orderId: string; clientSecret: string } | null>(null);
+  const [paymentStep, setPaymentStep] = useState<{ orderId: string; clientSecret: string; total: number; currency: string } | null>(null);
   const [cardUnavailable, setCardUnavailable] = useState<{ orderId: string } | null>(null);
   const [orderPlaced, setOrderPlaced] = useState(false);
+  // Stable for the whole visit — see newIdempotencyKey above.
+  const [idempotencyKey] = useState<string>(() => newIdempotencyKey());
+  // Set when the server's authoritative total differs from the total the
+  // customer saw while filling the form: the order exists, but nothing is
+  // charged or confirmed until the customer reviews the real figures.
+  const [reviewOrder, setReviewOrder] = useState<CreatedOrder | null>(null);
 
   useEffect(() => { window.scrollTo(0, 0); }, []);
   useEffect(() => {
@@ -127,6 +151,29 @@ export default function Checkout() {
     }
   };
 
+  const proceedToPayment = async (order: CreatedOrder) => {
+    setPlacing(true);
+    const intent = await apiRequest<{ clientSecret: string }>('/api/v1/payments/create-intent', {
+      method: 'POST', body: JSON.stringify({ orderId: order.id }),
+    });
+    setPlacing(false);
+    if (!intent.ok || !intent.data || !stripePromise) {
+      // The order exists and is unpaid — never pretend it was paid.
+      setCardUnavailable({ orderId: order.id });
+      return;
+    }
+    setPaymentStep({ orderId: order.id, clientSecret: intent.data.clientSecret, total: order.total, currency: order.currency });
+  };
+
+  const continueAfterReview = () => {
+    if (!reviewOrder) return;
+    if (method === 'cod') {
+      navigate(`/track-order/${reviewOrder.id}`);
+      return;
+    }
+    void proceedToPayment(reviewOrder);
+  };
+
   const placeOrder = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim() || !email.trim() || !line1.trim() || !city.trim()) {
@@ -144,6 +191,7 @@ export default function Checkout() {
         address: { line1: line1.trim(), city: city.trim(), postalCode: postalCode.trim() || undefined },
         notes: notes.trim() || null,
         couponCode: coupon?.code ?? null,
+        idempotencyKey,
         items: items.map((i) => ({ menuItemId: i.id, quantity: i.quantity })),
       }),
     });
@@ -155,20 +203,27 @@ export default function Checkout() {
     const order = res.data.order;
     setOrderPlaced(true);
     clearCart();
+    // ── Total reconciliation ────────────────────────────────────────────
+    // The total on screen was computed from cart price snapshots; the
+    // server recomputed everything from live menu prices. Its figures are
+    // authoritative. Compare in minor units (and require the same
+    // currency) so float noise can never trigger a false alarm. If they
+    // differ, STOP: show the server's breakdown and let the customer
+    // explicitly continue — the card step is only reached once the total
+    // that will actually be charged is on screen, and a cash customer
+    // confirms against the server total, not the stale snapshot.
+    const totalsMatch = order.currency === currency
+      && toMinorUnits(order.total, order.currency) === toMinorUnits(total, currency);
+    if (!totalsMatch) {
+      setPlacing(false);
+      setReviewOrder(order);
+      return;
+    }
     if (method === 'cod') {
       navigate(`/track-order/${order.id}`);
       return;
     }
-    const intent = await apiRequest<{ clientSecret: string }>('/api/v1/payments/create-intent', {
-      method: 'POST', body: JSON.stringify({ orderId: order.id }),
-    });
-    setPlacing(false);
-    if (!intent.ok || !intent.data || !stripePromise) {
-      // The order exists and is unpaid — never pretend it was paid.
-      setCardUnavailable({ orderId: order.id });
-      return;
-    }
-    setPaymentStep({ orderId: order.id, clientSecret: intent.data.clientSecret });
+    await proceedToPayment(order);
   };
 
   if (items.length === 0 && !paymentStep && !cardUnavailable && !orderPlaced) {
@@ -208,11 +263,37 @@ export default function Checkout() {
         ) : paymentStep && stripePromise ? (
           <div className="max-w-lg">
             <p className="mb-6" style={{ fontFamily: 'Jost, sans-serif', fontSize: '13px', color: 'rgba(245,240,232,0.6)' }}>
-              Order <span style={{ color: '#F5F0E8' }}>#{paymentStep.orderId.slice(0, 8)}</span> created — complete your payment below.
+              Order <span style={{ color: '#F5F0E8' }}>#{paymentStep.orderId.slice(0, 8)}</span> created — total{' '}
+              <span style={{ color: '#F5F0E8' }}>{format(paymentStep.total, paymentStep.currency)}</span>. Complete your payment below.
             </p>
             <Elements stripe={stripePromise} options={{ clientSecret: paymentStep.clientSecret, appearance: { theme: 'night', variables: { colorPrimary: '#C17A3A', colorBackground: '#1C2B1E', colorText: '#F5F0E8', fontFamily: 'Jost, sans-serif' } } }}>
               <CardPaymentForm orderId={paymentStep.orderId} onPaid={(id) => navigate(`/track-order/${id}`)} />
             </Elements>
+          </div>
+        ) : reviewOrder ? (
+          <div className="max-w-lg p-6" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+            <h2 className="mb-3" style={{ ...headingFont, fontSize: '24px' }}>Your total was updated</h2>
+            <p className="mb-6" style={{ fontFamily: 'Jost, sans-serif', fontSize: '13px', color: 'rgba(245,240,232,0.6)', lineHeight: 1.7 }}>
+              Prices were updated by the restaurant — please review the new total before{' '}
+              {method === 'card' ? 'paying' : 'confirming your order'}. Your order{' '}
+              <span style={{ color: '#F5F0E8' }}>#{reviewOrder.id.slice(0, 8)}</span> has been placed with the
+              restaurant's current prices below{method === 'card' ? ' — you have not been charged yet' : ''}.
+            </p>
+            <div className="flex flex-col gap-2 mb-6">
+              <div className="flex justify-between"><span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: 'rgba(245,240,232,0.5)' }}>Subtotal</span><span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: '#F5F0E8' }}>{format(reviewOrder.subtotal, reviewOrder.currency)}</span></div>
+              {reviewOrder.discount > 0 && <div className="flex justify-between"><span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: 'rgba(245,240,232,0.5)' }}>Discount</span><span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: '#4ade80' }}>−{format(reviewOrder.discount, reviewOrder.currency)}</span></div>}
+              <div className="flex justify-between"><span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: 'rgba(245,240,232,0.5)' }}>Delivery</span>{reviewOrder.deliveryFee > 0
+                ? <span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: '#F5F0E8' }}>{format(reviewOrder.deliveryFee, reviewOrder.currency)}</span>
+                : <span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: '#4ade80' }}>Free</span>}</div>
+              <div className="flex justify-between mt-2"><span style={{ fontFamily: 'Jost, sans-serif', fontSize: '13px', color: '#F5F0E8' }}>Total</span><span style={{ fontFamily: 'Cormorant Garamond, serif', fontSize: '22px', color: '#C17A3A' }}>{format(reviewOrder.total, reviewOrder.currency)}</span></div>
+            </div>
+            <button onClick={continueAfterReview} disabled={placing} style={emberButton} className="transition-all duration-300 hover:brightness-110 disabled:opacity-60">
+              {placing
+                ? 'Preparing payment…'
+                : method === 'card'
+                  ? `Continue to Payment — ${format(reviewOrder.total, reviewOrder.currency)}`
+                  : `Confirm Order — Pay ${format(reviewOrder.total, reviewOrder.currency)} on Delivery`}
+            </button>
           </div>
         ) : (
           <form onSubmit={placeOrder} className="grid md:grid-cols-[1fr_360px] gap-10 items-start">

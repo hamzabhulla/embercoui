@@ -16,7 +16,8 @@ Supabase Dashboard → **SQL Editor** → paste and run, in this order:
 3. `supabase/migrations/0003_currency.sql` — multi-currency: `currency` on the restaurant settings + a per-order currency snapshot
 4. `supabase/migrations/0004_whatsapp.sql` — nullable `whatsapp_number` setting (drives the floating WhatsApp button; empty = button hidden)
 5. `supabase/migrations/0005_reservations_admin.sql` — admin reservation management: booking source + notes, optional email, per-slot guest capacity
-6. `supabase/seed.sql` — starter content: restaurant settings, the current menu (15 items), and 3 testimonials as approved reviews
+6. `supabase/migrations/0006_order_idempotency.sql` — idempotent checkout: a per-attempt key on `orders` (+ unique index) so a retried or double-submitted checkout returns the original order instead of duplicating it
+7. `supabase/seed.sql` — starter content: restaurant settings, the current menu (15 items), and 3 testimonials as approved reviews
 
 ## 2. Hero media bucket (manual, one minute)
 Dashboard → **Storage** → **New bucket**:
