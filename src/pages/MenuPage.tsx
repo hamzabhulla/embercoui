@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, memo, useCallback } from 'react';
-import { Check, Search } from 'lucide-react';
+import { Plus, Check, Search } from 'lucide-react';
 import { categories, MenuItem } from '../data/menu.ts';
 import { useMenuItems } from '../services/useMenuItems.ts';
 import { useCart } from '../context/CartContext.tsx';
@@ -120,24 +120,23 @@ function useReveal<T extends HTMLElement>(delay = 0) {
 
 // ─── Skeleton card ────────────────────────────────────────────────────────────
 const SkeletonCard = memo(() => (
-  <div className="overflow-hidden flex flex-col animate-pulse" style={{ background: 'linear-gradient(180deg, rgba(245,240,232,0.045), rgba(245,240,232,0.015))', border: '1px solid rgba(245,240,232,0.09)', borderRadius: '0px' }}>
-    <div className="h-[172px] flex-shrink-0" style={{ background: '#0D1A0E' }} />
-    <div className="p-0 pb-[14px] md:p-5 flex flex-col gap-3 flex-1">
-      <div className="flex flex-col md:flex-row justify-between gap-1 md:gap-3 pt-2 md:pt-0">
-        <div className="h-4 md:h-5 rounded w-2/3" style={{ background: 'rgba(245,240,232,0.1)' }} />
-        <div className="h-4 md:h-5 rounded w-12" style={{ background: 'rgba(245,240,232,0.1)' }} />
+  <div className="overflow-hidden flex flex-col animate-pulse bg-white shadow-[0_2px_12px_rgba(0,0,0,0.08)]">
+    <div className="h-[180px] md:h-52 flex-shrink-0" style={{ background: 'rgba(13,26,14,0.12)' }} />
+    <div className="pt-[12px] px-[12px] pb-[14px] md:p-5 flex flex-col gap-3 flex-1">
+      <div className="flex justify-between gap-3">
+        <div className="h-4 md:h-5 rounded w-2/3" style={{ background: 'rgba(13,26,14,0.10)' }} />
+        <div className="h-4 md:h-5 rounded w-12" style={{ background: 'rgba(13,26,14,0.10)' }} />
       </div>
       <div className="hidden md:block space-y-2 flex-1">
-        <div className="h-3 rounded w-full" style={{ background: 'rgba(245,240,232,0.05)' }} />
-        <div className="h-3 rounded w-5/6" style={{ background: 'rgba(245,240,232,0.05)' }} />
-        <div className="h-3 rounded w-3/4" style={{ background: 'rgba(245,240,232,0.05)' }} />
+        <div className="h-3 rounded w-full" style={{ background: 'rgba(13,26,14,0.06)' }} />
+        <div className="h-3 rounded w-5/6" style={{ background: 'rgba(13,26,14,0.06)' }} />
+        <div className="h-3 rounded w-3/4" style={{ background: 'rgba(13,26,14,0.06)' }} />
       </div>
-      <div className="h-[34px] md:h-11 rounded-none mt-auto" style={{ background: 'rgba(245,240,232,0.1)' }} />
+      <div className="h-[34px] md:h-11 mt-auto" style={{ background: 'rgba(13,26,14,0.10)' }} />
     </div>
   </div>
 ));
 
-// ─── Memoised menu card ───────────────────────────────────────────────────────
 const MenuCard = memo(({ item, isAdded, onAdd, index }: {
   item: MenuItem;
   isAdded: boolean;
@@ -151,14 +150,9 @@ const MenuCard = memo(({ item, isAdded, onAdd, index }: {
   return (
     <div
       ref={ref}
-      className="c-hidden group overflow-hidden flex flex-col transition-all duration-500 hover:-translate-y-[3px] hover:border-[rgba(193,122,58,0.4)]"
-      style={{
-        background: 'linear-gradient(180deg, rgba(245,240,232,0.045), rgba(245,240,232,0.015))',
-        border: '1px solid rgba(245,240,232,0.09)',
-        borderRadius: '0px',
-      }}
+      className="c-hidden group bg-white overflow-hidden shadow-[0_2px_12px_rgba(0,0,0,0.08)] hover:shadow-md transition-shadow duration-300 flex flex-col rounded-none border-none"
     >
-      <div className="relative h-[172px] overflow-hidden flex-shrink-0">
+      <div className="relative h-[180px] md:h-52 overflow-hidden flex-shrink-0 w-full">
         <FavoriteButton itemId={item.id} />
         <img
           ref={imgRef}
@@ -168,45 +162,43 @@ const MenuCard = memo(({ item, isAdded, onAdd, index }: {
           decoding="async"
           width="400"
           height="300"
-          className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700 ease-out"
+          className="w-full h-full object-cover object-center group-hover:scale-105 transition-transform duration-500"
         />
       </div>
-      <div className="px-[18px] pb-[18px] pt-4 flex flex-col flex-1">
-        <h3
-          className="text-[#F5F0E8] text-[21px] leading-[1.15]"
-          style={{ fontFamily: 'Cormorant Garamond, serif', fontWeight: 500 }}
-        >
-          {item.name}
-        </h3>
-        <div
-          className="text-[#C17A3A] text-[10px] uppercase mt-[2px]"
-          style={{ fontFamily: 'Jost, sans-serif', letterSpacing: '0.24em' }}
-        >
-          {item.category}
+      <div className="pt-[12px] px-[12px] pb-[14px] md:p-5 flex flex-col flex-1">
+        <div className="flex flex-col md:flex-row md:items-start justify-between gap-0 md:gap-3 mb-0 md:mb-2">
+          <h3
+            className="text-[#1C2B1E] text-[17px] md:text-xl leading-tight mb-[2px] md:mb-0 font-medium"
+            style={{ fontFamily: 'Cormorant Garamond, serif' }}
+          >
+            {item.name}
+          </h3>
+          <span className="text-[#C17A3A] text-[15px] md:text-base flex-shrink-0 mb-[10px] md:mb-0 md:font-semibold">
+            <span className="md:hidden" style={{ fontFamily: 'Cormorant Garamond, serif' }}>{format(item.price)}</span>
+            <span className="hidden md:inline" style={{ fontFamily: 'Jost, sans-serif' }}>{format(item.price)}</span>
+          </span>
         </div>
         <p
-          className="text-[#F5F0E8]/60 text-[13px] leading-relaxed mt-[10px] font-light line-clamp-2"
-          style={{ fontFamily: 'Jost, sans-serif' }}
+          className="hidden md:block text-[#1C2B1E]/60 text-sm leading-relaxed mb-5 flex-1"
+          style={{ fontFamily: 'Jost, sans-serif', fontWeight: 300 }}
         >
           {item.description}
         </p>
-        <div className="flex items-center justify-between mt-auto pt-[14px]">
-          <span
-            className="text-[#E9C48C] text-[21px]"
-            style={{ fontFamily: 'Cormorant Garamond, serif' }}
-          >
-            {format(item.price)}
-          </span>
+        <div className="mt-auto">
           <button
             onClick={() => onAdd(item, imgRef.current)}
-            className={`flex items-center gap-2 rounded-none uppercase transition-all duration-300 ${
+            className={`w-full flex items-center justify-center gap-[8px] p-[10px] md:px-[20px] md:py-[12px] text-[10px] md:text-[11px] tracking-[0.12em] rounded-none uppercase border-none md:border transition-all duration-300 ease-out ${
               isAdded
-                ? 'border border-[#58B368] bg-[#58B368] text-white'
-                : 'border border-[rgba(193,122,58,0.6)] bg-[rgba(193,122,58,0.10)] text-[#EBCB9C] hover:bg-[#C17A3A] hover:text-white hover:shadow-[0_10px_26px_rgba(193,122,58,0.35)]'
+                ? 'bg-[#2E7D32] md:border-[#2E7D32] text-white'
+                : 'bg-[#1C2B1E] text-white md:border-white/10 hover:bg-[#C17A3A] md:hover:border-[#C17A3A] hover:-translate-y-[1px] md:hover:shadow-[0_4px_20px_rgba(193,122,58,0.3)]'
             }`}
-            style={{ fontFamily: 'Jost, sans-serif', fontSize: '10.5px', letterSpacing: '0.2em', padding: '11px 18px' }}
+            style={{ fontFamily: 'Jost, sans-serif' }}
           >
-            {isAdded ? <><Check size={13} /> Added</> : 'Add to Cart'}
+            {isAdded ? (
+              <><Check size={14} className="hidden md:block" /> Added</>
+            ) : (
+              <><Plus size={14} className="hidden md:block" /> Add to Cart</>
+            )}
           </button>
         </div>
       </div>
@@ -332,15 +324,16 @@ export default function MenuPage() {
           </div>
 
           {/* Smooth Fade to Bottom */}
-          <div className="absolute bottom-0 left-0 right-0 h-32 bg-gradient-to-b from-transparent to-[#0D1A0E] z-10" />
+          <div className="absolute bottom-0 left-0 right-0 h-32 bg-gradient-to-b from-transparent to-[#F5F0E8] z-10" />
         </header>
 
-      {/* CONTENT AREA */}
+      {/* CONTENT AREA — warm cream product grid (site color system) */}
+      <div style={{ background: '#F5F0E8' }}>
       <div className="max-w-7xl mx-auto px-6 py-12 flex flex-col md:flex-row gap-12">
 
         {/* SIDEBAR (Desktop) */}
         <aside className="hidden md:block w-[240px] flex-shrink-0">
-          <div className="sticky top-[120px] bg-[#1C2B1E] p-8 border border-white/[0.03]">
+          <div className="sticky top-[120px] bg-white p-8 border border-[rgba(28,43,30,0.08)] shadow-[0_2px_12px_rgba(0,0,0,0.05)]">
             <h3 className="text-[#C17A3A] text-[10px] tracking-[0.2em] uppercase mb-8 font-medium" style={{ fontFamily: 'Jost, sans-serif' }}>
               Categories
             </h3>
@@ -351,8 +344,8 @@ export default function MenuPage() {
                     onClick={() => setActiveCategory(cat)}
                     className={`text-left w-full py-3 pl-4 transition-all duration-[300ms] ${
                       activeCategory === cat
-                        ? 'text-[#C17A3A] border-l-[3px] border-[#C17A3A] bg-white/[0.02]'
-                        : 'text-[#F5F0E8]/50 border-l-[3px] border-transparent hover:text-[#F5F0E8] hover:bg-white/[0.01]'
+                        ? 'text-[#C17A3A] border-l-[3px] border-[#C17A3A] bg-[rgba(193,122,58,0.06)]'
+                        : 'text-[#1C2B1E]/55 border-l-[3px] border-transparent hover:text-[#1C2B1E] hover:bg-[rgba(28,43,30,0.03)]'
                     }`}
                     style={{ fontFamily: 'Jost, sans-serif', fontSize: '13px', letterSpacing: '0.1em', textTransform: 'uppercase' }}
                   >
@@ -373,7 +366,7 @@ export default function MenuPage() {
               className={`flex-shrink-0 px-6 py-2.5 rounded-none text-[10px] tracking-[0.2em] uppercase transition-all duration-300 border ${
                 activeCategory === cat
                   ? 'bg-[#C17A3A] text-white border-[#C17A3A]'
-                  : 'bg-transparent text-[#F5F0E8]/60 border-white/10 hover:border-[#C17A3A]/50 hover:text-[#C17A3A]'
+                  : 'bg-white text-[#1C2B1E]/60 border-[rgba(28,43,30,0.15)] hover:border-[#C17A3A]/60 hover:text-[#C17A3A]'
               }`}
               style={{ fontFamily: 'Jost, sans-serif' }}
             >
@@ -389,10 +382,10 @@ export default function MenuPage() {
           <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-6 mb-12">
             
             {/* Breadcrumb */}
-            <div className="flex items-center gap-3 text-[11px] uppercase tracking-widest text-[#F5F0E8]/40" style={{ fontFamily: 'Jost, sans-serif' }}>
+            <div className="flex items-center gap-3 text-[11px] uppercase tracking-widest text-[#1C2B1E]/45" style={{ fontFamily: 'Jost, sans-serif' }}>
               <a href="/" onClick={handleNavigateHome} className="hover:text-[#C17A3A] transition-colors">Home</a>
               <span className="text-[#C17A3A]/40">/</span>
-              <span className="text-[#F5F0E8]/60">Menu</span>
+              <span className="text-[#1C2B1E]/60">Menu</span>
               <span className="text-[#C17A3A]/40">/</span>
               <span className="text-[#C17A3A] font-medium">{activeCategory}</span>
             </div>
@@ -402,13 +395,13 @@ export default function MenuPage() {
               
               {/* Search */}
               <div className="relative w-full sm:w-[260px]">
-                <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-[#F5F0E8]/30" size={14} />
+                <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-[#1C2B1E]/35" size={14} />
                 <input
                   type="text"
                   placeholder="Search dishes..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-11 pr-4 py-3 bg-[#1C2B1E] border border-white/5 focus:border-[#C17A3A]/50 outline-none text-[13px] text-[#F5F0E8] placeholder-[#F5F0E8]/30 transition-colors rounded-none"
+                  className="w-full pl-11 pr-4 py-3 bg-white border border-[rgba(28,43,30,0.12)] focus:border-[#C17A3A]/60 outline-none text-[13px] text-[#1C2B1E] placeholder-[#1C2B1E]/35 transition-colors rounded-none"
                   style={{ fontFamily: 'Jost, sans-serif' }}
                 />
               </div>
@@ -422,7 +415,7 @@ export default function MenuPage() {
                     className={`flex-shrink-0 px-[16px] py-[8px] rounded-full text-[10px] uppercase tracking-[0.15em] border transition-all duration-300 ${
                       activeFilter === filter
                         ? 'bg-[#C17A3A] text-white border-[#C17A3A]'
-                        : 'bg-[#1C2B1E] text-[#F5F0E8]/50 border-white/5 hover:border-[#C17A3A]/30 hover:text-[#F5F0E8]'
+                        : 'bg-white text-[#1C2B1E]/55 border-[rgba(28,43,30,0.12)] hover:border-[#C17A3A]/40 hover:text-[#1C2B1E]'
                     }`}
                     style={{ fontFamily: 'Jost, sans-serif' }}
                   >
@@ -459,6 +452,7 @@ export default function MenuPage() {
             </div>
           )}
         </div>
+      </div>
       </div>
     </div>
     </>
