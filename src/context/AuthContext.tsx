@@ -13,6 +13,7 @@ export interface AccountProfile {
   phone: string | null;
   addresses: unknown[];
   favorites: number[];
+  createdAt: string;
 }
 
 interface AuthContextType {
@@ -49,6 +50,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         phone: (u.user_metadata?.phone as string) ?? null,
         addresses: [],
         favorites: [],
+        createdAt: u.created_at,
       });
     }
   }, []);

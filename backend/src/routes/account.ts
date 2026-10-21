@@ -13,6 +13,7 @@ const addressSchema = z
     city: z.string().trim().min(1, 'City is required'),
     postalCode: z.string().trim().max(20).optional(),
     phone: z.string().trim().max(30).optional(),
+    isDefault: z.boolean().optional(),
   });
 
 const profilePatchSchema = z.object({
