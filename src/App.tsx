@@ -56,12 +56,15 @@ function App() {
   // Canonical path for display decisions: '/MENU/' and '/menu' are the same page.
   const canonicalPath = (location.pathname.replace(/\/+$/, '') || '/').toLowerCase();
   const goHome = () => navigate('/');
+  // The admin console is a standalone app: the customer site's chrome
+  // (navbar, footer, chat buttons, cart) must never render over it.
+  const isAdmin = canonicalPath.startsWith('/admin');
 
   return (
     <CurrencyProvider>
     <CartProvider>
       <div className="min-h-screen" style={{ background: '#F5F0E8' }}>
-        <Navbar forceDark={canonicalPath === '/menu' || canonicalPath === '/our-story' || canonicalPath === '/contact' || canonicalPath === '/account' || canonicalPath === '/reset-password' || canonicalPath === '/checkout' || canonicalPath.startsWith('/track-order') || canonicalPath.startsWith('/admin')} />
+        {!isAdmin && <Navbar forceDark={canonicalPath === '/menu' || canonicalPath === '/our-story' || canonicalPath === '/contact' || canonicalPath === '/account' || canonicalPath === '/reset-password' || canonicalPath === '/checkout' || canonicalPath.startsWith('/track-order')} />}
 
         <Routes>
           <Route path="/" element={<HomePage />} />
@@ -90,9 +93,9 @@ function App() {
           <Route path="*" element={null} />
         </Routes>
 
-        <Footer />
-        <FloatingButtons />
-        <CartSidebar />
+        {!isAdmin && <Footer />}
+        {!isAdmin && <FloatingButtons />}
+        {!isAdmin && <CartSidebar />}
 
         <Routes>
           <Route path="/login" element={<LoginModal onClose={goHome} onNavigate={navigate} />} />
