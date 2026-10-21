@@ -17,6 +17,7 @@ A complete single-restaurant food ordering platform: customer website, online or
 - Reservations, newsletter signup and contact form — validated and stored via the API
 - Checkout: server-recalculated totals (client prices are never trusted), coupon codes, cash-on-delivery or Stripe card payment (Elements)
 - Order tracking page: live status via Supabase Realtime with polling fallback
+- Ember AI chat assistant (Google Gemini): answers from the live menu and settings, and can add dishes to the cart (checkout always stays manual)
 
 **Admin panel** (`/admin`, staff + admin roles)
 - Dashboard with real revenue/order aggregates
@@ -29,11 +30,10 @@ A complete single-restaurant food ordering platform: customer website, online or
 - Supabase Postgres with Row Level Security; the API uses the service-role key server-side only
 - Supabase JWT verification + role-based guards; zod validation; rate limiting; helmet; CORS whitelist
 - Stripe PaymentIntents + signature-verified webhook — an order is marked paid **only** by the webhook
-- 95 automated tests (Vitest + Supertest, data layer mocked) — money integrity, privacy and admin authorization are covered
+- 136 automated tests (Vitest + Supertest, data layer mocked) — money integrity, privacy and admin authorization are covered
 
 ## 🗺️ Roadmap (not built yet)
 - PayPal checkout option
-- AI support chatbot
 - Per-restaurant theming pack for repeat deployments
 
 ---
@@ -46,7 +46,7 @@ A complete single-restaurant food ordering platform: customer website, online or
 | Backend  | Node.js, Express, TypeScript, Zod |
 | Database | Supabase Postgres (+ Auth, Realtime, Storage) |
 | Payments | Stripe (PaymentIntents + webhooks) |
-| Hosting  | Vercel (frontend), Railway (backend) |
+| Hosting  | Vercel — frontend + serverless API in one project (Railway optional: always-on backend, Option B) |
 | CI       | GitHub Actions — lint/typecheck/build (frontend) + lint/typecheck/test/build (backend) |
 
 ## 🚀 Getting started
