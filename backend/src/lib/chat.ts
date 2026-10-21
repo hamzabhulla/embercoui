@@ -27,9 +27,11 @@ export interface CartAction {
  * GEMINI_MODEL pins a single model when an operator wants control.
  */
 export const GEMINI_MODEL_CHAIN = [
+  // Primary per the owner's choice: fastest + the most generous free quota —
+  // the right fit for short restaurant Q&A. The rest are 404 fallbacks.
+  'gemini-3.5-flash-lite',
   'gemini-3.8-flash',
   'gemini-3.6-flash',
-  'gemini-3.5-flash-lite',
   'gemini-2.5-flash',
 ] as const;
 
