@@ -52,6 +52,11 @@ describe('admin dashboard + orders', () => {
     expect(res.body.recentOrders).toHaveLength(1);
   });
   it('updates order status and validates the enum', async () => {
+    // Fix 8: status moves are state-machine checked — the old version of
+    // this test jumped pending → preparing directly, which is now a 400.
+    // It walks the legal path instead (pending → confirmed → preparing).
+    const confirm = await as(request(app).patch(`/api/v1/admin/orders/${paidOrderId}/status`).send({ status: 'confirmed' }), 'token-staff');
+    expect(confirm.status).toBe(200);
     const ok = await as(request(app).patch(`/api/v1/admin/orders/${paidOrderId}/status`).send({ status: 'preparing' }), 'token-staff');
     expect(ok.status).toBe(200);
     expect(ok.body.order.status).toBe('preparing');

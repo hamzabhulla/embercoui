@@ -6,7 +6,8 @@ import type { TokenVerifier } from '../lib/auth';
 import { validateBody } from '../middleware/validate';
 import { assertImageUpload, type StorageService } from '../lib/storage';
 import { isValidCurrencyCode, roundMajorUnits } from '../lib/currency';
-import type { OrderStatus, Repository } from '../repositories/types';
+import { isLegalOrderTransition, isLegalReservationTransition } from '../lib/statusTransitions';
+import type { OrderStatus, Repository, ReservationDTO } from '../repositories/types';
 
 const ORDER_STATUSES = ['pending', 'confirmed', 'preparing', 'ready', 'out_for_delivery', 'delivered', 'cancelled'] as const;
 const RESERVATION_STATUSES = ['pending', 'confirmed', 'cancelled', 'completed'] as const;
@@ -147,7 +148,24 @@ export function adminRouter(deps: AdminDeps) {
 
   router.patch('/orders/:id/status', validateBody(statusSchema), async (req, res, next) => {
     try {
-      const updated = await repo().updateOrderStatus(req.params.id, req.body.status as OrderStatus);
+      const r = repo();
+      const target = req.body.status as OrderStatus;
+      // Transition rules (audit Fix 8): judge the move against the
+      // order's CURRENT state, not just the enum. The repository write
+      // itself stays unconditional — this route is its only caller.
+      const current = await r.getOrder(req.params.id);
+      if (!current) throw new ApiError(404, 'Order not found');
+      if (target !== current.status) {
+        if (!isLegalOrderTransition(current.status, target)) {
+          throw new ApiError(400, `Cannot move an order from '${current.status}' to '${target}'`);
+        }
+        // A paid order must never be cancelled silently: there is no
+        // refund path in the system, so the money would be stranded.
+        if (target === 'cancelled' && current.paymentStatus === 'paid') {
+          throw new ApiError(400, 'Cannot cancel a paid order — refund the payment first, or contact support for help');
+        }
+      }
+      const updated = await r.updateOrderStatus(req.params.id, target);
       if (!updated) throw new ApiError(404, 'Order not found');
       res.json({ order: updated });
     } catch (err) { next(err); }
@@ -218,7 +236,17 @@ export function adminRouter(deps: AdminDeps) {
 
   router.patch('/reservations/:id/status', validateBody(reservationStatusSchema), async (req, res, next) => {
     try {
-      const updated = await repo().updateReservationStatus(req.params.id, req.body.status);
+      const r = repo();
+      const target = req.body.status as ReservationDTO['status'];
+      // Same enforcement as orders (audit Fix 8): current state first,
+      // then the transition table. No getReservation exists on the
+      // repository, so the current row comes from the admin list.
+      const current = (await r.adminListReservations()).find((x) => x.id === req.params.id);
+      if (!current) throw new ApiError(404, 'Reservation not found');
+      if (target !== current.status && !isLegalReservationTransition(current.status, target)) {
+        throw new ApiError(400, `Cannot move a reservation from '${current.status}' to '${target}'`);
+      }
+      const updated = await r.updateReservationStatus(req.params.id, target);
       if (!updated) throw new ApiError(404, 'Reservation not found');
       res.json({ reservation: updated });
     } catch (err) { next(err); }

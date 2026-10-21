@@ -239,7 +239,10 @@ export default function AdminReservations() {
                 </>
               )}
               {r.status === 'confirmed' && (
-                <button disabled={busyId === r.id} onClick={() => void setStatus(r.id, 'completed')} className={chipGhostBtn}>Mark completed</button>
+                <>
+                  <button disabled={busyId === r.id} onClick={() => void setStatus(r.id, 'completed')} className={chipGhostBtn}>Mark completed</button>
+                  <button disabled={busyId === r.id} onClick={() => void setStatus(r.id, 'cancelled')} className={chipDangerBtn}>Cancel</button>
+                </>
               )}
             </div>
           </Card>

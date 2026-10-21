@@ -13,7 +13,7 @@ const NEXT: Record<string, string[]> = {
   pending: ['confirmed', 'cancelled'],
   confirmed: ['preparing', 'cancelled'],
   preparing: ['ready', 'cancelled'],
-  ready: ['out_for_delivery', 'delivered'],
+  ready: ['out_for_delivery', 'cancelled'],
   out_for_delivery: ['delivered'],
   delivered: [],
   cancelled: [],
