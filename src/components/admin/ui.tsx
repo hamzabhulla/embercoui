@@ -68,6 +68,23 @@ export function LoadingNote() {
   return <p className="font-bodytext text-[#98A096] text-sm py-6 text-center">Loading…</p>;
 }
 
+/**
+ * Shown when a staff (non-admin) user lands on an admin-only page — same
+ * card treatment as AdminGuard's no-access screen. The backend enforces the
+ * same gate with 403s; this keeps direct-URL visits clean instead of
+ * surfacing raw API errors.
+ */
+export function AdminsOnly() {
+  return (
+    <div className="flex justify-center px-2 py-8">
+      <div className="text-center bg-white border border-[#EAE3D3] rounded-2xl px-8 py-10 max-w-sm w-full shadow-[0_18px_40px_-24px_rgba(22,36,26,0.35)]">
+        <h2 className="font-display text-[26px] font-semibold text-[#16241A] mb-3">Admins only</h2>
+        <p className="font-bodytext text-[#5C665C] text-sm">This page is restricted to admin accounts. Ask an admin if you need something from here.</p>
+      </div>
+    </div>
+  );
+}
+
 export function EmptyNote({ message }: { message: string }) {
   return <p className="font-bodytext text-[#98A096] text-sm py-8 text-center">{message}</p>;
 }

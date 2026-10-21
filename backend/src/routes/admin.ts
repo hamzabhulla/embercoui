@@ -218,7 +218,11 @@ export function adminRouter(deps: AdminDeps) {
     } catch (err) { next(err); }
   });
 
-  router.get('/customers', async (_req, res, next) => {
+  // Least-privilege (production audit Fix 4): customer PII, the subscriber
+  // list (+ CSV export), staff accounts, finance and settings are admin-only.
+  // Staff keep dashboard, orders, menu (per existing gates), reservations,
+  // reviews and coupon reads.
+  router.get('/customers', requireRole('admin'), async (_req, res, next) => {
     try { res.json({ customers: await repo().adminListCustomers() }); } catch (err) { next(err); }
   });
 
@@ -242,11 +246,11 @@ export function adminRouter(deps: AdminDeps) {
     } catch (err) { next(err); }
   });
 
-  router.get('/newsletter', async (_req, res, next) => {
+  router.get('/newsletter', requireRole('admin'), async (_req, res, next) => {
     try { res.json({ subscribers: await repo().adminListNewsletter() }); } catch (err) { next(err); }
   });
 
-  router.get('/newsletter.csv', async (_req, res, next) => {
+  router.get('/newsletter.csv', requireRole('admin'), async (_req, res, next) => {
     try {
       const subscribers = await repo().adminListNewsletter();
       const csvField = (v: string) => {
@@ -298,7 +302,7 @@ export function adminRouter(deps: AdminDeps) {
     } catch (err) { next(err); }
   });
 
-  router.get('/finance', async (_req, res, next) => {
+  router.get('/finance', requireRole('admin'), async (_req, res, next) => {
     try {
       const r = repo();
       const settings = await r.getSettings();
@@ -330,7 +334,7 @@ export function adminRouter(deps: AdminDeps) {
     } catch (err) { next(err); }
   });
 
-  router.get('/staff', async (_req, res, next) => {
+  router.get('/staff', requireRole('admin'), async (_req, res, next) => {
     try { res.json({ staff: await repo().adminListStaff() }); } catch (err) { next(err); }
   });
 
@@ -351,11 +355,11 @@ export function adminRouter(deps: AdminDeps) {
     } catch (err) { next(err); }
   });
 
-  router.get('/settings', async (_req, res, next) => {
+  router.get('/settings', requireRole('admin'), async (_req, res, next) => {
     try { res.json({ settings: await repo().getSettings() }); } catch (err) { next(err); }
   });
 
-  router.patch('/settings', validateBody(settingsSchema), async (req, res, next) => {
+  router.patch('/settings', requireRole('admin'), validateBody(settingsSchema), async (req, res, next) => {
     try {
       const body = req.body as z.infer<typeof settingsSchema>;
       // Validate against the MERGED result so a one-sided PATCH cannot

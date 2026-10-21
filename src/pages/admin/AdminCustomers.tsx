@@ -1,18 +1,23 @@
 import { useEffect, useState } from 'react';
 import { adminGet } from '../../services/adminApi';
+import { useAuth } from '../../context/AuthContext';
 import { useCurrency } from '../../context/CurrencyContext';
-import { Avatar, Card, EmptyNote, ErrorNote, LoadingNote, PageTitle, money, tableCls, tdCls, thCls } from '../../components/admin/ui';
+import { AdminsOnly, Avatar, Card, EmptyNote, ErrorNote, LoadingNote, PageTitle, money, tableCls, tdCls, thCls } from '../../components/admin/ui';
 
 interface Customer { id: string; email: string | null; fullName: string | null; phone: string | null; role: string; createdAt: string; orderCount: number; totalSpent: number }
 
 export default function AdminCustomers() {
+  const { profile } = useAuth();
+  const isAdmin = profile?.role === 'admin';
   const [rows, setRows] = useState<Customer[]>([]);
   const [error, setError] = useState('');
   const [loaded, setLoaded] = useState(false);
   const { currency } = useCurrency();
   useEffect(() => {
+    if (!isAdmin) return;
     adminGet<{ customers: Customer[] }>('/api/v1/admin/customers').then((d) => setRows(d.customers)).catch((e: Error) => setError(e.message)).finally(() => setLoaded(true));
-  }, []);
+  }, [isAdmin]);
+  if (!isAdmin) return <AdminsOnly />;
   return (
     <div>
       <PageTitle sub={`Registered customers · lifetime spend shown in ${currency}`}>Customers</PageTitle>

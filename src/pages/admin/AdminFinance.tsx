@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { adminGet } from '../../services/adminApi';
-import { Card, CardHead, EmptyNote, ErrorNote, LoadingNote, PageTitle, StatCard, money, tableCls, tdCls, thCls } from '../../components/admin/ui';
+import { useAuth } from '../../context/AuthContext';
+import { AdminsOnly, Card, CardHead, EmptyNote, ErrorNote, LoadingNote, PageTitle, StatCard, money, tableCls, tdCls, thCls } from '../../components/admin/ui';
 
 interface Finance {
   currency: string;
@@ -10,11 +11,15 @@ interface Finance {
 }
 
 export default function AdminFinance() {
+  const { profile } = useAuth();
+  const isAdmin = profile?.role === 'admin';
   const [data, setData] = useState<Finance | null>(null);
   const [error, setError] = useState('');
   useEffect(() => {
+    if (!isAdmin) return;
     adminGet<Finance>('/api/v1/admin/finance').then(setData).catch((e: Error) => setError(e.message));
-  }, []);
+  }, [isAdmin]);
+  if (!isAdmin) return <AdminsOnly />;
   const chartDays = data ? [...data.byDay].sort((a, b) => (a.date < b.date ? -1 : 1)).slice(-7) : [];
   const chartMax = Math.max(1, ...chartDays.map((d) => d.revenue));
   const daysDesc = data ? [...data.byDay].sort((a, b) => (a.date < b.date ? 1 : -1)) : [];

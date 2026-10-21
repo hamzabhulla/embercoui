@@ -139,11 +139,46 @@ describe('admin reservations, reviews, newsletter, coupons, finance, staff, sett
     expect(staffList.body.staff.some((p: { id: string }) => p.id === 'user-2')).toBe(true);
   });
   it('updates settings that drive the public LiveStatus', async () => {
-    const res = await as(request(app).patch('/api/v1/admin/settings').send({ kitchenOpen: false, waitMin: 35, waitMax: 45 }), 'token-staff');
+    // POLICY FLIP (production audit Fix 4): settings are admin-only. This
+    // test previously asserted staff could PATCH settings (200) — that
+    // encoded the old, over-privileged policy and is now a 403.
+    const staffAttempt = await as(request(app).patch('/api/v1/admin/settings').send({ kitchenOpen: false, waitMin: 35, waitMax: 45 }), 'token-staff');
+    expect(staffAttempt.status).toBe(403);
+    const res = await as(request(app).patch('/api/v1/admin/settings').send({ kitchenOpen: false, waitMin: 35, waitMax: 45 }), 'token-admin');
     expect(res.status).toBe(200);
     const pub = await request(app).get('/api/v1/settings/public');
     expect(pub.body.settings).toMatchObject({ kitchenOpen: false, waitMin: 35, waitMax: 45 });
     const invalid = await as(request(app).patch('/api/v1/admin/settings').send({ waitMin: 50, waitMax: 40 }), 'token-admin');
     expect(invalid.status).toBe(400);
+  });
+});
+
+describe('staff least-privilege gates (production audit fix 4)', () => {
+  it('403s staff on settings read + write', async () => {
+    expect((await as(request(app).get('/api/v1/admin/settings'), 'token-staff')).status).toBe(403);
+    expect((await as(request(app).patch('/api/v1/admin/settings').send({ kitchenOpen: true }), 'token-staff')).status).toBe(403);
+  });
+  it('403s staff on customers, newsletter (+ CSV export), staff list and finance', async () => {
+    expect((await as(request(app).get('/api/v1/admin/customers'), 'token-staff')).status).toBe(403);
+    expect((await as(request(app).get('/api/v1/admin/newsletter'), 'token-staff')).status).toBe(403);
+    expect((await as(request(app).get('/api/v1/admin/newsletter.csv'), 'token-staff')).status).toBe(403);
+    expect((await as(request(app).get('/api/v1/admin/staff'), 'token-staff')).status).toBe(403);
+    expect((await as(request(app).get('/api/v1/admin/finance'), 'token-staff')).status).toBe(403);
+  });
+  it('keeps staff working surfaces open: dashboard, orders, reservations, menu, reviews, coupons reads', async () => {
+    expect((await as(request(app).get('/api/v1/admin/dashboard'), 'token-staff')).status).toBe(200);
+    expect((await as(request(app).get('/api/v1/admin/orders'), 'token-staff')).status).toBe(200);
+    expect((await as(request(app).get('/api/v1/admin/reservations'), 'token-staff')).status).toBe(200);
+    expect((await as(request(app).get('/api/v1/admin/menu'), 'token-staff')).status).toBe(200);
+    expect((await as(request(app).get('/api/v1/admin/reviews'), 'token-staff')).status).toBe(200);
+    expect((await as(request(app).get('/api/v1/admin/coupons'), 'token-staff')).status).toBe(200);
+  });
+  it('keeps every gated route open to admins', async () => {
+    expect((await as(request(app).get('/api/v1/admin/settings'), 'token-admin')).status).toBe(200);
+    expect((await as(request(app).get('/api/v1/admin/customers'), 'token-admin')).status).toBe(200);
+    expect((await as(request(app).get('/api/v1/admin/newsletter'), 'token-admin')).status).toBe(200);
+    expect((await as(request(app).get('/api/v1/admin/newsletter.csv'), 'token-admin')).status).toBe(200);
+    expect((await as(request(app).get('/api/v1/admin/staff'), 'token-admin')).status).toBe(200);
+    expect((await as(request(app).get('/api/v1/admin/finance'), 'token-admin')).status).toBe(200);
   });
 });

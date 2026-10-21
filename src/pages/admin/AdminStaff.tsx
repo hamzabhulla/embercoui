@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { adminGet, adminSend } from '../../services/adminApi';
 import { useAuth } from '../../context/AuthContext';
-import { Avatar, Card, EmptyNote, ErrorNote, LoadingNote, NoticeNote, PageTitle, fmtDate, tableCls, tdCls, thCls } from '../../components/admin/ui';
+import { AdminsOnly, Avatar, Card, EmptyNote, ErrorNote, LoadingNote, NoticeNote, PageTitle, fmtDate, tableCls, tdCls, thCls } from '../../components/admin/ui';
 
 interface Person { id: string; email: string | null; fullName: string | null; role: string; createdAt: string }
 const ROLES = ['customer', 'staff', 'admin'];
@@ -14,7 +14,7 @@ export default function AdminStaff() {
   const [notice, setNotice] = useState('');
   const [loaded, setLoaded] = useState(false);
   const load = () => { adminGet<{ staff: Person[] }>('/api/v1/admin/staff').then((d) => setRows(d.staff)).catch((e: Error) => setError(e.message)).finally(() => setLoaded(true)); };
-  useEffect(load, []);
+  useEffect(() => { if (isAdmin) load(); }, [isAdmin]);
   const changeRole = async (id: string, role: string) => {
     setError(''); setNotice('');
     try {
@@ -22,12 +22,12 @@ export default function AdminStaff() {
       setNotice('Role updated.'); load();
     } catch (e) { setError((e as Error).message); }
   };
+  if (!isAdmin) return <AdminsOnly />;
   return (
     <div>
       <PageTitle sub="Everyone with an account. Admins can promote customers to staff or admin.">Staff</PageTitle>
       {error && <ErrorNote message={error} />}
       {notice && <NoticeNote message={notice} />}
-      {!isAdmin && <p className="font-bodytext text-[13.5px] text-[#5C665C] mb-6">Only admins can change roles.</p>}
       <Card className="overflow-hidden">
         {!loaded && !error && <LoadingNote />}
         {loaded && rows.length === 0 && !error && <EmptyNote message="No accounts yet." />}

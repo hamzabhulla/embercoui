@@ -36,7 +36,10 @@ export default function AdminReservations() {
   const load = () => {
     Promise.all([
       adminGet<{ reservations: Reservation[] }>('/api/v1/admin/reservations'),
-      adminGet<{ settings: Settings }>('/api/v1/admin/settings').catch(() => null),
+      // Capacity comes from the PUBLIC settings DTO (it already exposes
+      // reservationSlotCapacity): /admin/settings is admin-only, and staff
+      // still need the real capacity for an accurate day board.
+      adminGet<{ settings: Settings }>('/api/v1/settings/public').catch(() => null),
     ])
       .then(([d, s]) => {
         setRows(d.reservations);

@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { adminGet, adminSend } from '../../services/adminApi';
+import { useAuth } from '../../context/AuthContext';
 import { useCurrency } from '../../context/CurrencyContext';
 import { CURRENCY_CODES, currencyName } from '../../lib/currency';
-import { Card, CardHead, ErrorNote, LoadingNote, NoticeNote, PageTitle, Toggle, inputCls, primaryBtn } from '../../components/admin/ui';
+import { AdminsOnly, Card, CardHead, ErrorNote, LoadingNote, NoticeNote, PageTitle, Toggle, inputCls, primaryBtn } from '../../components/admin/ui';
 
 interface Settings {
   kitchenOpen: boolean; waitMin: number; waitMax: number; currency: string;
@@ -28,14 +29,17 @@ function SetRow({ title, desc, children }: { title: string; desc: string; childr
 }
 
 export default function AdminSettings() {
+  const { profile } = useAuth();
+  const isAdmin = profile?.role === 'admin';
   const [form, setForm] = useState<Settings | null>(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const { refresh } = useCurrency();
   useEffect(() => {
+    if (!isAdmin) return;
     adminGet<{ settings: Settings }>('/api/v1/admin/settings').then((d) => setForm(d.settings)).catch((e: Error) => setError(e.message));
-  }, []);
+  }, [isAdmin]);
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!form) return;
@@ -54,6 +58,7 @@ export default function AdminSettings() {
     } catch (err) { setError((err as Error).message); }
     finally { setBusy(false); }
   };
+  if (!isAdmin) return <AdminsOnly />;
   return (
     <div>
       <PageTitle sub="The kitchen toggle and wait times drive the live status on the website">Settings</PageTitle>

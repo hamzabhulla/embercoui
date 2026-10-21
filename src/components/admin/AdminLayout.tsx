@@ -7,7 +7,7 @@ const ic = (path: React.ReactNode) => (
   <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{path}</svg>
 );
 
-const NAV_GROUPS: { label: string; items: { to: string; label: string; end?: boolean; icon: React.ReactNode }[] }[] = [
+const NAV_GROUPS: { label: string; items: { to: string; label: string; end?: boolean; adminOnly?: boolean; icon: React.ReactNode }[] }[] = [
   {
     label: 'Overview',
     items: [
@@ -20,18 +20,18 @@ const NAV_GROUPS: { label: string; items: { to: string; label: string; end?: boo
   {
     label: 'Manage',
     items: [
-      { to: '/admin/customers', label: 'Customers', icon: ic(<><circle cx="9" cy="8" r="3.5" /><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5" /><path d="M16 5a3.5 3.5 0 0 1 0 6.5M21 20c0-2.8-1.8-4.7-4.5-5.3" /></>) },
+      { to: '/admin/customers', label: 'Customers', adminOnly: true, icon: ic(<><circle cx="9" cy="8" r="3.5" /><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5" /><path d="M16 5a3.5 3.5 0 0 1 0 6.5M21 20c0-2.8-1.8-4.7-4.5-5.3" /></>) },
       { to: '/admin/reviews', label: 'Reviews', icon: ic(<path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.5 9.7l5.9-.9z" />) },
-      { to: '/admin/newsletter', label: 'Newsletter', icon: ic(<><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M3.5 6.5L12 13l8.5-6.5" /></>) },
+      { to: '/admin/newsletter', label: 'Newsletter', adminOnly: true, icon: ic(<><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M3.5 6.5L12 13l8.5-6.5" /></>) },
       { to: '/admin/marketing', label: 'Coupons', icon: ic(<><path d="M3 9V5a2 2 0 0 1 2-2h4l12 12-6 6L3 9z" /><circle cx="8" cy="7.5" r="1.4" /></>) },
     ],
   },
   {
     label: 'System',
     items: [
-      { to: '/admin/finance', label: 'Finance', icon: ic(<><path d="M4 20V10M10 20V4M16 20v-8M22 20H2" /></>) },
-      { to: '/admin/staff', label: 'Staff', icon: ic(<><rect x="3" y="5" width="18" height="14" rx="2" /><circle cx="9" cy="11" r="2" /><path d="M5.5 17c.6-1.8 1.9-2.7 3.5-2.7s2.9.9 3.5 2.7M15.5 9.5h4M15.5 13h4" /></>) },
-      { to: '/admin/settings', label: 'Settings', icon: ic(<><path d="M5 7h9M18 7h1M5 17h3M12 17h7" /><circle cx="16" cy="7" r="2.2" /><circle cx="10" cy="17" r="2.2" /></>) },
+      { to: '/admin/finance', label: 'Finance', adminOnly: true, icon: ic(<><path d="M4 20V10M10 20V4M16 20v-8M22 20H2" /></>) },
+      { to: '/admin/staff', label: 'Staff', adminOnly: true, icon: ic(<><rect x="3" y="5" width="18" height="14" rx="2" /><circle cx="9" cy="11" r="2" /><path d="M5.5 17c.6-1.8 1.9-2.7 3.5-2.7s2.9.9 3.5 2.7M15.5 9.5h4M15.5 13h4" /></>) },
+      { to: '/admin/settings', label: 'Settings', adminOnly: true, icon: ic(<><path d="M5 7h9M18 7h1M5 17h3M12 17h7" /><circle cx="16" cy="7" r="2.2" /><circle cx="10" cy="17" r="2.2" /></>) },
     ],
   },
 ];
@@ -71,6 +71,12 @@ export default function AdminLayout() {
   const { profile, user, signOut } = useAuth();
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
+  const isAdmin = profile?.role === 'admin';
+  // Admin-only sections are hidden from staff entirely (the backend 403s
+  // them too); groups left empty by the filter are not rendered.
+  const visibleGroups = NAV_GROUPS
+    .map((group) => ({ ...group, items: group.items.filter((item) => isAdmin || !item.adminOnly) }))
+    .filter((group) => group.items.length > 0);
   const displayName = profile?.fullName ?? user?.email ?? 'Admin';
   return (
     <div className="min-h-screen bg-[#F7F4EE] text-[#16241A] flex font-bodytext">
@@ -83,7 +89,7 @@ export default function AdminLayout() {
           </div>
         </div>
         <nav className="flex-1 px-3 py-4 overflow-y-auto">
-          {NAV_GROUPS.map((group) => (
+          {visibleGroups.map((group) => (
             <div key={group.label} className="mb-4">
               <p className="font-bodytext text-[9.5px] tracking-[0.22em] uppercase text-[#98A096] font-semibold px-2 mb-1.5">{group.label}</p>
               {group.items.map((item) => (
