@@ -18,50 +18,89 @@ export interface CartAction {
   quantity: number;
 }
 
-const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
-/** Fast model with a free AI Studio tier — the right fit for short restaurant Q&A. */
-export const CHAT_MODEL = 'gemini-2.0-flash';
+/**
+ * Google retires Gemini model names on its own schedule (gemini-2.0-flash
+ * was shut down in 2026 and returns 404 for everyone; the 2.5 line is closed
+ * to new keys). So instead of betting on one name, the service walks this
+ * chain: a 404 (model unavailable for this key) moves to the next model,
+ * and the first model that answers is remembered for the process lifetime.
+ * GEMINI_MODEL pins a single model when an operator wants control.
+ */
+export const GEMINI_MODEL_CHAIN = [
+  'gemini-3.8-flash',
+  'gemini-3.6-flash',
+  'gemini-3.5-flash-lite',
+  'gemini-2.5-flash',
+] as const;
+
 const UPSTREAM_ERROR = 'The assistant is having trouble answering right now — please try again in a moment.';
 
-export function createGeminiChatService(apiKey: string): ChatService {
+export function createGeminiChatService(apiKey: string, preferredModel?: string | null): ChatService {
+  const chain: string[] = preferredModel ? [preferredModel] : [...GEMINI_MODEL_CHAIN];
+  let workingModel: string | null = preferredModel ?? null;
+
+  async function callModel(model: string, system: string, messages: ChatMessage[]): Promise<{ status: number; text: string | null }> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 20_000);
+    try {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+        method: 'POST',
+        signal: controller.signal,
+        headers: {
+          'content-type': 'application/json',
+          'x-goog-api-key': apiKey,
+        },
+        body: JSON.stringify({
+          system_instruction: { parts: [{ text: system }] },
+          contents: messages.map((m) => ({
+            role: m.role === 'assistant' ? 'model' : 'user',
+            parts: [{ text: m.content }],
+          })),
+          generationConfig: { maxOutputTokens: 600, temperature: 0.6 },
+        }),
+      });
+      if (!res.ok) return { status: res.status, text: null };
+      const data = (await res.json()) as {
+        candidates?: { content?: { parts?: { text?: string }[] } }[];
+      };
+      const text = (data.candidates?.[0]?.content?.parts ?? [])
+        .map((part) => part.text ?? '')
+        .join('')
+        .trim();
+      return { status: 200, text: text || null };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   return {
     async reply({ system, messages }) {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 20_000);
-      try {
-        const res = await fetch(GEMINI_URL, {
-          method: 'POST',
-          signal: controller.signal,
-          headers: {
-            'content-type': 'application/json',
-            'x-goog-api-key': apiKey,
-          },
-          body: JSON.stringify({
-            system_instruction: { parts: [{ text: system }] },
-            contents: messages.map((m) => ({
-              role: m.role === 'assistant' ? 'model' : 'user',
-              parts: [{ text: m.content }],
-            })),
-            generationConfig: { maxOutputTokens: 600, temperature: 0.6 },
-          }),
-        });
-        if (!res.ok) throw new ApiError(502, UPSTREAM_ERROR);
-        const data = (await res.json()) as {
-          candidates?: { content?: { parts?: { text?: string }[] } }[];
-        };
-        const text = (data.candidates?.[0]?.content?.parts ?? [])
-          .map((part) => part.text ?? '')
-          .join('')
-          .trim();
-        if (!text) throw new ApiError(502, UPSTREAM_ERROR);
-        return text;
-      } catch (err) {
-        if (err instanceof ApiError) throw err;
-        // Network failure / timeout / safety block — never leak upstream details.
-        throw new ApiError(502, UPSTREAM_ERROR);
-      } finally {
-        clearTimeout(timer);
+      const order = workingModel ? [workingModel, ...chain.filter((m) => m !== workingModel)] : chain;
+      let lastStatus = 0;
+      for (const model of order) {
+        let result: { status: number; text: string | null };
+        try {
+          result = await callModel(model, system, messages);
+        } catch {
+          // Network failure / timeout — not model-specific; fail honestly.
+          throw new ApiError(502, UPSTREAM_ERROR);
+        }
+        lastStatus = result.status;
+        if (result.status === 404) {
+          // Model retired or not open to this key — try the next one.
+          if (workingModel === model) workingModel = null;
+          continue;
+        }
+        if (result.status !== 200 || !result.text) {
+          // Bad key, quota, safety block — retrying another model won't help.
+          console.error(`[ember] Gemini upstream responded ${result.status} (model ${model})`);
+          throw new ApiError(502, UPSTREAM_ERROR);
+        }
+        workingModel = model;
+        return result.text;
       }
+      console.error(`[ember] Gemini: every model in the chain was unavailable (last status ${lastStatus})`);
+      throw new ApiError(502, UPSTREAM_ERROR);
     },
   };
 }

@@ -41,7 +41,7 @@ const storage: StorageService | null =
     ? createStorageService(env.supabaseUrl, env.supabaseServiceRoleKey)
     : null;
 
-const chat: ChatService | null = env.geminiApiKey ? createGeminiChatService(env.geminiApiKey) : null;
+const chat: ChatService | null = env.geminiApiKey ? createGeminiChatService(env.geminiApiKey, env.geminiModel) : null;
 const app = createApp({ env, repo, verifyToken, stripe, storage, chat });
 
 export default app;

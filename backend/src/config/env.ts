@@ -10,6 +10,7 @@ export interface Env {
   stripeConfigured: boolean;
   geminiApiKey: string | null;
   geminiConfigured: boolean;
+  geminiModel: string | null;
 }
 
 function parsePort(raw: string | undefined): number {
@@ -47,5 +48,6 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
     stripeConfigured: Boolean(stripeSecretKey),
     geminiApiKey,
     geminiConfigured: Boolean(geminiApiKey),
+    geminiModel: source.GEMINI_MODEL?.trim() || null,
   };
 }

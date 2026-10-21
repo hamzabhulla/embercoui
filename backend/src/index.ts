@@ -29,7 +29,7 @@ function main() {
     env.supabaseConfigured && env.supabaseUrl && env.supabaseServiceRoleKey
       ? createStorageService(env.supabaseUrl, env.supabaseServiceRoleKey)
       : null;
-  const chat: ChatService | null = env.geminiApiKey ? createGeminiChatService(env.geminiApiKey) : null;
+  const chat: ChatService | null = env.geminiApiKey ? createGeminiChatService(env.geminiApiKey, env.geminiModel) : null;
   if (!chat) {
     console.warn('[ember] GEMINI_API_KEY is not set — Ember AI chat will respond 503 until it is configured.');
   }

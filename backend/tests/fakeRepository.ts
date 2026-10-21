@@ -217,6 +217,6 @@ export function testEnv(overrides: Partial<import('../src/config/env').Env> = {}
     nodeEnv: 'test', port: 0, corsOrigins: ['http://localhost:5173'],
     supabaseUrl: 'https://example.supabase.co', supabaseServiceRoleKey: 'service-key',
     supabaseConfigured: true, stripeSecretKey: 'sk_test_fake', stripeWebhookSecret: 'whsec_fake',
-    stripeConfigured: true, geminiApiKey: null, geminiConfigured: false, ...overrides,
+    stripeConfigured: true, geminiApiKey: null, geminiConfigured: false, geminiModel: null, ...overrides,
   };
 }
