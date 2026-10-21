@@ -20,6 +20,8 @@ export interface PublicSettingsDTO {
   address: string | null;
   /** Digits (with country code) for the site's floating WhatsApp button; null hides the button. */
   whatsappNumber: string | null;
+  /** Guests that fit in one reservation time slot; drives the admin day board. */
+  reservationSlotCapacity: number;
   openingHours: Record<string, unknown>;
 }
 
@@ -54,8 +56,24 @@ export interface ReservationInput {
   guests: number;
 }
 
-export interface ReservationDTO extends ReservationInput {
+/** A booking created from the admin panel (walk-in / phone) — email is optional there. */
+export interface AdminReservationInput {
+  name: string;
+  email: string | null;
+  phone: string;
+  date: string;
+  time: string;
+  guests: number;
+  notes: string | null;
+  status: 'pending' | 'confirmed';
+}
+
+export interface ReservationDTO extends Omit<ReservationInput, 'email'> {
   id: string;
+  email: string | null;
+  /** 'website' = public form, 'admin' = created from the admin panel. */
+  source: 'website' | 'admin';
+  notes: string | null;
   status: 'pending' | 'confirmed' | 'cancelled' | 'completed';
   createdAt: string;
 }
@@ -163,6 +181,7 @@ export interface Repository {
   updateMenuItem(id: number, patch: Partial<MenuItemDTO> & { isAvailable?: boolean; sortOrder?: number }): Promise<(MenuItemDTO & { isAvailable: boolean; sortOrder: number }) | null>;
   deleteMenuItem(id: number): Promise<boolean>;
   adminListReservations(): Promise<ReservationDTO[]>;
+  adminCreateReservation(input: AdminReservationInput): Promise<ReservationDTO>;
   updateReservationStatus(id: string, status: ReservationDTO['status']): Promise<ReservationDTO | null>;
   adminListCustomers(): Promise<(ProfileDTO & { email: string | null; orderCount: number; totalSpent: number })[]>;
   adminListReviews(): Promise<(ReviewDTO & { isApproved: boolean })[]>;

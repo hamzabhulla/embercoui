@@ -8,6 +8,7 @@ interface Settings {
   kitchenOpen: boolean; waitMin: number; waitMax: number; currency: string;
   restaurantName: string; phone: string | null; email: string | null; address: string | null;
   whatsappNumber: string | null;
+  reservationSlotCapacity: number;
   openingHours: Record<string, unknown>;
 }
 
@@ -44,6 +45,7 @@ export default function AdminSettings() {
         kitchenOpen: form.kitchenOpen, waitMin: form.waitMin, waitMax: form.waitMax, currency: form.currency,
         restaurantName: form.restaurantName, phone: form.phone, email: form.email, address: form.address,
         whatsappNumber: form.whatsappNumber,
+        reservationSlotCapacity: form.reservationSlotCapacity,
         openingHours: form.openingHours,
       });
       setForm(res.settings);
@@ -78,6 +80,9 @@ export default function AdminSettings() {
               </SetRow>
               <SetRow title="Maximum wait (minutes)" desc="Busy hours mein is se zyada nahi jana chahiye">
                 <input id="s-wmax" type="number" min="0" max="240" className={inputCls} value={form.waitMax} onChange={(e) => setForm({ ...form, waitMax: Number(e.target.value) })} />
+              </SetRow>
+              <SetRow title="Reservation capacity per time slot (guests)" desc="Reservations page ka day board isi capacity se har time slot ke booked / remaining guests gin-ta hai">
+                <input id="s-rescap" type="number" min="1" max="500" className={inputCls} value={form.reservationSlotCapacity} onChange={(e) => setForm({ ...form, reservationSlotCapacity: Number(e.target.value) })} />
               </SetRow>
             </div>
           </Card>

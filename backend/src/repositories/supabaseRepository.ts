@@ -1,7 +1,7 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { currencyExponent, sanitizeCurrencyCode } from '../lib/currency';
 import type {
-  CouponDTO, CreateOrderData, MenuItemDTO, OrderDTO, ProfileDTO,
+  AdminReservationInput, CouponDTO, CreateOrderData, MenuItemDTO, OrderDTO, ProfileDTO,
   PublicSettingsDTO, ReservationDTO, ReservationInput, Repository, ReviewDTO,
 } from './types';
 
@@ -36,12 +36,13 @@ function settingsDTO(r: Row): PublicSettingsDTO {
     email: strOrNull(r.email),
     address: strOrNull(r.address),
     whatsappNumber: strOrNull(r.whatsapp_number),
+    reservationSlotCapacity: num(r.reservation_slot_capacity) || 40,
     openingHours: (r.opening_hours as Record<string, unknown>) ?? {},
   };
 }
 export const DEFAULT_SETTINGS: PublicSettingsDTO = {
   kitchenOpen: true, waitMin: 20, waitMax: 30, currency: 'USD', restaurantName: 'Ember & Co.',
-  phone: null, email: null, address: null, whatsappNumber: null, openingHours: {},
+  phone: null, email: null, address: null, whatsappNumber: null, reservationSlotCapacity: 40, openingHours: {},
 };
 function reviewDTO(r: Row): ReviewDTO {
   return { id: str(r.id), name: str(r.name), rating: num(r.rating), comment: str(r.comment), country: strOrNull(r.country), createdAt: str(r.created_at) };
@@ -62,9 +63,12 @@ function reservationDTO(r: Row): ReservationDTO {
   return {
     id: str(r.id),
     userId: strOrNull(r.user_id),
-    name: str(r.name), email: str(r.email), phone: str(r.phone),
+    name: str(r.name), email: strOrNull(r.email), phone: str(r.phone),
     date: str(r.reservation_date), time: str(r.reservation_time),
     guests: num(r.guests),
+    // Pre-migration rows have no source column — they all came from the site.
+    source: r.source === 'admin' ? 'admin' : 'website',
+    notes: strOrNull(r.notes),
     status: str(r.status) as ReservationDTO['status'],
     createdAt: str(r.created_at),
   };
@@ -335,6 +339,19 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
       if (error) throw new Error(`reservation update failed: ${error.message}`);
       return data ? reservationDTO(data as Row) : null;
     },
+    async adminCreateReservation(input: AdminReservationInput) {
+      const { data, error } = await db
+        .from('reservations')
+        .insert({
+          user_id: null, name: input.name, email: input.email, phone: input.phone,
+          reservation_date: input.date, reservation_time: input.time, guests: input.guests,
+          status: input.status, source: 'admin', notes: input.notes,
+        })
+        .select('*')
+        .single();
+      if (error) throw new Error(`admin reservation insert failed: ${error.message}`);
+      return reservationDTO(data as Row);
+    },
     async adminListCustomers() {
       const { data: profiles, error } = await db.from('profiles').select('*').eq('role', 'customer').order('created_at', { ascending: false });
       if (error) throw new Error(`profiles query failed: ${error.message}`);
@@ -448,6 +465,7 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
       if (patch.email !== undefined) update.email = patch.email;
       if (patch.address !== undefined) update.address = patch.address;
       if (patch.whatsappNumber !== undefined) update.whatsapp_number = patch.whatsappNumber;
+      if (patch.reservationSlotCapacity !== undefined) update.reservation_slot_capacity = patch.reservationSlotCapacity;
       if (patch.openingHours !== undefined) update.opening_hours = patch.openingHours;
       const { error } = await db.from('restaurant_settings').update(update).eq('id', 1);
       if (error) throw new Error(`settings update failed: ${error.message}`);

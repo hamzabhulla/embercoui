@@ -57,7 +57,27 @@ const settingsSchema = z.object({
     .refine((v) => { const d = v.replace(/\D/g, ''); return d.length >= 7 && d.length <= 15; }, 'WhatsApp number must contain 7–15 digits (with country code)')
     .nullable()
     .optional(),
+  reservationSlotCapacity: z.number().int().min(1).max(500).optional(),
   openingHours: z.record(z.unknown()).optional(),
+});
+// Walk-in / phone bookings created from the admin panel. Email is optional
+// (walk-ins don't always leave one); date/time rules mirror the public form.
+const adminReservationSchema = z.object({
+  name: z.string().trim().min(1, 'Full name is required'),
+  email: z.union([z.string().trim().email('Invalid email format'), z.literal('')]).optional(),
+  phone: z.string().trim().min(7, 'Phone number is required'),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date is required').refine((v) => {
+    const [y, m, d] = v.split('-').map(Number);
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+  }, 'Please choose a valid date'),
+  time: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/, 'Time is required').refine((v) => {
+    const [h, m] = v.split(':').map(Number);
+    return h >= 0 && h <= 23 && m >= 0 && m <= 59;
+  }, 'Please choose a valid time'),
+  guests: z.number().int().min(1, 'Guests must be at least 1').max(20, 'For parties over 20, please contact us directly'),
+  notes: z.string().trim().max(500).optional(),
+  status: z.enum(['pending', 'confirmed']).default('confirmed'),
 });
 const uploadSchema = z.object({
   filename: z.string().min(1).max(120),
@@ -171,6 +191,23 @@ export function adminRouter(deps: AdminDeps) {
 
   router.get('/reservations', async (_req, res, next) => {
     try { res.json({ reservations: await repo().adminListReservations() }); } catch (err) { next(err); }
+  });
+
+  router.post('/reservations', validateBody(adminReservationSchema), async (req, res, next) => {
+    try {
+      const body = req.body as z.infer<typeof adminReservationSchema>;
+      const reservation = await repo().adminCreateReservation({
+        name: body.name,
+        email: body.email ? body.email : null,
+        phone: body.phone,
+        date: body.date,
+        time: body.time,
+        guests: body.guests,
+        notes: body.notes ? body.notes : null,
+        status: body.status,
+      });
+      res.status(201).json({ reservation });
+    } catch (err) { next(err); }
   });
 
   router.patch('/reservations/:id/status', validateBody(reservationStatusSchema), async (req, res, next) => {

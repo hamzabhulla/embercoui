@@ -1,5 +1,5 @@
 import type {
-  CouponDTO, CreateOrderData, MenuItemDTO, OrderDTO, ProfileDTO, PublicSettingsDTO,
+  AdminReservationInput, CouponDTO, CreateOrderData, MenuItemDTO, OrderDTO, ProfileDTO, PublicSettingsDTO,
   Repository, ReservationDTO, ReservationInput, ReviewDTO,
 } from '../src/repositories/types';
 
@@ -13,7 +13,7 @@ export class FakeRepository implements Repository {
   ];
   settings: PublicSettingsDTO = {
     kitchenOpen: true, waitMin: 20, waitMax: 30, currency: 'USD', restaurantName: 'Ember & Co.',
-    phone: null, email: null, address: null, whatsappNumber: null, openingHours: {},
+    phone: null, email: null, address: null, whatsappNumber: null, reservationSlotCapacity: 40, openingHours: {},
   };
   reviews: (ReviewDTO & { isApproved: boolean; userId?: string | null })[] = [
     { id: 'rev-1', name: 'Amélie Fontaine', rating: 5, comment: 'Wonderful.', country: 'France', createdAt: '2026-01-01T00:00:00Z', isApproved: true },
@@ -63,7 +63,12 @@ export class FakeRepository implements Repository {
     return profile;
   }
   async createReservation(input: ReservationInput): Promise<ReservationDTO> {
-    const reservation: ReservationDTO = { ...input, id: `res-${++this.seq}`, status: 'pending', createdAt: new Date().toISOString() };
+    const reservation: ReservationDTO = { ...input, id: `res-${++this.seq}`, status: 'pending', source: 'website', notes: null, createdAt: new Date().toISOString() };
+    this.reservations.push(reservation);
+    return reservation;
+  }
+  async adminCreateReservation(input: AdminReservationInput): Promise<ReservationDTO> {
+    const reservation: ReservationDTO = { userId: null, ...input, id: `res-${++this.seq}`, source: 'admin', createdAt: new Date().toISOString() };
     this.reservations.push(reservation);
     return reservation;
   }
