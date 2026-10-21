@@ -1,5 +1,6 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { currencyExponent, sanitizeCurrencyCode } from '../lib/currency';
+import { ApiError } from '../lib/errors';
 import type {
   AdminReservationInput, CouponDTO, CreateOrderData, MenuItemDTO, OrderDTO, ProfileDTO,
   PublicSettingsDTO, ReservationDTO, ReservationInput, Repository, ReviewDTO,
@@ -264,21 +265,50 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
       return withItems;
     },
     async setOrderPaymentIntent(orderId, paymentIntentId) {
-      const { error } = await db.from('orders').update({ payment_intent_id: paymentIntentId, payment_status: 'pending' }).eq('id', orderId);
+      const { data, error } = await db
+        .from('orders')
+        .update({ payment_intent_id: paymentIntentId, payment_status: 'pending' })
+        .eq('id', orderId)
+        .select('id');
       if (error) throw new Error(`order payment update failed: ${error.message}`);
+      // An UPDATE that matched no row must not pass silently — the route
+      // would otherwise hand the customer a client secret whose order can
+      // never be marked paid.
+      if (!data || data.length === 0) throw new ApiError(404, 'Order not found');
     },
     async markOrderPaidByPaymentIntent(paymentIntentId) {
       const { data, error } = await db.from('orders').select('id').eq('payment_intent_id', paymentIntentId).maybeSingle();
       if (error) throw new Error(`order lookup failed: ${error.message}`);
       if (!data) return null;
       const orderId = str((data as Row).id);
-      const { error: updError } = await db.from('orders').update({ payment_status: 'paid' }).eq('id', orderId);
+      // Guarded transition: 'paid' may be set from unpaid/pending/failed
+      // (a succeeded event after a failed attempt is a legitimate card
+      // retry). 'paid' itself is terminal — re-deliveries and later events
+      // match zero rows here and change nothing.
+      const { error: updError } = await db
+        .from('orders')
+        .update({ payment_status: 'paid' })
+        .eq('id', orderId)
+        .in('payment_status', ['unpaid', 'pending', 'failed']);
       if (updError) throw new Error(`order payment update failed: ${updError.message}`);
       return repo.getOrder(orderId);
     },
     async markOrderPaymentFailedByPaymentIntent(paymentIntentId) {
-      const { error } = await db.from('orders').update({ payment_status: 'failed' }).eq('payment_intent_id', paymentIntentId);
-      if (error) throw new Error(`order payment update failed: ${error.message}`);
+      const { data, error } = await db.from('orders').select('id').eq('payment_intent_id', paymentIntentId).maybeSingle();
+      if (error) throw new Error(`order lookup failed: ${error.message}`);
+      if (!data) return null;
+      const orderId = str((data as Row).id);
+      // Guarded transition: 'failed' may be set from unpaid/pending ONLY.
+      // Stripe does not guarantee webhook ordering — a payment_failed event
+      // delivered after payment_succeeded must never un-pay an order, and a
+      // refunded order must not flip to failed either.
+      const { error: updError } = await db
+        .from('orders')
+        .update({ payment_status: 'failed' })
+        .eq('id', orderId)
+        .in('payment_status', ['unpaid', 'pending']);
+      if (updError) throw new Error(`order payment update failed: ${updError.message}`);
+      return repo.getOrder(orderId);
     },
     async getCouponByCode(code) {
       const { data, error } = await db.from('coupons').select('*').eq('code', code.toUpperCase()).maybeSingle();

@@ -170,8 +170,14 @@ export interface Repository {
   createOrder(data: CreateOrderData): Promise<OrderDTO>;
   getOrder(id: string): Promise<OrderDTO | null>;
   setOrderPaymentIntent(orderId: string, paymentIntentId: string): Promise<void>;
+  /**
+   * Payment-state transitions are GUARDED in every implementation:
+   * 'paid' is terminal; 'paid' may be set from unpaid/pending/failed;
+   * 'failed' may be set from unpaid/pending only. Return the order, or
+   * null when no order references the intent.
+   */
   markOrderPaidByPaymentIntent(paymentIntentId: string): Promise<OrderDTO | null>;
-  markOrderPaymentFailedByPaymentIntent(paymentIntentId: string): Promise<void>;
+  markOrderPaymentFailedByPaymentIntent(paymentIntentId: string): Promise<OrderDTO | null>;
   getCouponByCode(code: string): Promise<CouponDTO | null>;
 
   // Admin (Phase 4)

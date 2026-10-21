@@ -72,7 +72,7 @@ export function createApp(deps: AppDeps): Express {
   app.use('/api/v1/account', accountRouter(deps));
   app.use('/api/v1', ordersRouter(deps));
   app.use('/api/v1', chatRouter({ repo: deps.repo, chat: deps.chat ?? null }));
-  app.use('/api/v1', paymentsRouter({ repo: deps.repo, stripe: deps.stripe ?? null }));
+  app.use('/api/v1', paymentsRouter({ repo: deps.repo, stripe: deps.stripe ?? null, verifyToken: deps.verifyToken }));
   app.use('/api/v1/admin', adminRouter({ repo: deps.repo, verifyToken: deps.verifyToken, storage: deps.storage ?? null }));
 
   app.use(notFound);

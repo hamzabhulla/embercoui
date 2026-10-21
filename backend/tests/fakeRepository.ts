@@ -1,3 +1,4 @@
+import { ApiError } from '../src/lib/errors';
 import type {
   AdminReservationInput, CouponDTO, CreateOrderData, MenuItemDTO, OrderDTO, ProfileDTO, PublicSettingsDTO,
   Repository, ReservationDTO, ReservationInput, ReviewDTO,
@@ -102,17 +103,30 @@ export class FakeRepository implements Repository {
   async getOrder(id: string) { return this.orders.find((o) => o.id === id) ?? null; }
   async setOrderPaymentIntent(orderId: string, paymentIntentId: string) {
     const order = this.orders.find((o) => o.id === orderId);
-    if (order) { order.paymentIntentId = paymentIntentId; order.paymentStatus = 'pending'; }
+    // Mirror the real repository: an unknown order is an error, never a
+    // silent no-op.
+    if (!order) throw new ApiError(404, 'Order not found');
+    order.paymentIntentId = paymentIntentId; order.paymentStatus = 'pending';
   }
   async markOrderPaidByPaymentIntent(paymentIntentId: string) {
     const order = this.orders.find((o) => o.paymentIntentId === paymentIntentId);
     if (!order) return null;
-    order.paymentStatus = 'paid';
+    // Same guarded transitions as the Supabase repository: 'paid' may be
+    // set from unpaid/pending/failed and is terminal once set.
+    if (order.paymentStatus === 'unpaid' || order.paymentStatus === 'pending' || order.paymentStatus === 'failed') {
+      order.paymentStatus = 'paid';
+    }
     return order;
   }
   async markOrderPaymentFailedByPaymentIntent(paymentIntentId: string) {
     const order = this.orders.find((o) => o.paymentIntentId === paymentIntentId);
-    if (order) order.paymentStatus = 'failed';
+    if (!order) return null;
+    // 'failed' may be set from unpaid/pending only — a late failed event
+    // must never un-pay an order.
+    if (order.paymentStatus === 'unpaid' || order.paymentStatus === 'pending') {
+      order.paymentStatus = 'failed';
+    }
+    return order;
   }
   async getCouponByCode(code: string) { return this.coupons.find((c) => c.code === code.toUpperCase()) ?? null; }
 

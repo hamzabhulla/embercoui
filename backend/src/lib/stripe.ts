@@ -6,23 +6,45 @@ export interface StripeEventLike {
   paymentIntentId: string | null;
 }
 
+export interface CreatedPaymentIntent {
+  id: string;
+  clientSecret: string;
+}
+
+export interface RetrievedPaymentIntent {
+  id: string;
+  clientSecret: string | null;
+  /** Stripe lifecycle status, e.g. 'requires_payment_method', 'processing', 'succeeded', 'canceled'. */
+  status: string;
+}
+
 export interface StripeService {
-  createPaymentIntent(input: { orderId: string; amountCents: number; currency: string }): Promise<{ id: string; clientSecret: string }>;
+  createPaymentIntent(input: { orderId: string; amountCents: number; currency: string; idempotencyKey: string }): Promise<CreatedPaymentIntent>;
+  retrievePaymentIntent(id: string): Promise<RetrievedPaymentIntent>;
   constructEvent(payload: Buffer, signature: string): StripeEventLike;
 }
 
 export function createStripeService(secretKey: string, webhookSecret: string | null): StripeService {
   const stripe = new Stripe(secretKey);
   return {
-    async createPaymentIntent({ orderId, amountCents, currency }) {
-      const intent = await stripe.paymentIntents.create({
-        amount: amountCents,
-        currency,
-        metadata: { orderId },
-        automatic_payment_methods: { enabled: true },
-      });
+    async createPaymentIntent({ orderId, amountCents, currency, idempotencyKey }) {
+      const intent = await stripe.paymentIntents.create(
+        {
+          amount: amountCents,
+          currency,
+          metadata: { orderId },
+          automatic_payment_methods: { enabled: true },
+        },
+        // Stripe dedupes creates carrying the same key for 24h, so a
+        // retried request can never mint a second intent for one order.
+        { idempotencyKey }
+      );
       if (!intent.client_secret) throw new ApiError(500, 'Stripe did not return a client secret');
       return { id: intent.id, clientSecret: intent.client_secret };
+    },
+    async retrievePaymentIntent(id) {
+      const intent = await stripe.paymentIntents.retrieve(id);
+      return { id: intent.id, clientSecret: intent.client_secret, status: intent.status };
     },
     constructEvent(payload, signature) {
       if (!webhookSecret) throw new ApiError(503, 'Stripe webhook is not configured');
