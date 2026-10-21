@@ -264,7 +264,7 @@ export default function Account() {
     : null;
 
   return (
-    <div className="min-h-screen relative" style={{ background: '#0C170D' }}>
+    <div className="min-h-screen relative" style={{ background: '#0C170D', color: '#F5F0E8' }}>
       <div aria-hidden style={{ position: 'absolute', inset: '0 0 auto 0', height: '480px', pointerEvents: 'none', background: 'radial-gradient(900px 420px at 50% -120px, rgba(193,122,58,0.13), transparent 65%)' }} />
       <div className="relative mx-auto px-6 pt-[130px] pb-24" style={{ maxWidth: '1180px' }}>
         <p style={{ fontFamily: JOST, fontSize: '11px', letterSpacing: '0.34em', color: '#C17A3A' }}>✦ &nbsp;MY ACCOUNT</p>
@@ -289,9 +289,9 @@ export default function Account() {
               <p style={{ fontFamily: JOST, fontSize: '13px', color: 'rgba(245,240,232,0.38)', marginTop: '3px' }}>{profile?.email}</p>
               <span className="inline-block" style={{ marginTop: '16px', fontFamily: JOST, fontSize: '10px', letterSpacing: '0.3em', color: '#D9A45B', border: '1px solid rgba(217,164,91,0.4)', padding: '5px 12px 4px' }}>EMBER CIRCLE · MEMBER</span>
               <div className="grid grid-cols-3" style={{ borderTop: '1px solid rgba(245,240,232,0.1)', borderBottom: '1px solid rgba(245,240,232,0.1)', margin: '20px 0', padding: '15px 0 13px' }}>
-                <div><span className="block" style={{ fontFamily: SERIF, fontSize: '23px', fontWeight: 600 }}>{orders.length}</span><span style={{ fontSize: '9.5px', letterSpacing: '0.18em', color: 'rgba(245,240,232,0.38)' }}>ORDERS</span></div>
-                <div><span className="block" style={{ fontFamily: SERIF, fontSize: '23px', fontWeight: 600 }}>{favorites.length}</span><span style={{ fontSize: '9.5px', letterSpacing: '0.18em', color: 'rgba(245,240,232,0.38)' }}>FAVORITES</span></div>
-                <div><span className="block" style={{ fontFamily: SERIF, fontSize: '23px', fontWeight: 600 }}>{addresses.length}</span><span style={{ fontSize: '9.5px', letterSpacing: '0.18em', color: 'rgba(245,240,232,0.38)' }}>ADDRESSES</span></div>
+                <div><span className="block" style={{ fontFamily: SERIF, fontSize: '23px', fontWeight: 600, color: '#D9A45B' }}>{orders.length}</span><span style={{ fontSize: '9.5px', letterSpacing: '0.18em', color: 'rgba(245,240,232,0.38)' }}>ORDERS</span></div>
+                <div><span className="block" style={{ fontFamily: SERIF, fontSize: '23px', fontWeight: 600, color: '#D9A45B' }}>{favorites.length}</span><span style={{ fontSize: '9.5px', letterSpacing: '0.18em', color: 'rgba(245,240,232,0.38)' }}>FAVORITES</span></div>
+                <div><span className="block" style={{ fontFamily: SERIF, fontSize: '23px', fontWeight: 600, color: '#D9A45B' }}>{addresses.length}</span><span style={{ fontSize: '9.5px', letterSpacing: '0.18em', color: 'rgba(245,240,232,0.38)' }}>ADDRESSES</span></div>
               </div>
               <button onClick={() => setTab('Profile')} style={{ ...emberButton, width: '100%' }} className="transition-all duration-300 hover:brightness-110">Edit Profile</button>
               <button onClick={handleSignOut} style={{ ...ghostButton, width: '100%', marginTop: '10px' }} className="transition-colors">
@@ -341,7 +341,7 @@ export default function Account() {
                     <div style={{ border: '1px solid rgba(217,164,91,0.38)', background: 'linear-gradient(180deg, rgba(193,122,58,0.07), rgba(245,240,232,0.012))', padding: '26px 28px', marginBottom: '16px' }}>
                       <div className="flex flex-wrap items-start justify-between gap-4">
                         <div>
-                          <p style={{ fontFamily: JOST, fontSize: '13px', letterSpacing: '0.08em' }}>Order <b style={{ fontWeight: 500 }}>#{featured.id.slice(0, 8)}</b></p>
+                          <p style={{ fontFamily: JOST, fontSize: '13px', letterSpacing: '0.08em', color: '#F5F2EB' }}>Order <b style={{ fontWeight: 500 }}>#{featured.id.slice(0, 8)}</b></p>
                           <p style={{ fontFamily: JOST, fontSize: '12.5px', color: 'rgba(245,240,232,0.38)', marginTop: '3px' }}>
                             {new Date(featured.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })} · {featured.paymentStatus === 'paid' ? 'Paid by card' : featured.paymentStatus === 'failed' ? 'Card payment failed' : featured.paymentStatus === 'refunded' ? 'Refunded' : 'Pay on delivery'}
                           </p>
@@ -398,7 +398,7 @@ export default function Account() {
                         <div key={order.id} style={{ background: cardBg, border: '1px solid rgba(245,240,232,0.1)', padding: '26px 28px', opacity: order.status === 'cancelled' ? 0.72 : 1 }}>
                           <div className="flex flex-wrap items-start justify-between gap-4">
                             <div>
-                              <p style={{ fontFamily: JOST, fontSize: '13px', letterSpacing: '0.08em' }}>Order <b style={{ fontWeight: 500 }}>#{order.id.slice(0, 8)}</b></p>
+                              <p style={{ fontFamily: JOST, fontSize: '13px', letterSpacing: '0.08em', color: '#F5F2EB' }}>Order <b style={{ fontWeight: 500 }}>#{order.id.slice(0, 8)}</b></p>
                               <p style={{ fontFamily: JOST, fontSize: '12.5px', color: 'rgba(245,240,232,0.38)', marginTop: '3px' }}>
                                 {new Date(order.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
                               </p>
@@ -502,7 +502,7 @@ export default function Account() {
 
                 {addrFormOpen && (
                   <form onSubmit={submitAddress} style={{ border: '1px solid rgba(245,240,232,0.1)', background: cardBg, padding: '28px', marginTop: '16px' }}>
-                    <h3 style={{ fontFamily: SERIF, fontSize: '23px', fontWeight: 600, marginBottom: '20px' }}>{editIndex != null ? 'Edit address' : 'New address'}</h3>
+                    <h3 style={{ fontFamily: SERIF, fontSize: '23px', fontWeight: 600, marginBottom: '20px', color: '#F5F0E8' }}>{editIndex != null ? 'Edit address' : 'New address'}</h3>
                     <div className="grid md:grid-cols-2 gap-4">
                       <div><label style={labelStyle}>Label (optional)</label><input value={addr.label} onChange={(e) => setAddr({ ...addr, label: e.target.value })} style={inputStyle} placeholder="Home" /></div>
                       <div><label style={labelStyle}>Phone (optional)</label><input value={addr.phone} onChange={(e) => setAddr({ ...addr, phone: e.target.value })} style={inputStyle} /></div>
@@ -522,7 +522,7 @@ export default function Account() {
             {tab === 'Profile' && (
               <div style={{ paddingTop: '30px' }}>
                 <form onSubmit={saveProfile} style={{ border: '1px solid rgba(245,240,232,0.1)', background: cardBg, padding: '28px', marginBottom: '16px' }}>
-                  <h3 style={{ fontFamily: SERIF, fontSize: '23px', fontWeight: 600, marginBottom: '4px' }}>Profile details</h3>
+                  <h3 style={{ fontFamily: SERIF, fontSize: '23px', fontWeight: 600, marginBottom: '4px', color: '#F5F0E8' }}>Profile details</h3>
                   <p style={{ fontFamily: JOST, fontSize: '12.5px', color: 'rgba(245,240,232,0.38)', marginBottom: '20px' }}>Your name appears on orders and reservations.</p>
                   <div className="grid md:grid-cols-2 gap-4">
                     <div><label style={labelStyle}>Full Name</label><input value={fullName} onChange={(e) => setFullName(e.target.value)} style={inputStyle} /></div>
@@ -533,7 +533,7 @@ export default function Account() {
                 </form>
 
                 <form onSubmit={changePassword} style={{ border: '1px solid rgba(245,240,232,0.1)', background: cardBg, padding: '28px' }}>
-                  <h3 style={{ fontFamily: SERIF, fontSize: '23px', fontWeight: 600, marginBottom: '4px' }}>Change password</h3>
+                  <h3 style={{ fontFamily: SERIF, fontSize: '23px', fontWeight: 600, marginBottom: '4px', color: '#F5F0E8' }}>Change password</h3>
                   <p style={{ fontFamily: JOST, fontSize: '12.5px', color: 'rgba(245,240,232,0.38)', marginBottom: '20px' }}>Use at least 8 characters. You'll stay signed in on this device.</p>
                   <div className="grid md:grid-cols-2 gap-4">
                     <div><label style={labelStyle}>New password</label><input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} style={inputStyle} placeholder="••••••••" autoComplete="new-password" /></div>
@@ -547,7 +547,7 @@ export default function Account() {
             {tab === 'Leave a Review' && (
               <div style={{ paddingTop: '30px' }}>
                 <form onSubmit={submitReview} style={{ border: '1px solid rgba(245,240,232,0.1)', background: cardBg, padding: '28px' }}>
-                  <h3 style={{ fontFamily: SERIF, fontSize: '23px', fontWeight: 600, marginBottom: '4px' }}>Share your experience</h3>
+                  <h3 style={{ fontFamily: SERIF, fontSize: '23px', fontWeight: 600, marginBottom: '4px', color: '#F5F0E8' }}>Share your experience</h3>
                   <p style={{ fontFamily: JOST, fontSize: '12.5px', color: 'rgba(245,240,232,0.38)', marginBottom: '20px' }}>Reviews appear on the site after a quick moderation check.</p>
                   <div style={{ marginBottom: '18px' }}>
                     <label style={labelStyle}>Your Rating</label>

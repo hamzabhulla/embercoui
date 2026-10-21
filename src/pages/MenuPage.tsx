@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, memo, useCallback } from 'react';
-import { Plus, Check, Search } from 'lucide-react';
+import { Check, Search } from 'lucide-react';
 import { categories, MenuItem } from '../data/menu.ts';
 import { useMenuItems } from '../services/useMenuItems.ts';
 import { useCart } from '../context/CartContext.tsx';
@@ -40,7 +40,7 @@ function flyToCart(img: HTMLImageElement | null) {
   Object.assign(flyer.style, {
     position: 'fixed', left: `${r1.left}px`, top: `${r1.top}px`,
     width: `${r1.width}px`, height: `${r1.height}px`, margin: '0',
-    borderRadius: '12px', objectFit: 'cover', pointerEvents: 'none', zIndex: 200,
+    borderRadius: '0px', objectFit: 'cover', pointerEvents: 'none', zIndex: 200,
     boxShadow: '0 18px 44px rgba(0,0,0,0.55)', border: '1px solid rgba(233,196,140,0.6)',
   });
   document.body.appendChild(flyer);
@@ -65,9 +65,9 @@ function flyToCart(img: HTMLImageElement | null) {
   }, 95);
   const anim = flyer.animate(
     [
-      { transform: 'translate(0,0) scale(1)', opacity: 1, borderRadius: '4px' },
+      { transform: 'translate(0,0) scale(1)', opacity: 1, borderRadius: '0px' },
       { transform: `translate(${dx * 0.45}px, ${dy - 120}px) scale(0.55)`, opacity: 1, offset: 0.45 },
-      { transform: `translate(${dx}px, ${dy}px) scale(0.06)`, opacity: 0.55, borderRadius: '50%' },
+      { transform: `translate(${dx}px, ${dy}px) scale(0.06)`, opacity: 0.55, borderRadius: '0px' },
     ],
     { duration: 780, easing: 'cubic-bezier(.3,.7,.3,1)' },
   );
@@ -120,23 +120,24 @@ function useReveal<T extends HTMLElement>(delay = 0) {
 
 // ─── Skeleton card ────────────────────────────────────────────────────────────
 const SkeletonCard = memo(() => (
-  <div className="overflow-hidden flex flex-col animate-pulse bg-white shadow-[0_2px_12px_rgba(0,0,0,0.08)]">
-    <div className="h-[180px] md:h-52 flex-shrink-0" style={{ background: 'rgba(13,26,14,0.12)' }} />
-    <div className="pt-[12px] px-[12px] pb-[14px] md:p-5 flex flex-col gap-3 flex-1">
-      <div className="flex justify-between gap-3">
-        <div className="h-4 md:h-5 rounded w-2/3" style={{ background: 'rgba(13,26,14,0.10)' }} />
-        <div className="h-4 md:h-5 rounded w-12" style={{ background: 'rgba(13,26,14,0.10)' }} />
+  <div className="overflow-hidden flex flex-col animate-pulse" style={{ background: 'linear-gradient(180deg, rgba(245,240,232,0.045), rgba(245,240,232,0.015))', border: '1px solid rgba(245,240,232,0.09)', borderRadius: '0px' }}>
+    <div className="h-[172px] flex-shrink-0" style={{ background: '#0D1A0E' }} />
+    <div className="p-0 pb-[14px] md:p-5 flex flex-col gap-3 flex-1">
+      <div className="flex flex-col md:flex-row justify-between gap-1 md:gap-3 pt-2 md:pt-0">
+        <div className="h-4 md:h-5 rounded w-2/3" style={{ background: 'rgba(245,240,232,0.1)' }} />
+        <div className="h-4 md:h-5 rounded w-12" style={{ background: 'rgba(245,240,232,0.1)' }} />
       </div>
       <div className="hidden md:block space-y-2 flex-1">
-        <div className="h-3 rounded w-full" style={{ background: 'rgba(13,26,14,0.06)' }} />
-        <div className="h-3 rounded w-5/6" style={{ background: 'rgba(13,26,14,0.06)' }} />
-        <div className="h-3 rounded w-3/4" style={{ background: 'rgba(13,26,14,0.06)' }} />
+        <div className="h-3 rounded w-full" style={{ background: 'rgba(245,240,232,0.05)' }} />
+        <div className="h-3 rounded w-5/6" style={{ background: 'rgba(245,240,232,0.05)' }} />
+        <div className="h-3 rounded w-3/4" style={{ background: 'rgba(245,240,232,0.05)' }} />
       </div>
-      <div className="h-[34px] md:h-11 mt-auto" style={{ background: 'rgba(13,26,14,0.10)' }} />
+      <div className="h-[34px] md:h-11 rounded-none mt-auto" style={{ background: 'rgba(245,240,232,0.1)' }} />
     </div>
   </div>
 ));
 
+// ─── Memoised menu card ───────────────────────────────────────────────────────
 const MenuCard = memo(({ item, isAdded, onAdd, index }: {
   item: MenuItem;
   isAdded: boolean;
@@ -150,9 +151,14 @@ const MenuCard = memo(({ item, isAdded, onAdd, index }: {
   return (
     <div
       ref={ref}
-      className="c-hidden group bg-white overflow-hidden shadow-[0_2px_12px_rgba(0,0,0,0.08)] hover:shadow-md transition-shadow duration-300 flex flex-col rounded-none border-none"
+      className="c-hidden group overflow-hidden flex flex-col transition-all duration-500 hover:-translate-y-[3px] hover:border-[rgba(193,122,58,0.4)]"
+      style={{
+        background: 'linear-gradient(180deg, rgba(245,240,232,0.045), rgba(245,240,232,0.015))',
+        border: '1px solid rgba(245,240,232,0.09)',
+        borderRadius: '0px',
+      }}
     >
-      <div className="relative h-[180px] md:h-52 overflow-hidden flex-shrink-0 w-full">
+      <div className="relative h-[172px] overflow-hidden flex-shrink-0">
         <FavoriteButton itemId={item.id} />
         <img
           ref={imgRef}
@@ -162,43 +168,45 @@ const MenuCard = memo(({ item, isAdded, onAdd, index }: {
           decoding="async"
           width="400"
           height="300"
-          className="w-full h-full object-cover object-center group-hover:scale-105 transition-transform duration-500"
+          className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700 ease-out"
         />
       </div>
-      <div className="pt-[12px] px-[12px] pb-[14px] md:p-5 flex flex-col flex-1">
-        <div className="flex flex-col md:flex-row md:items-start justify-between gap-0 md:gap-3 mb-0 md:mb-2">
-          <h3
-            className="text-[#1C2B1E] text-[17px] md:text-xl leading-tight mb-[2px] md:mb-0 font-medium"
-            style={{ fontFamily: 'Cormorant Garamond, serif' }}
-          >
-            {item.name}
-          </h3>
-          <span className="text-[#C17A3A] text-[15px] md:text-base flex-shrink-0 mb-[10px] md:mb-0 md:font-semibold">
-            <span className="md:hidden" style={{ fontFamily: 'Cormorant Garamond, serif' }}>{format(item.price)}</span>
-            <span className="hidden md:inline" style={{ fontFamily: 'Jost, sans-serif' }}>{format(item.price)}</span>
-          </span>
+      <div className="px-[18px] pb-[18px] pt-4 flex flex-col flex-1">
+        <h3
+          className="text-[#F5F0E8] text-[21px] leading-[1.15]"
+          style={{ fontFamily: 'Cormorant Garamond, serif', fontWeight: 500 }}
+        >
+          {item.name}
+        </h3>
+        <div
+          className="text-[#C17A3A] text-[10px] uppercase mt-[2px]"
+          style={{ fontFamily: 'Jost, sans-serif', letterSpacing: '0.24em' }}
+        >
+          {item.category}
         </div>
         <p
-          className="hidden md:block text-[#1C2B1E]/60 text-sm leading-relaxed mb-5 flex-1"
-          style={{ fontFamily: 'Jost, sans-serif', fontWeight: 300 }}
+          className="text-[#F5F0E8]/60 text-[13px] leading-relaxed mt-[10px] font-light line-clamp-2"
+          style={{ fontFamily: 'Jost, sans-serif' }}
         >
           {item.description}
         </p>
-        <div className="mt-auto">
+        <div className="flex items-center justify-between mt-auto pt-[14px]">
+          <span
+            className="text-[#E9C48C] text-[21px]"
+            style={{ fontFamily: 'Cormorant Garamond, serif' }}
+          >
+            {format(item.price)}
+          </span>
           <button
             onClick={() => onAdd(item, imgRef.current)}
-            className={`w-full flex items-center justify-center gap-[8px] p-[10px] md:px-[20px] md:py-[12px] text-[10px] md:text-[11px] tracking-[0.12em] rounded-none uppercase border-none md:border transition-all duration-300 ease-out ${
+            className={`flex items-center gap-2 rounded-none uppercase transition-all duration-300 ${
               isAdded
-                ? 'bg-[#2E7D32] md:border-[#2E7D32] text-white'
-                : 'bg-[#1C2B1E] text-white md:border-white/10 hover:bg-[#C17A3A] md:hover:border-[#C17A3A] hover:-translate-y-[1px] md:hover:shadow-[0_4px_20px_rgba(193,122,58,0.3)]'
+                ? 'border border-[#58B368] bg-[#58B368] text-white'
+                : 'border border-[rgba(193,122,58,0.6)] bg-[rgba(193,122,58,0.10)] text-[#EBCB9C] hover:bg-[#C17A3A] hover:text-white hover:shadow-[0_10px_26px_rgba(193,122,58,0.35)]'
             }`}
-            style={{ fontFamily: 'Jost, sans-serif' }}
+            style={{ fontFamily: 'Jost, sans-serif', fontSize: '10.5px', letterSpacing: '0.2em', padding: '11px 18px' }}
           >
-            {isAdded ? (
-              <><Check size={14} className="hidden md:block" /> Added</>
-            ) : (
-              <><Plus size={14} className="hidden md:block" /> Add to Cart</>
-            )}
+            {isAdded ? <><Check size={13} /> Added</> : 'Add to Cart'}
           </button>
         </div>
       </div>

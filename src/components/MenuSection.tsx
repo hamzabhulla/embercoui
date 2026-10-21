@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Plus, Check } from 'lucide-react';
 import { categories } from '../data/menu.ts';
 import { useMenuItems } from '../services/useMenuItems.ts';
@@ -13,8 +14,11 @@ export default function MenuSection() {
   const [addedIds, setAddedIds] = useState<number[]>([]);
   const { addItem } = useCart();
   const { format } = useCurrency();
+  const navigate = useNavigate();
 
   const filtered = activeTab === 'All' ? menuItems : menuItems.filter(i => i.category === activeTab);
+  // Homepage shows only the top 6 signature dishes — the full list lives on /menu.
+  const displayed = filtered.slice(0, 6);
 
   const handleAdd = (item: typeof menuItems[0]) => {
     addItem({ id: item.id, name: item.name, price: item.price, image: item.image });
@@ -29,13 +33,13 @@ export default function MenuSection() {
   const [cardVisible, setCardVisible] = useState<boolean[]>([]);
 
   useEffect(() => {
-    setCardVisible(new Array(filtered.length).fill(false));
+    setCardVisible(new Array(displayed.length).fill(false));
     const observers: IntersectionObserver[] = [];
     let raf2: number;
 
     const raf1 = requestAnimationFrame(() => {
       raf2 = requestAnimationFrame(() => {
-        filtered.forEach((_, i) => {
+        displayed.forEach((_, i) => {
           const el = cardRefs.current[i];
           if (!el) return;
           const obs = new IntersectionObserver(([entry]) => {
@@ -56,7 +60,7 @@ export default function MenuSection() {
       cancelAnimationFrame(raf2);
       observers.forEach(o => o.disconnect());
     };
-  }, [activeTab, filtered.length]);
+  }, [activeTab, displayed.length]);
 
   return (
     <section id="menu" className="py-24 bg-cream-200" style={{ background: '#F5F0E8' }}>
@@ -119,7 +123,7 @@ export default function MenuSection() {
 
         {/* Cards */}
         <div className="grid grid-cols-2 md:grid-cols-3 gap-[12px] md:gap-6">
-          {filtered.map((item, i) => (
+          {displayed.map((item, i) => (
             <div
               key={item.id}
               ref={el => { cardRefs.current[i] = el; }}
@@ -179,6 +183,18 @@ export default function MenuSection() {
             </div>
           ))}
         </div>
+
+        {filtered.length > displayed.length && (
+          <div className="text-center mt-12">
+            <button
+              onClick={() => navigate('/menu')}
+              className="border border-[#1C2B1E] text-[#1C2B1E] px-[42px] py-[15px] text-[11px] uppercase transition-all duration-300 hover:bg-[#1C2B1E] hover:text-[#F5F0E8]"
+              style={{ fontFamily: 'Jost, sans-serif', letterSpacing: '0.22em' }}
+            >
+              View Full Menu →
+            </button>
+          </div>
+        )}
       </div>
     </section>
   );
