@@ -129,7 +129,7 @@ export default function Reservation() {
                   className="text-sm"
                   style={{ color: 'rgba(245,240,232,0.5)', fontFamily: 'Jost, sans-serif' }}
                 >
-                  We look forward to welcoming you. A confirmation email has been sent.
+                  We've received your reservation request. Our team will review it and call you to confirm — please keep your phone handy. We look forward to welcoming you.
                 </p>
               </div>
             ) : (

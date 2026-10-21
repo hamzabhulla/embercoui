@@ -2,35 +2,14 @@ import { useRef, useEffect, useState } from 'react';
 import { useInView } from '../hooks/useInView.ts';
 import { fetchApprovedReviews } from '../services/api.ts';
 
-const fallbackReviews = [
-  {
-    id: 1,
-    stars: 5,
-    quote:
-      "An extraordinary evening. Every dish was a masterclass in restraint and precision. The venison ragù alone is worth the journey.",
-    name: 'Amélie Fontaine',
-    country: 'France',
-    initials: 'AF',
-  },
-  {
-    id: 2,
-    stars: 5,
-    quote:
-      "Ember & Co. stands among the finest tables I have experienced across Europe. The sommelier's pairings were inspired, the service impeccable.",
-    name: 'Marcus Lindqvist',
-    country: 'Sweden',
-    initials: 'ML',
-  },
-  {
-    id: 3,
-    stars: 5,
-    quote:
-      "A restaurant that understands the quiet luxury of simplicity. The forest truffle burger is an unlikely masterpiece.",
-    name: 'Yuki Tanaka',
-    country: 'Japan',
-    initials: 'YT',
-  },
-];
+interface DisplayReview {
+  id: number;
+  stars: number;
+  quote: string;
+  name: string;
+  country: string;
+  initials: string;
+}
 
 function Stars({ count }: { count: number }) {
   return (
@@ -45,9 +24,9 @@ function Stars({ count }: { count: number }) {
 }
 
 export default function Testimonials() {
-  // Starts with the site's long-standing guest voices; approved reviews from
-  // the API replace them when reachable (moderated in the admin panel).
-  const [reviews, setReviews] = useState(fallbackReviews);
+  // Only real, admin-approved guest reviews are ever shown. Until the API
+  // returns at least one, the section renders nothing — no invented voices.
+  const [reviews, setReviews] = useState<DisplayReview[]>([]);
   useEffect(() => {
     let cancelled = false;
     fetchApprovedReviews().then((remote) => {
@@ -102,6 +81,10 @@ export default function Testimonials() {
     });
     return () => observers.forEach(o => o.disconnect());
   }, [reviews]);
+
+  // No approved reviews (or the API is unreachable): show no section at all
+  // rather than placeholder praise.
+  if (reviews.length === 0) return null;
 
   return (
     <section id="testimonials" className="py-[48px] md:py-16" style={{ background: '#1C2B1E' }}>

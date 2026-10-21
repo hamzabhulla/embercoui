@@ -48,7 +48,7 @@ const team = [
     name: 'Sofia Alvarez',
     role: 'Sommelier',
     bio: 'A WSET Diploma holder with a talent for pairing biodynamic wines to seasonal menus. Sofia curates a cellar that surprises without intimidating.',
-    photo: 'https://images.unsplash.com/photo-1559181567-c3190958d3ab?w=400&q=80',
+    photo: 'https://images.unsplash.com/photo-1567532939604-b6b5b0db2604?w=400&q=80',
   },
   {
     name: 'James Okafor',

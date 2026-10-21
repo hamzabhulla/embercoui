@@ -66,21 +66,6 @@ export default function LiveStatus() {
               Estimated wait: <span className="text-white font-medium">{waitMin}–{waitMax} min</span>
             </span>
           </div>
-
-          <span className="text-white/20 text-xs">|</span>
-
-          {/* Tables */}
-          <div className="flex items-center gap-2">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-[#C17A3A]">
-              <path d="M3 7h18M3 12h18M3 17h18" />
-            </svg>
-            <span
-              className="text-white/70 text-xs tracking-wide"
-              style={{ fontFamily: 'Jost, sans-serif', fontSize: '0.72rem' }}
-            >
-              Tables available: <span className="text-white font-medium">4 remaining tonight</span>
-            </span>
-          </div>
         </div>
 
         {/* MOBILE STATUS BAR */}
@@ -99,12 +84,6 @@ export default function LiveStatus() {
           
           {/* Wait time */}
           <span className="text-[#F5F0E8]" style={{ fontFamily: 'Jost, sans-serif', fontSize: '10px' }}>~{waitMin} min</span>
-          
-          {/* Separator */}
-          <span style={{ color: 'rgba(245,240,232,0.2)', fontSize: '10px' }}>&middot;</span>
-          
-          {/* Tables */}
-          <span className="text-[#C17A3A]" style={{ fontFamily: 'Jost, sans-serif', fontSize: '10px' }}>4 tables left</span>
         </div>
 
       </div>

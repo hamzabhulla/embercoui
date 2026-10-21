@@ -94,7 +94,7 @@ export default function TrackOrder() {
             We could not find that order
           </h1>
           <p className="mb-8" style={{ fontFamily: 'Jost, sans-serif', fontSize: '13px', color: 'rgba(245,240,232,0.55)', lineHeight: 1.7 }}>
-            The link may be incomplete, or the order belongs to another account. If you just placed it, check your email for the tracking link.
+            The link may be incomplete, or the order belongs to another account. If you just placed an order, use the tracking link from the confirmation screen shown right after checkout — or call us and we will track it down for you.
           </p>
           <button
             onClick={() => navigate('/')}

@@ -22,13 +22,3 @@ insert into public.menu_items (id, name, description, price, image_url, category
   (15, 'House Sparkling Water', 'Still or sparkling, locally sourced spring water, lemon or cucumber', 5, 'https://images.unsplash.com/photo-1548839140-29a749e1cf4d?w=600&q=80&auto=format&fit=crop', 'Drinks', ARRAY['Gluten Free'], true, 14)
 on conflict (id) do nothing;
 select setval(pg_get_serial_sequence('public.menu_items', 'id'), (select max(id) from public.menu_items));
-
-insert into public.reviews (name, rating, comment, country, is_approved, created_at)
-select 'Amélie Fontaine', 5, 'An extraordinary evening. Every dish was a masterclass in restraint and precision. The venison ragù alone is worth the journey.', 'France', true, clock_timestamp()
-where not exists (select 1 from public.reviews where name = 'Amélie Fontaine');
-insert into public.reviews (name, rating, comment, country, is_approved, created_at)
-select 'Marcus Lindqvist', 5, 'Ember & Co. stands among the finest tables I have experienced across Europe. The sommelier''s pairings were inspired, the service impeccable.', 'Sweden', true, clock_timestamp() - interval '1 minute'
-where not exists (select 1 from public.reviews where name = 'Marcus Lindqvist');
-insert into public.reviews (name, rating, comment, country, is_approved, created_at)
-select 'Yuki Tanaka', 5, 'A restaurant that understands the quiet luxury of simplicity. The forest truffle burger is an unlikely masterpiece.', 'Japan', true, clock_timestamp() - interval '2 minutes'
-where not exists (select 1 from public.reviews where name = 'Yuki Tanaka');
