@@ -1,12 +1,35 @@
 import React, { useState, useEffect } from 'react';
-import { X, Eye, EyeOff } from 'lucide-react';
+import { Eye, EyeOff } from 'lucide-react';
 import { signUpWithEmail, resendConfirmation } from '../../services/auth.ts';
 import InputField from './InputField.tsx';
 import GoogleButton from './GoogleButton.tsx';
+import AuthShell from './AuthShell.tsx';
 
 interface Props {
   onClose: () => void;
   onNavigate: (path: string) => void;
+}
+
+const SUBMIT_GRADIENT = 'linear-gradient(135deg, #C98A44 0%, #C17A3A 45%, #A66932 100%)';
+
+function SuccessMedallion({ mounted }: { mounted: boolean }) {
+  return (
+    <div
+      className={`transition-all duration-700 delay-100 transform ${mounted ? 'scale-100 opacity-100' : 'scale-50 opacity-0'}`}
+    >
+      <div
+        className="rounded-full flex items-center justify-center mb-6"
+        style={{
+          width: 68,
+          height: 68,
+          border: '1px solid rgba(193,122,58,0.6)',
+          boxShadow: '0 0 0 6px rgba(193,122,58,0.08), inset 0 0 16px rgba(193,122,58,0.15)',
+        }}
+      >
+        <span style={{ color: '#C17A3A', fontSize: '26px' }} className="animate-pulse">✦</span>
+      </div>
+    </div>
+  );
 }
 
 export default function SignupModal({ onClose, onNavigate }: Props) {
@@ -127,307 +150,245 @@ export default function SignupModal({ onClose, onNavigate }: Props) {
     </button>
   );
 
-  return (
-    <div
-      className={`fixed inset-0 z-[100] flex items-center justify-center transition-opacity duration-300 ${mounted ? 'opacity-100' : 'opacity-0'}`}
-      style={{ background: 'rgba(5, 12, 6, 0.92)', backdropFilter: 'blur(12px)' }}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div
-        className={`w-full min-h-[100vh] md:min-h-0 md:max-h-[90vh] md:w-[700px] flex md:flex-row flex-col justify-center md:justify-start bg-[#0D1A0E] md:border md:border-[rgba(255,255,255,0.08)] transition-all duration-300 transform ${mounted ? 'translate-y-0 opacity-100' : 'translate-y-8 opacity-0'} relative`}
-        style={{
-          boxShadow: '0 40px 80px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.04)',
-        }}
-      >
-        <button
-          onClick={onClose}
-          aria-label="Close"
-          className="absolute top-6 right-6 text-white hover:text-[#C17A3A] transition-colors z-10"
-        >
-          <X size={20} />
-        </button>
+  const outlineBtnStyle: React.CSSProperties = {
+    border: '1px solid #C17A3A',
+    color: '#C17A3A',
+    fontFamily: 'Jost, sans-serif',
+    fontSize: '11px',
+    letterSpacing: '0.18em',
+    textTransform: 'uppercase',
+    padding: '14px 32px',
+    background: 'transparent',
+  };
 
-        {/* LEFT SIDE IMAGE (Desktop Only) */}
-        <div className="hidden md:block w-[220px] relative shrink-0">
-          <div className="absolute inset-0 bg-[rgba(10,18,10,0.4)] z-10" />
-          <img
-            src="https://images.unsplash.com/photo-1414235077428-338989a2e8c0?w=600&q=80"
-            alt="Ambiance"
-            loading="lazy"
-            width="600"
-            height="800"
-            className="w-full h-full object-cover"
-          />
-          <div className="absolute bottom-[32px] left-[28px] z-20 pr-4">
-            <p
-              className="text-[#C17A3A] uppercase mb-3"
-              style={{ fontFamily: 'Jost, sans-serif', fontSize: '10px', letterSpacing: '0.2em' }}
+  return (
+    <AuthShell mounted={mounted} onClose={onClose}>
+      {isSuccess ? (
+        <div className={`flex flex-col items-center justify-center text-center py-10 transition-all duration-700 w-full ${successMounted ? 'opacity-100 translate-x-0' : 'opacity-0 translate-x-8'}`}>
+          <SuccessMedallion mounted={successMounted} />
+          {needsConfirm ? (
+            <>
+              <h2
+                className={`mb-4 transition-all duration-700 delay-200 transform ${successMounted ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0'}`}
+                style={{ fontFamily: 'Cormorant Garamond, serif', fontSize: '30px', color: '#F5F0E8' }}
+              >
+                Check your email
+              </h2>
+              <p
+                className={`mb-8 transition-all duration-700 delay-300 transform ${successMounted ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0'}`}
+                style={{ fontFamily: 'Jost, sans-serif', fontSize: '13px', color: 'rgba(245,240,232,0.4)', lineHeight: '1.6' }}
+              >
+                We sent a verification link to<br />
+                <span className="text-[#F5F0E8]">{email}</span>
+              </p>
+              <button
+                onClick={handleResend}
+                disabled={resendState === 'sending' || resendCooldown > 0}
+                className={`transition-all duration-700 delay-500 transform hover:bg-[rgba(193,122,58,0.1)] hover:shadow-[0_0_15px_rgba(193,122,58,0.2)] disabled:opacity-50 disabled:cursor-not-allowed ${successMounted ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0'}`}
+                style={outlineBtnStyle}
+              >
+                {resendState === 'sending'
+                  ? 'Sending…'
+                  : resendCooldown > 0
+                    ? `Resend in ${resendCooldown}s`
+                    : 'Resend email'}
+              </button>
+              {resendState === 'sent' && resendCooldown > 0 && (
+                <p className="mt-4" style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: 'rgba(245,240,232,0.5)' }}>
+                  Sent again — check your inbox.
+                </p>
+              )}
+              {resendError && (
+                <p className="mt-4 text-[#ef4444]" style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px' }}>
+                  {resendError}
+                </p>
+              )}
+            </>
+          ) : (
+            <>
+              <h2
+                className={`mb-4 transition-all duration-700 delay-200 transform ${successMounted ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0'}`}
+                style={{ fontFamily: 'Cormorant Garamond, serif', fontSize: '30px', color: '#F5F0E8' }}
+              >
+                Welcome to Ember & Co.
+              </h2>
+              <p
+                className={`mb-8 transition-all duration-700 delay-300 transform ${successMounted ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0'}`}
+                style={{ fontFamily: 'Jost, sans-serif', fontSize: '13px', color: 'rgba(245,240,232,0.4)', lineHeight: '1.6' }}
+              >
+                Your account is ready, {name.split(' ')[0]} — you're signed in.
+              </p>
+              <button
+                onClick={() => onNavigate('/')}
+                className={`transition-all duration-700 delay-500 transform hover:bg-[rgba(193,122,58,0.1)] hover:shadow-[0_0_15px_rgba(193,122,58,0.2)] ${successMounted ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0'}`}
+                style={outlineBtnStyle}
+              >
+                Start exploring
+              </button>
+            </>
+          )}
+        </div>
+      ) : (
+        <div className={`transition-all duration-400 w-full flex flex-col justify-center ${formVisible ? 'opacity-100 scale-100' : 'opacity-0 scale-95 pointer-events-none'}`}>
+          <div className="text-center mb-9">
+            <h2
+              className="text-[32px] font-light text-[#F5F0E8]"
+              style={{ fontFamily: 'Cormorant Garamond, serif' }}
             >
-              ✦ Ember & Co.
-            </p>
+              Create Account
+            </h2>
+            <div className="mx-auto mt-4" style={{ width: '36px', height: '1px', background: '#C17A3A' }} />
             <p
-              className="text-white italic"
+              className="mt-4"
+              style={{ fontFamily: 'Jost, sans-serif', fontSize: '13px', color: 'rgba(245,240,232,0.5)', lineHeight: '1.6' }}
+            >
+              Join us at the table — faster checkout, live order tracking and reservations.
+            </p>
+          </div>
+
+          <GoogleButton onError={setFormError} />
+
+          <div className="flex items-center gap-4 my-7">
+            <div className="flex-1 h-[1px] bg-[rgba(255,255,255,0.08)]" />
+            <span
+              className="text-[rgba(245,240,232,0.25)] uppercase"
+              style={{ fontFamily: 'Jost, sans-serif', fontSize: '10px', letterSpacing: '0.1em' }}
+            >
+              Or continue with email
+            </span>
+            <div className="flex-1 h-[1px] bg-[rgba(255,255,255,0.08)]" />
+          </div>
+
+          <form onSubmit={handleSubmit} className="flex flex-col gap-2">
+            <InputField
+              label="Full Name"
+              name="name"
+              autoComplete="name"
+              value={name}
+              onChange={(e) => {
+                setName(e.target.value);
+                setFieldError('name', null);
+              }}
+              error={errors.name}
+            />
+            <InputField
+              label="Email Address"
+              type="email"
+              name="email"
+              autoComplete="email"
+              value={email}
+              onChange={(e) => {
+                setEmail(e.target.value);
+                setFieldError('email', null);
+              }}
+              error={errors.email}
+            />
+            <InputField
+              label="Phone Number"
+              type="tel"
+              name="phone"
+              autoComplete="tel"
+              value={phone}
+              onChange={(e) => {
+                setPhone(e.target.value);
+                setFieldError('phone', null);
+              }}
+              error={errors.phone}
+            />
+            <div>
+              <InputField
+                label="Password"
+                type={showPassword ? 'text' : 'password'}
+                name="password"
+                autoComplete="new-password"
+                value={password}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setPassword(v);
+                  setFieldError('password', null);
+                  if (confirmPassword) {
+                    setFieldError('confirmPassword', v !== confirmPassword ? 'Passwords must match' : null);
+                  }
+                }}
+                error={errors.password}
+                trailing={eyeToggle(showPassword, () => setShowPassword((v) => !v))}
+              />
+              <p
+                className="-mt-3 mb-1"
+                style={{
+                  fontFamily: 'Jost, sans-serif',
+                  fontSize: '11px',
+                  color: password.length >= 8 ? '#A3B18A' : 'rgba(245,240,232,0.3)',
+                }}
+              >
+                {password.length >= 8 ? '✓ At least 8 characters' : 'At least 8 characters'}
+              </p>
+            </div>
+            <InputField
+              label="Confirm Password"
+              type={showConfirm ? 'text' : 'password'}
+              name="confirmPassword"
+              autoComplete="new-password"
+              value={confirmPassword}
+              onChange={(e) => {
+                const v = e.target.value;
+                setConfirmPassword(v);
+                if (v && password && v !== password) setFieldError('confirmPassword', 'Passwords must match');
+                else setFieldError('confirmPassword', null);
+              }}
+              error={errors.confirmPassword}
+              trailing={eyeToggle(showConfirm, () => setShowConfirm((v) => !v))}
+            />
+
+            {formError && (
+              <p className="text-[#ef4444] mt-4" style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px' }}>
+                {formError}
+              </p>
+            )}
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className="w-full mt-6 flex items-center justify-center gap-2 transition-all duration-300 hover:brightness-110 hover:shadow-[0_0_20px_rgba(193,122,58,0.4)] min-h-[52px] group relative overflow-hidden"
               style={{
-                fontFamily: 'Cormorant Garamond, serif',
-                fontSize: '22px',
-                fontWeight: 300,
-                lineHeight: '1.2',
+                background: SUBMIT_GRADIENT,
+                color: 'white',
+                textTransform: 'uppercase',
+                letterSpacing: '0.18em',
+                fontFamily: 'Jost, sans-serif',
+                fontSize: '11px',
               }}
             >
-              Where Every Meal Tells a Story
+              <div className={`absolute inset-0 bg-white/20 transition-transform duration-700 ease-in-out ${isSubmitting ? 'translate-x-0' : '-translate-x-full'}`} />
+
+              {isSubmitting ? (
+                <span className="flex items-center gap-2 animate-pulse relative z-10">CREATING ACCOUNT...</span>
+              ) : (
+                <span className="flex items-center gap-2 relative z-10">
+                  SIGN UP <span className="text-[14px] transition-transform duration-300 group-hover:translate-x-1">→</span>
+                </span>
+              )}
+            </button>
+          </form>
+
+          <div
+            className="mt-9 pt-6 text-center"
+            style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}
+          >
+            <p className="text-[rgba(245,240,232,0.3)]" style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px' }}>
+              Already have an account?{' '}
+              <button
+                onClick={(e) => {
+                  e.preventDefault();
+                  onNavigate('/login');
+                }}
+                className="text-[#C17A3A] hover:underline transition-all"
+              >
+                Sign in
+              </button>
             </p>
           </div>
         </div>
-
-        {/* RIGHT SIDE FORM */}
-        <div className="flex-1 flex flex-col justify-center px-[28px] pt-[48px] pb-[80px] md:px-[40px] md:py-[48px] overflow-y-auto hide-scrollbar relative overflow-x-hidden">
-          {isSuccess ? (
-            <div className={`flex flex-col items-center justify-center text-center h-full py-12 transition-all duration-700 w-full ${successMounted ? 'opacity-100 translate-x-0' : 'opacity-0 translate-x-8'}`}>
-              <div className={`transition-all duration-700 delay-100 transform ${successMounted ? 'scale-100 opacity-100' : 'scale-50 opacity-0'}`}>
-                <span style={{ color: '#C17A3A', fontSize: '32px', marginBottom: '24px', display: 'inline-block' }} className="animate-pulse">✦</span>
-              </div>
-              {needsConfirm ? (
-                <>
-                  <h2
-                    className={`mb-4 transition-all duration-700 delay-200 transform ${successMounted ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0'}`}
-                    style={{ fontFamily: 'Cormorant Garamond, serif', fontSize: '28px', color: '#F5F0E8' }}
-                  >
-                    Check your email
-                  </h2>
-                  <p
-                    className={`mb-8 transition-all duration-700 delay-300 transform ${successMounted ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0'}`}
-                    style={{ fontFamily: 'Jost, sans-serif', fontSize: '13px', color: 'rgba(245,240,232,0.35)', lineHeight: '1.6' }}
-                  >
-                    We sent a verification link to<br />
-                    <span className="text-[#F5F0E8]">{email}</span>
-                  </p>
-                  <button
-                    onClick={handleResend}
-                    disabled={resendState === 'sending' || resendCooldown > 0}
-                    className={`transition-all duration-700 delay-500 transform hover:bg-[rgba(193,122,58,0.1)] hover:shadow-[0_0_15px_rgba(193,122,58,0.2)] disabled:opacity-50 disabled:cursor-not-allowed ${successMounted ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0'}`}
-                    style={{
-                      border: '1px solid #C17A3A',
-                      color: '#C17A3A',
-                      fontFamily: 'Jost, sans-serif',
-                      fontSize: '11px',
-                      letterSpacing: '0.18em',
-                      textTransform: 'uppercase',
-                      padding: '14px 32px',
-                      background: 'transparent',
-                    }}
-                  >
-                    {resendState === 'sending'
-                      ? 'Sending…'
-                      : resendCooldown > 0
-                        ? `Resend in ${resendCooldown}s`
-                        : 'Resend email'}
-                  </button>
-                  {resendState === 'sent' && resendCooldown > 0 && (
-                    <p className="mt-4" style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: 'rgba(245,240,232,0.5)' }}>
-                      Sent again — check your inbox.
-                    </p>
-                  )}
-                  {resendError && (
-                    <p className="mt-4 text-[#ef4444]" style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px' }}>
-                      {resendError}
-                    </p>
-                  )}
-                </>
-              ) : (
-                <>
-                  <h2
-                    className={`mb-4 transition-all duration-700 delay-200 transform ${successMounted ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0'}`}
-                    style={{ fontFamily: 'Cormorant Garamond, serif', fontSize: '28px', color: '#F5F0E8' }}
-                  >
-                    Welcome to Ember & Co.
-                  </h2>
-                  <p
-                    className={`mb-8 transition-all duration-700 delay-300 transform ${successMounted ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0'}`}
-                    style={{ fontFamily: 'Jost, sans-serif', fontSize: '13px', color: 'rgba(245,240,232,0.35)', lineHeight: '1.6' }}
-                  >
-                    Your account is ready, {name.split(' ')[0]} — you're signed in.
-                  </p>
-                  <button
-                    onClick={() => onNavigate('/')}
-                    className={`transition-all duration-700 delay-500 transform hover:bg-[rgba(193,122,58,0.1)] hover:shadow-[0_0_15px_rgba(193,122,58,0.2)] ${successMounted ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0'}`}
-                    style={{
-                      border: '1px solid #C17A3A',
-                      color: '#C17A3A',
-                      fontFamily: 'Jost, sans-serif',
-                      fontSize: '11px',
-                      letterSpacing: '0.18em',
-                      textTransform: 'uppercase',
-                      padding: '14px 32px',
-                      background: 'transparent',
-                    }}
-                  >
-                    Start exploring
-                  </button>
-                </>
-              )}
-            </div>
-          ) : (
-            <div className={`transition-all duration-400 w-full flex flex-col justify-center ${formVisible ? 'opacity-100 scale-100' : 'opacity-0 scale-95 pointer-events-none'}`}>
-              <div className="text-center mb-8">
-                <p
-                  className="mb-2 uppercase text-[#C17A3A] md:hidden"
-                  style={{ fontFamily: 'Jost, sans-serif', fontSize: '10px', letterSpacing: '0.25em' }}
-                >
-                  ✦ Ember & Co.
-                </p>
-                <h2
-                  className="text-[28px] font-light text-[#F5F0E8]"
-                  style={{ fontFamily: 'Cormorant Garamond, serif' }}
-                >
-                  Create Account
-                </h2>
-                <div className="mx-auto mt-4" style={{ width: '36px', height: '1px', background: '#C17A3A' }} />
-              </div>
-
-              <GoogleButton onError={setFormError} />
-
-              <div className="flex items-center gap-4 my-6">
-                <div className="flex-1 h-[1px] bg-[rgba(255,255,255,0.08)]" />
-                <span
-                  className="text-[rgba(245,240,232,0.25)] uppercase"
-                  style={{ fontFamily: 'Jost, sans-serif', fontSize: '10px', letterSpacing: '0.1em' }}
-                >
-                  Or continue with email
-                </span>
-                <div className="flex-1 h-[1px] bg-[rgba(255,255,255,0.08)]" />
-              </div>
-
-              <form onSubmit={handleSubmit} className="flex flex-col gap-2">
-                <InputField
-                  label="Full Name"
-                  name="name"
-                  autoComplete="name"
-                  value={name}
-                  onChange={(e) => {
-                    setName(e.target.value);
-                    setFieldError('name', null);
-                  }}
-                  error={errors.name}
-                />
-                <InputField
-                  label="Email Address"
-                  type="email"
-                  name="email"
-                  autoComplete="email"
-                  value={email}
-                  onChange={(e) => {
-                    setEmail(e.target.value);
-                    setFieldError('email', null);
-                  }}
-                  error={errors.email}
-                />
-                <InputField
-                  label="Phone Number"
-                  type="tel"
-                  name="phone"
-                  autoComplete="tel"
-                  value={phone}
-                  onChange={(e) => {
-                    setPhone(e.target.value);
-                    setFieldError('phone', null);
-                  }}
-                  error={errors.phone}
-                />
-                <div>
-                  <InputField
-                    label="Password"
-                    type={showPassword ? 'text' : 'password'}
-                    name="password"
-                    autoComplete="new-password"
-                    value={password}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      setPassword(v);
-                      setFieldError('password', null);
-                      if (confirmPassword) {
-                        setFieldError('confirmPassword', v !== confirmPassword ? 'Passwords must match' : null);
-                      }
-                    }}
-                    error={errors.password}
-                    trailing={eyeToggle(showPassword, () => setShowPassword((v) => !v))}
-                  />
-                  <p
-                    className="-mt-3 mb-1"
-                    style={{
-                      fontFamily: 'Jost, sans-serif',
-                      fontSize: '11px',
-                      color: password.length >= 8 ? '#A3B18A' : 'rgba(245,240,232,0.3)',
-                    }}
-                  >
-                    {password.length >= 8 ? '✓ At least 8 characters' : 'At least 8 characters'}
-                  </p>
-                </div>
-                <InputField
-                  label="Confirm Password"
-                  type={showConfirm ? 'text' : 'password'}
-                  name="confirmPassword"
-                  autoComplete="new-password"
-                  value={confirmPassword}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    setConfirmPassword(v);
-                    if (v && password && v !== password) setFieldError('confirmPassword', 'Passwords must match');
-                    else setFieldError('confirmPassword', null);
-                  }}
-                  error={errors.confirmPassword}
-                  trailing={eyeToggle(showConfirm, () => setShowConfirm((v) => !v))}
-                />
-
-                {formError && (
-                  <p className="text-[#ef4444] mt-4" style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px' }}>
-                    {formError}
-                  </p>
-                )}
-                <button
-                  type="submit"
-                  disabled={isSubmitting}
-                  className="w-full mt-6 flex items-center justify-center gap-2 transition-all duration-300 hover:brightness-110 hover:shadow-[0_0_20px_rgba(193,122,58,0.4)] min-h-[52px] group relative overflow-hidden"
-                  style={{
-                    background: '#C17A3A',
-                    color: 'white',
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.18em',
-                    fontFamily: 'Jost, sans-serif',
-                    fontSize: '11px',
-                  }}
-                >
-                  <div className={`absolute inset-0 bg-white/20 transition-transform duration-700 ease-in-out ${isSubmitting ? 'translate-x-0' : '-translate-x-full'}`} />
-
-                  {isSubmitting ? (
-                    <span className="flex items-center gap-2 animate-pulse relative z-10">CREATING ACCOUNT...</span>
-                  ) : (
-                    <span className="flex items-center gap-2 relative z-10">
-                      SIGN UP <span className="text-[14px] transition-transform duration-300 group-hover:translate-x-1">→</span>
-                    </span>
-                  )}
-                </button>
-              </form>
-
-              <div className="mt-8 text-center pb-8 md:pb-0">
-                <p className="text-[rgba(245,240,232,0.3)]" style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px' }}>
-                  Already have an account?{' '}
-                  <button
-                    onClick={(e) => {
-                      e.preventDefault();
-                      onNavigate('/login');
-                    }}
-                    className="text-[#C17A3A] hover:underline transition-all"
-                  >
-                    Sign in
-                  </button>
-                </p>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
+      )}
+    </AuthShell>
   );
 }

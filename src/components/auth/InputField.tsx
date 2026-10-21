@@ -16,12 +16,12 @@ export default function InputField({ label, type = 'text', value, onChange, erro
   const active = focused || String(value ?? '').length > 0;
 
   return (
-    <div className="relative mb-5">
+    <div className="relative mb-6">
       <label
         className={`absolute left-0 transition-all duration-250 ease-in-out pointer-events-none ${
           active
             ? '-top-4 text-[10px] text-[#C17A3A]'
-            : 'top-3 text-[12px] md:text-sm text-[rgba(245,240,232,0.4)]'
+            : 'top-3 text-[12px] md:text-sm text-[rgba(245,240,232,0.45)]'
         }`}
         style={{
           fontFamily: 'Jost, sans-serif',
@@ -37,7 +37,7 @@ export default function InputField({ label, type = 'text', value, onChange, erro
         onChange={onChange}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
-        className={`w-full bg-transparent outline-none transition-colors duration-250 ease-in-out text-[#F5F0E8] text-[16px] md:text-[14px] min-h-[48px] md:min-h-0 ${
+        className={`w-full bg-transparent outline-none transition-all duration-300 ease-in-out text-[#F5F0E8] text-[16px] md:text-[15px] min-h-[48px] md:min-h-0 ${
           trailing ? 'pr-10' : ''
         } ${
           error ? 'border-[#ef4444]' : focused ? 'border-[#C17A3A]' : 'border-[rgba(255,255,255,0.15)]'
@@ -47,6 +47,7 @@ export default function InputField({ label, type = 'text', value, onChange, erro
           borderBottomStyle: 'solid',
           paddingBottom: '8px',
           paddingTop: active ? '8px' : '12px',
+          boxShadow: focused && !error ? '0 14px 22px -16px rgba(193,122,58,0.55)' : 'none',
         }}
         {...props}
       />
