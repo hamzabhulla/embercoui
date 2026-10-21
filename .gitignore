@@ -16,3 +16,6 @@ dist/
 # editor
 .vscode/
 .idea/
+
+# Vercel
+.vercel

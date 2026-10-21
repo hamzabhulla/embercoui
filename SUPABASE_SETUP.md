@@ -16,15 +16,22 @@ Supabase Dashboard → **SQL Editor** → paste and run, in this order:
 Dashboard → **Settings → API**:
 - `Project URL` → `SUPABASE_URL` (backend) and `VITE_SUPABASE_URL` (frontend)
 - `anon public` key → `VITE_SUPABASE_ANON_KEY` (frontend — safe to expose)
-- `service_role` key → `SUPABASE_SERVICE_ROLE_KEY` (**backend only** — Railway env)
+- `service_role` key → `SUPABASE_SERVICE_ROLE_KEY` (**server-side only** — an env var of the API host; for the demo that is the same Vercel project's env vars, with NO `VITE_` prefix, so it never reaches the browser)
 
 ## 3. Environment variables
-**Frontend (Vercel → Settings → Environment Variables)** — see `.env.example`:
-`VITE_API_URL` (your Railway backend URL), `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`
+**Demo / default (Option A — everything in ONE Vercel project):**
+Vercel → your project → **Settings → Environment Variables** (Production):
+- Frontend set: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_STRIPE_PUBLISHABLE_KEY`
+  (do NOT set `VITE_API_URL` — production calls the API same-origin)
+- Server set (read only by the API function): `SUPABASE_URL`,
+  `SUPABASE_SERVICE_ROLE_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`,
+  `CORS_ORIGIN` (your own site origin, e.g. `https://embercoui.vercel.app`),
+  `NODE_ENV=production`
+Then **Deployments → Redeploy** so the new vars apply.
 
-**Backend (Railway → Variables)** — see `backend/.env.example`:
-`PORT` (Railway sets this), `NODE_ENV=production`, `CORS_ORIGIN` (your Vercel domain),
-`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`
+**Option B (Railway backend instead):** the server set goes to
+Railway → Variables, `CORS_ORIGIN` = your Vercel domain, and the Vercel
+project additionally gets `VITE_API_URL` = the Railway domain.
 
 ## 4. Auth settings
 Dashboard → **Authentication → URL Configuration**:
@@ -42,14 +49,14 @@ Dashboard → **Authentication → URL Configuration**:
 
 ## 6. Stripe webhook (for card payments)
 Stripe Dashboard → **Developers → Webhooks** → Add endpoint:
-- URL: `https://YOUR-BACKEND-DOMAIN/api/v1/payments/webhook`
+- URL: `https://YOUR-SITE-DOMAIN/api/v1/payments/webhook` (Option A: your Vercel domain — the API lives on the same domain; Option B: your Railway domain)
 - Events: `payment_intent.succeeded`, `payment_intent.payment_failed`
-- Copy the signing secret → `STRIPE_WEBHOOK_SECRET` on Railway.
+- Copy the signing secret → `STRIPE_WEBHOOK_SECRET` wherever the server env lives (Option A: Vercel; Option B: Railway), then redeploy.
 
 Without Stripe keys the site still works: checkout will clearly report that
 card payments are not configured yet instead of pretending an order was paid.
 
 ## 7. Verify
-- `https://YOUR-BACKEND-DOMAIN/api/v1/health` → `{ "status": "ok", "supabaseConfigured": true, ... }`
+- `https://YOUR-SITE-DOMAIN/api/v1/health` → `{ "status": "ok", "supabaseConfigured": true, ... }`
 - Home page menu, LiveStatus bar, and testimonials now come from the database —
   change the wait time in **Admin → Settings** and watch the homepage bar update.

@@ -1,7 +1,10 @@
 import type { MenuItem } from '../data/menu.ts';
 import { supabase } from '../lib/supabase.ts';
 
-export const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:4000';
+// Explicit override wins. Otherwise: local dev talks to the standalone
+// backend on :4000; production is same-origin — the API ships as Vercel
+// functions inside this very project, so a relative base is correct.
+export const API_URL = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? 'http://localhost:4000' : '');
 
 export interface PublicSettings {
   kitchenOpen: boolean;

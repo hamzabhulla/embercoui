@@ -1,16 +1,42 @@
 # Ember & Co. — Deployment Guide
 
 Single-restaurant deployment: one codebase, one deployment per restaurant.
-Frontend on **Vercel**, backend API on **Railway**, database/auth/storage/realtime on **Supabase**.
+Two supported shapes — **Option A (default): everything on Vercel** (site +
+API as serverless functions), or **Option B: Vercel frontend + Railway
+backend**. Database/auth/storage/realtime on **Supabase** either way.
 
 ## Environments & branches
 
-| Branch    | Environment | Frontend (Vercel)     | Backend (Railway)      |
+| Branch    | Environment | Frontend (Vercel)     | Backend (Railway — Option B only) |
 |-----------|-------------|-----------------------|------------------------|
 | `develop` | Staging     | staging deployment    | staging service        |
 | `main`    | Production  | production deployment | production service     |
 
-CI (`.github/workflows/ci.yml`) runs frontend lint/typecheck/build and backend lint/typecheck/test/build on every push/PR to `main` and `develop`. Merge only on green.
+Under **Option A** there is no separate backend deployment — the API ships inside the same Vercel deployment as the frontend. The Railway column applies only to Option B.
+
+CI (`.github/workflows/ci.yml`) runs frontend lint/typecheck/build, backend lint/typecheck/test/build, and the `vercel-entry` gate (builds the serverless function with Vercel's own builder and smoke-tests the generated output) on every push/PR to `main` and `develop`. Merge only on green.
+
+## Option A — Vercel only (frontend + API together, serverless) — DEFAULT for the demo
+
+The whole product ships as ONE Vercel project: the Vite site plus the Express
+API as a serverless function (`api/index.ts`, rewrites in `vercel.json`).
+No Railway, no second domain, no CORS juggling, $0 on the Hobby plan.
+
+- Import the repo in Vercel, root directory = project root. Framework: Vite.
+- Environment Variables (Production) — BOTH sets live in this one project:
+  - Frontend: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_STRIPE_PUBLISHABLE_KEY`
+    (`VITE_API_URL` is NOT needed — production calls the API same-origin.)
+  - Server (function): `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
+    `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `CORS_ORIGIN` (the site's
+    own https origin), `NODE_ENV=production`.
+- Stripe webhook URL becomes `https://<site-domain>/api/v1/payments/webhook`.
+- Limits to remember: 4.5 MB request body (admin image uploads are resized
+  in the browser before upload for exactly this reason); functions are
+  stateless — the app is built for that (Supabase holds all state).
+
+## Option B — Vercel frontend + Railway backend (always-on server)
+
+Use when a paying client needs an always-on server. Steps below.
 
 ## One-time setup
 
@@ -25,7 +51,7 @@ Follow `SUPABASE_SETUP.md` first (migrations, seed, storage bucket, first admin,
 ### Backend (Railway)
 - New service from the same repo, root directory = `backend/`.
 - Build `npm run build`, start `npm start` (runs `node dist/index.js`).
-- Env vars: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (server-side only — never in Vercel), `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `CORS_ORIGIN` (the exact Vercel domain), `NODE_ENV=production`. `PORT` is provided by Railway.
+- Env vars: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (server-side only — never as a `VITE_` var or anywhere in the browser bundle; in Option A the same key lives as a server-side env var on the Vercel project, where only the function can read it), `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `CORS_ORIGIN` (the exact Vercel domain), `NODE_ENV=production`. `PORT` is provided by Railway.
 - Health check: `GET /api/v1/health`.
 
 ## Rollback

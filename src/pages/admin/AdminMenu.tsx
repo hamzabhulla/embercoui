@@ -6,13 +6,59 @@ import { ErrorNote, LoadingNote, PageTitle, dangerBtn, ghostBtn, inputCls, label
 interface Item { id: number; name: string; description: string; price: number; image: string; category: string; tags: string[]; isAvailable: boolean; sortOrder: number }
 const EMPTY: Omit<Item, 'id'> = { name: '', description: '', price: 0, image: '', category: '', tags: [], isAvailable: true, sortOrder: 0 };
 
-function fileToBase64(file: File): Promise<string> {
+function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result).split(',')[1] ?? '');
     reader.onerror = () => reject(new Error('Could not read the file'));
-    reader.readAsDataURL(file);
+    reader.readAsDataURL(blob);
   });
+}
+
+interface PreparedImage { dataBase64: string; contentType: string; filename: string }
+
+// The API runs as a serverless function whose request body is capped at
+// 4.5 MB. Base64 inflates data by ~1.37x, so a file of ~3 MB or less
+// (~4.1 MB encoded) always fits and is sent UNTOUCHED — PNG transparency
+// and GIF animation survive. Larger files (typical phone photos) are
+// downscaled/re-encoded as JPEG in the browser, retrying smaller until
+// the encoded result provably fits; if nothing fits, the admin gets a
+// clear error instead of a silent platform 413.
+const SAFE_UPLOAD_BYTES = 3_000_000;
+const MAX_ENCODED_CHARS = 4_400_000;
+
+async function encodeScaledJpeg(file: File, maxDim: number, quality: number): Promise<PreparedImage | null> {
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
+  if (!blob) return null;
+  return {
+    dataBase64: await blobToBase64(blob),
+    contentType: 'image/jpeg',
+    filename: file.name.replace(/\.[^.]+$/, '') + '.jpg',
+  };
+}
+
+async function prepareImageUpload(file: File): Promise<PreparedImage> {
+  if (!file.type.startsWith('image/') || file.size <= SAFE_UPLOAD_BYTES) {
+    return { dataBase64: await blobToBase64(file), contentType: file.type, filename: file.name };
+  }
+  const attempts: Array<[number, number]> = [[1600, 0.82], [1280, 0.7], [1024, 0.6]];
+  for (const [dim, quality] of attempts) {
+    try {
+      const prepared = await encodeScaledJpeg(file, dim, quality);
+      if (prepared && prepared.dataBase64.length <= MAX_ENCODED_CHARS) return prepared;
+    } catch {
+      // Try the next, smaller attempt.
+    }
+  }
+  throw new Error('Image is too large even after resizing — please choose a smaller image.');
 }
 
 export default function AdminMenu() {
@@ -34,8 +80,8 @@ export default function AdminMenu() {
   const upload = async (file: File) => {
     setBusy(true); setError('');
     try {
-      const dataBase64 = await fileToBase64(file);
-      const res = await adminSend<{ url: string }>('POST', '/api/v1/admin/menu/upload', { filename: file.name, contentType: file.type, dataBase64 });
+      const prepared = await prepareImageUpload(file);
+      const res = await adminSend<{ url: string }>('POST', '/api/v1/admin/menu/upload', { filename: prepared.filename, contentType: prepared.contentType, dataBase64: prepared.dataBase64 });
       setForm((f) => ({ ...f, image: res.url }));
       setNotice('Image uploaded.');
     } catch (e) { setError((e as Error).message); }
