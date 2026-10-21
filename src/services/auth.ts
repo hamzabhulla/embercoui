@@ -12,6 +12,11 @@ const NOT_AVAILABLE = 'Accounts are not available at the moment — please check
 
 function friendly(error: { message: string }): string {
   const msg = error.message || '';
+  // OAuth provider problems (e.g. Google not enabled in the Supabase
+  // dashboard yet) must never surface Supabase's raw wording (audit H-8).
+  if (/unsupported provider|provider is not enabled|provider not (found|enabled|configured)/i.test(msg)) {
+    return "Google sign-in isn't available yet — please use email and password for now.";
+  }
   if (/invalid login credentials/i.test(msg)) return 'Invalid email or password';
   if (/already registered|already exists/i.test(msg)) return 'An account with this email already exists — try signing in instead.';
   if (/password should be/i.test(msg)) return 'Password must be at least 8 characters';

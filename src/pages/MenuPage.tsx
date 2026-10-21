@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, memo, useCallback } from 'react';
 import { Plus, Check, Search } from 'lucide-react';
-import { categories, MenuItem } from '../data/menu.ts';
+import { deriveCategories, type MenuItem } from '../data/menu.ts';
 import { useMenuItems } from '../services/useMenuItems.ts';
 import { useCart } from '../context/CartContext.tsx';
 import { useCurrency } from '../context/CurrencyContext.tsx';
@@ -213,17 +213,20 @@ export default function MenuPage() {
   const [activeFilter, setActiveFilter] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
   const [added, setAdded] = useState<number | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
 
   const { addItem } = useCart();
-  const menuItems = useMenuItems();
+  const { items: menuItems, status: menuStatus, retry: retryMenu } = useMenuItems();
 
   useEffect(() => {
     window.scrollTo(0, 0);
-    // Simulate a brief loading state so skeletons are visible on page mount
-    const t = setTimeout(() => setIsLoading(false), 500);
-    return () => clearTimeout(t);
   }, []);
+
+  // Sidebar/pill categories come from the fetched items themselves
+  // (audit M-6) — a category added or renamed in the admin panel shows
+  // up here without a code change. A selection that no longer exists
+  // falls back to All.
+  const categories = deriveCategories(menuItems);
+  const effectiveCategory = categories.includes(activeCategory) ? activeCategory : 'All';
 
   const handleAdd = useCallback((item: MenuItem, img?: HTMLImageElement | null) => {
     addItem({ id: item.id, name: item.name, price: item.price, image: item.image });
@@ -240,7 +243,7 @@ export default function MenuPage() {
   // ── Memoised filter ─────────────────────────────────────────────────────────
   const filteredItems = useMemo(() => {
     return menuItems.filter(item => {
-      if (activeCategory !== 'All' && item.category !== activeCategory) return false;
+      if (effectiveCategory !== 'All' && item.category !== effectiveCategory) return false;
 
       if (searchQuery) {
         const q = searchQuery.toLowerCase();
@@ -256,7 +259,7 @@ export default function MenuPage() {
 
       return true;
     });
-  }, [activeCategory, searchQuery, activeFilter, menuItems]);
+  }, [effectiveCategory, searchQuery, activeFilter, menuItems]);
 
   return (
     <>
@@ -343,7 +346,7 @@ export default function MenuPage() {
                   <button
                     onClick={() => setActiveCategory(cat)}
                     className={`text-left w-full py-3 pl-4 transition-all duration-[300ms] ${
-                      activeCategory === cat
+                      effectiveCategory === cat
                         ? 'text-[#C17A3A] border-l-[3px] border-[#C17A3A] bg-[rgba(193,122,58,0.06)]'
                         : 'text-[#1C2B1E]/55 border-l-[3px] border-transparent hover:text-[#1C2B1E] hover:bg-[rgba(28,43,30,0.03)]'
                     }`}
@@ -364,7 +367,7 @@ export default function MenuPage() {
               key={cat}
               onClick={() => setActiveCategory(cat)}
               className={`flex-shrink-0 px-6 py-2.5 rounded-none text-[10px] tracking-[0.2em] uppercase transition-all duration-300 border ${
-                activeCategory === cat
+                effectiveCategory === cat
                   ? 'bg-[#C17A3A] text-white border-[#C17A3A]'
                   : 'bg-white text-[#1C2B1E]/60 border-[rgba(28,43,30,0.15)] hover:border-[#C17A3A]/60 hover:text-[#C17A3A]'
               }`}
@@ -387,7 +390,7 @@ export default function MenuPage() {
               <span className="text-[#C17A3A]/40">/</span>
               <span className="text-[#1C2B1E]/60">Menu</span>
               <span className="text-[#C17A3A]/40">/</span>
-              <span className="text-[#C17A3A] font-medium">{activeCategory}</span>
+              <span className="text-[#C17A3A] font-medium">{effectiveCategory}</span>
             </div>
 
             {/* Search and Dietary Filters */}
@@ -427,12 +430,33 @@ export default function MenuPage() {
           </div>
 
           {/* Grid */}
-          {isLoading ? (
-            /* Skeleton loading state — 3 placeholder cards */
+          {menuStatus === 'loading' ? (
+            /* Skeleton loading state — 3 placeholder cards, shown while
+               the real fetch is in flight (no simulated timer). */
             <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 md:gap-6">
               <SkeletonCard />
               <SkeletonCard />
               <SkeletonCard />
+            </div>
+          ) : menuStatus === 'error' ? (
+            /* The menu genuinely failed to load — say so, offer a way
+               back, and never substitute another list (audit H-1). */
+            <div className="py-20 text-center">
+              <p className="text-[#1C2B1E]/70 text-[15px] leading-relaxed mb-8" style={{ fontFamily: 'Jost, sans-serif', fontWeight: 300 }}>
+                Our menu couldn&rsquo;t load — please check your connection and try again.
+              </p>
+              <button
+                onClick={retryMenu}
+                className="bg-[#1C2B1E] text-[#F5F0E8] px-[42px] py-[15px] text-[11px] uppercase transition-all duration-300 hover:bg-[#C17A3A]"
+                style={{ fontFamily: 'Jost, sans-serif', letterSpacing: '0.22em' }}
+              >
+                Retry
+              </button>
+            </div>
+          ) : menuItems.length === 0 ? (
+            /* The API answered and the menu is genuinely empty. */
+            <div className="py-20 text-center text-[#1C2B1E]/70 text-[15px]" style={{ fontFamily: 'Jost, sans-serif', fontWeight: 300 }}>
+              Our menu is being updated — please check back shortly.
             </div>
           ) : filteredItems.length === 0 ? (
             <div className="py-20 text-center text-[#1C2B1E]/50" style={{ fontFamily: 'Jost, sans-serif' }}>

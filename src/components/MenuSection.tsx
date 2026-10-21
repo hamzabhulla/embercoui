@@ -1,22 +1,48 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Check } from 'lucide-react';
-import { categories } from '../data/menu.ts';
+import { deriveCategories } from '../data/menu.ts';
 import { useMenuItems } from '../services/useMenuItems.ts';
 import { useCart } from '../context/CartContext.tsx';
 import { useCurrency } from '../context/CurrencyContext.tsx';
 import { useInView } from '../hooks/useInView.ts';
 import FavoriteButton from './FavoriteButton.tsx';
 
+/** Loading placeholder in the section's card language (mirrors /menu). */
+function MenuSkeletonCard() {
+  return (
+    <div className="overflow-hidden flex flex-col animate-pulse bg-white shadow-[0_2px_12px_rgba(0,0,0,0.08)]">
+      <div className="h-[180px] md:h-52 flex-shrink-0" style={{ background: 'rgba(13,26,14,0.12)' }} />
+      <div className="pt-[12px] px-[12px] pb-[14px] md:p-5 flex flex-col gap-3 flex-1">
+        <div className="flex justify-between gap-3">
+          <div className="h-4 md:h-5 w-2/3" style={{ background: 'rgba(13,26,14,0.10)' }} />
+          <div className="h-4 md:h-5 w-12" style={{ background: 'rgba(13,26,14,0.10)' }} />
+        </div>
+        <div className="hidden md:block space-y-2 flex-1">
+          <div className="h-3 w-full" style={{ background: 'rgba(13,26,14,0.06)' }} />
+          <div className="h-3 w-5/6" style={{ background: 'rgba(13,26,14,0.06)' }} />
+          <div className="h-3 w-3/4" style={{ background: 'rgba(13,26,14,0.06)' }} />
+        </div>
+        <div className="h-[34px] md:h-11 mt-auto" style={{ background: 'rgba(13,26,14,0.10)' }} />
+      </div>
+    </div>
+  );
+}
+
 export default function MenuSection() {
-  const menuItems = useMenuItems();
+  const { items: menuItems, status, retry } = useMenuItems();
   const [activeTab, setActiveTab] = useState('All');
   const [addedIds, setAddedIds] = useState<number[]>([]);
   const { addItem } = useCart();
   const { format } = useCurrency();
   const navigate = useNavigate();
 
-  const filtered = activeTab === 'All' ? menuItems : menuItems.filter(i => i.category === activeTab);
+  // Tabs are derived from the items themselves (audit M-6): a category
+  // the restaurant adds or renames appears without a code change. If the
+  // selected tab no longer exists (e.g. after a refetch), fall back to All.
+  const categories = deriveCategories(menuItems);
+  const effectiveTab = categories.includes(activeTab) ? activeTab : 'All';
+  const filtered = effectiveTab === 'All' ? menuItems : menuItems.filter(i => i.category === effectiveTab);
   // Homepage shows only the top 6 signature dishes — the full list lives on /menu.
   const displayed = filtered.slice(0, 6);
 
@@ -60,7 +86,7 @@ export default function MenuSection() {
       cancelAnimationFrame(raf2);
       observers.forEach(o => o.disconnect());
     };
-  }, [activeTab, displayed.length]);
+  }, [effectiveTab, displayed.length]);
 
   return (
     <section id="menu" className="py-24 bg-cream-200" style={{ background: '#F5F0E8' }}>
@@ -85,6 +111,41 @@ export default function MenuSection() {
           <div className="w-12 h-px bg-ember mx-auto mt-5" />
         </div>
 
+        {status === 'loading' ? (
+          /* Loading — skeleton cards, no dishes yet */
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-[12px] md:gap-6" aria-busy="true">
+            {Array.from({ length: 6 }).map((_, i) => <MenuSkeletonCard key={i} />)}
+          </div>
+        ) : status === 'error' ? (
+          /* The menu genuinely failed to load — say so, never substitute
+             another list, and offer a way back (audit H-1). */
+          <div className="text-center py-14">
+            <p
+              className="text-[#1C2B1E]/70 text-[15px] leading-relaxed mb-8"
+              style={{ fontFamily: 'Jost, sans-serif', fontWeight: 300 }}
+            >
+              Our menu couldn&rsquo;t load — please check your connection and try again.
+            </p>
+            <button
+              onClick={retry}
+              className="bg-[#1C2B1E] text-[#F5F0E8] px-[42px] py-[15px] text-[11px] uppercase transition-all duration-300 hover:bg-[#C17A3A]"
+              style={{ fontFamily: 'Jost, sans-serif', letterSpacing: '0.22em' }}
+            >
+              Retry
+            </button>
+          </div>
+        ) : menuItems.length === 0 ? (
+          /* The API answered and the menu is genuinely empty. */
+          <div className="text-center py-14">
+            <p
+              className="text-[#1C2B1E]/70 text-[15px] leading-relaxed"
+              style={{ fontFamily: 'Jost, sans-serif', fontWeight: 300 }}
+            >
+              Our menu is being updated — please check back shortly.
+            </p>
+          </div>
+        ) : (
+          <>
         {/* Desktop pill tabs */}
         <div className="hidden md:flex items-center justify-center flex-wrap gap-2.5 mb-12">
           {categories.map(cat => (
@@ -92,7 +153,7 @@ export default function MenuSection() {
               key={cat}
               onClick={() => setActiveTab(cat)}
               className={`px-5 py-2 text-xs tracking-widest uppercase transition-all duration-[250ms] border rounded-full ${
-                activeTab === cat
+                effectiveTab === cat
                   ? 'bg-[#1C2B1E] text-[#F5F0E8] border-[#1C2B1E]'
                   : 'bg-transparent text-[#1C2B1E]/50 border-[rgba(28,43,30,0.2)] hover:border-[#C17A3A] hover:text-[#C17A3A]'
               }`}
@@ -110,7 +171,7 @@ export default function MenuSection() {
               key={cat}
               onClick={() => setActiveTab(cat)}
               className={`flex-shrink-0 px-5 py-2 rounded-full text-xs tracking-widest uppercase transition-all duration-[250ms] ${
-                activeTab === cat
+                effectiveTab === cat
                   ? 'bg-[#1C2B1E] text-white border border-transparent'
                   : 'bg-white text-[#1C2B1E] border border-[rgba(28,43,30,0.2)] hover:border-[#C17A3A] hover:text-[#C17A3A]'
               }`}
@@ -194,6 +255,8 @@ export default function MenuSection() {
               View Full Menu →
             </button>
           </div>
+        )}
+          </>
         )}
       </div>
     </section>

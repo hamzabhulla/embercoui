@@ -38,9 +38,18 @@ async function getJson<T>(path: string): Promise<T | null> {
   }
 }
 
+/**
+ * The live menu. Three outcomes, kept distinct (audit H-1):
+ *  - an array (possibly EMPTY — the restaurant genuinely has no items
+ *    available right now) when the API answered successfully;
+ *  - null ONLY when the fetch failed (network error, non-2xx, bad body).
+ * Callers must not conflate "empty" with "failed": an empty menu is a
+ * real state to present honestly, never a reason to substitute another
+ * list, and a failure must never be dressed up as menu data.
+ */
 export async function fetchMenuItems(): Promise<MenuItem[] | null> {
   const data = await getJson<{ items: (MenuItem & { tags?: string[] })[] }>('/api/v1/menu');
-  if (!data || !Array.isArray(data.items) || data.items.length === 0) return null;
+  if (!data || !Array.isArray(data.items)) return null;
   return data.items.map((i) => ({
     id: i.id, name: i.name, description: i.description, price: i.price,
     image: i.image, category: i.category,

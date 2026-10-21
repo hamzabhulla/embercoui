@@ -93,7 +93,13 @@ export default function Checkout() {
   const [city, setCity] = useState('');
   const [postalCode, setPostalCode] = useState('');
   const [notes, setNotes] = useState('');
-  const [method, setMethod] = useState<'card' | 'cod'>('card');
+  // When Stripe is not configured on this deployment (no publishable
+  // key), card payment cannot work — so it is not the default and not
+  // selectable (audit H-6): default to cash and disable the card option
+  // with an honest note, instead of creating an order that then fails
+  // at the payment step. When Stripe IS configured, card stays the
+  // default exactly as before.
+  const [method, setMethod] = useState<'card' | 'cod'>(() => (stripePromise ? 'card' : 'cod'));
   const [couponInput, setCouponInput] = useState('');
   const [coupon, setCoupon] = useState<AppliedCoupon | null>(null);
   const [couponMsg, setCouponMsg] = useState<string | null>(null);
@@ -318,13 +324,14 @@ export default function Checkout() {
               <section>
                 <h2 className="mb-4" style={{ ...headingFont, fontSize: '24px' }}>Payment Method</h2>
                 <div className="flex flex-col gap-3">
-                  <button type="button" onClick={() => setMethod('card')}
-                    className="flex items-center gap-3 p-4 text-left transition-all"
-                    style={{ border: `1px solid ${method === 'card' ? '#C17A3A' : 'rgba(255,255,255,0.12)'}`, background: 'rgba(255,255,255,0.03)' }}>
+                  <button type="button" onClick={() => setMethod('card')} disabled={!stripePromise}
+                    aria-disabled={!stripePromise}
+                    className="flex items-center gap-3 p-4 text-left transition-all disabled:cursor-not-allowed"
+                    style={{ border: `1px solid ${method === 'card' ? '#C17A3A' : 'rgba(255,255,255,0.12)'}`, background: 'rgba(255,255,255,0.03)', opacity: stripePromise ? 1 : 0.55 }}>
                     <CreditCard size={18} color="#C17A3A" />
                     <span>
                       <span className="block" style={{ fontFamily: 'Jost, sans-serif', fontSize: '13px', color: '#F5F0E8' }}>Card — pay now</span>
-                      <span className="block" style={{ fontFamily: 'Jost, sans-serif', fontSize: '11px', color: 'rgba(245,240,232,0.45)' }}>Secure payment via Stripe</span>
+                      <span className="block" style={{ fontFamily: 'Jost, sans-serif', fontSize: '11px', color: 'rgba(245,240,232,0.45)' }}>{stripePromise ? 'Secure payment via Stripe' : 'Card payments are coming soon'}</span>
                     </span>
                     {method === 'card' && <Check size={15} color="#4ade80" className="ml-auto" />}
                   </button>
