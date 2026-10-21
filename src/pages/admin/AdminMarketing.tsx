@@ -1,18 +1,21 @@
 import React, { useEffect, useState } from 'react';
 import { adminGet, adminSend } from '../../services/adminApi';
 import { useAuth } from '../../context/AuthContext';
-import { ErrorNote, LoadingNote, PageTitle, dangerBtn, ghostBtn, inputCls, labelCls, primaryBtn } from '../../components/admin/ui';
+import { useCurrency } from '../../context/CurrencyContext';
+import { Card, EmptyNote, ErrorNote, LoadingNote, NoticeNote, PageTitle, StatusPill, Toggle, chipDangerBtn, inputCls, labelCls, money, primaryBtn, tableCls, tdCls, thCls } from '../../components/admin/ui';
 
 interface Coupon { id: string; code: string; type: 'percent' | 'fixed'; value: number; isActive: boolean; expiresAt: string | null }
 
 export default function AdminMarketing() {
   const { profile } = useAuth();
   const isAdmin = profile?.role === 'admin';
+  const { currency } = useCurrency();
   const [rows, setRows] = useState<Coupon[]>([]);
   const [form, setForm] = useState({ code: '', type: 'percent' as 'percent' | 'fixed', value: 10, expiresAt: '' });
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const load = () => { adminGet<{ coupons: Coupon[] }>('/api/v1/admin/coupons').then((d) => setRows(d.coupons)).catch((e: Error) => setError(e.message)); };
+  const [loaded, setLoaded] = useState(false);
+  const load = () => { adminGet<{ coupons: Coupon[] }>('/api/v1/admin/coupons').then((d) => setRows(d.coupons)).catch((e: Error) => setError(e.message)).finally(() => setLoaded(true)); };
   useEffect(load, []);
   const create = async (e: React.FormEvent) => {
     e.preventDefault(); setError(''); setNotice('');
@@ -35,37 +38,48 @@ export default function AdminMarketing() {
   };
   return (
     <div>
-      <PageTitle sub="Discount codes customers can use at checkout">Marketing — Coupons</PageTitle>
+      <PageTitle sub="Discount codes customers can use at checkout">Coupons</PageTitle>
       {error && <ErrorNote message={error} />}
-      {notice && <p className="font-bodytext text-sm text-[#4ade80] mb-4">{notice}</p>}
+      {notice && <NoticeNote message={notice} />}
       {isAdmin ? (
-        <form onSubmit={create} className="bg-[#1C2B1E] border border-white/10 p-6 mb-10 grid md:grid-cols-4 gap-4 items-end">
+        <form onSubmit={create} className="bg-white border border-[#EAE3D3] rounded-[14px] shadow-[0_1px_2px_rgba(22,36,26,0.03),0_10px_24px_-18px_rgba(22,36,26,0.18)] p-6 mb-8 grid md:grid-cols-4 gap-4 items-end">
           <div><label className={labelCls} htmlFor="c-code">Code</label><input id="c-code" className={inputCls} value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} required minLength={3} /></div>
           <div><label className={labelCls} htmlFor="c-type">Type</label>
             <select id="c-type" className={inputCls} value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value as 'percent' | 'fixed' })}>
               <option value="percent">Percent off</option><option value="fixed">Fixed amount</option>
             </select></div>
-          <div><label className={labelCls} htmlFor="c-value">Value</label><input id="c-value" type="number" min="0" step="0.01" className={inputCls} value={form.value} onChange={(e) => setForm({ ...form, value: Number(e.target.value) })} required /></div>
+          <div><label className={labelCls} htmlFor="c-value">Value{form.type === 'fixed' ? ` (${currency})` : ''}</label><input id="c-value" type="number" min="0" step="0.01" className={inputCls} value={form.value} onChange={(e) => setForm({ ...form, value: Number(e.target.value) })} required /></div>
           <div><label className={labelCls} htmlFor="c-exp">Expires (optional)</label><input id="c-exp" type="date" className={inputCls} value={form.expiresAt} onChange={(e) => setForm({ ...form, expiresAt: e.target.value })} /></div>
           <button type="submit" className={primaryBtn}>Create coupon</button>
         </form>
       ) : (
-        <p className="font-bodytext text-sm text-[#F5F0E8]/50 mb-8">Only admins can create or change coupons.</p>
+        <p className="font-bodytext text-[13.5px] text-[#5C665C] mb-8">Only admins can create or change coupons.</p>
       )}
-      {rows.length === 0 && !error && <LoadingNote />}
-      <div className="space-y-3">
-        {rows.map((c) => (
-          <div key={c.id} className="flex flex-wrap items-center justify-between gap-3 bg-[#1C2B1E] border border-white/10 px-5 py-4">
-            <p className="font-bodytext text-sm tracking-[0.15em]">{c.code} <span className="text-[#F5F0E8]/50 tracking-normal">— {c.type === 'percent' ? `${c.value}% off` : `$${c.value} off`}{c.expiresAt ? ` · expires ${new Date(c.expiresAt).toLocaleDateString()}` : ''} · {c.isActive ? 'Active' : 'Inactive'}</span></p>
-            {isAdmin && (
-              <div className="flex gap-2">
-                <button className={ghostBtn} onClick={() => void toggle(c)}>{c.isActive ? 'Deactivate' : 'Activate'}</button>
-                <button className={dangerBtn} onClick={() => void remove(c.id)}>Delete</button>
-              </div>
-            )}
+      <Card className="overflow-hidden">
+        {!loaded && !error && <LoadingNote />}
+        {loaded && rows.length === 0 && !error && <EmptyNote message="No coupons yet." />}
+        {rows.length > 0 && (
+          <div className="overflow-x-auto">
+            <table className={tableCls}>
+              <thead>
+                <tr><th className={thCls}>Code</th><th className={thCls}>Discount</th><th className={thCls}>Expires</th><th className={thCls}>Status</th>{isAdmin && <th className={thCls}>Active</th>}{isAdmin && <th className={thCls}></th>}</tr>
+              </thead>
+              <tbody>
+                {rows.map((c) => (
+                  <tr key={c.id} className="hover:bg-[#FDFBF7]">
+                    <td className={tdCls}><span className="px-2.5 py-1 rounded-md bg-[#16241A] text-[#F5F0E8] font-mono text-[12px] tracking-[0.08em]">{c.code}</span></td>
+                    <td className={`${tdCls} font-semibold`}>{c.type === 'percent' ? `${c.value}% off` : `${money(c.value, currency)} off`}</td>
+                    <td className={`${tdCls} text-[#5C665C]`}>{c.expiresAt ? new Date(c.expiresAt).toLocaleDateString() : 'No expiry'}</td>
+                    <td className={tdCls}><StatusPill status={c.isActive ? 'active' : 'inactive'} /></td>
+                    {isAdmin && <td className={tdCls}><Toggle on={c.isActive} onClick={() => void toggle(c)} label={`${c.isActive ? 'Deactivate' : 'Activate'} coupon ${c.code}`} /></td>}
+                    {isAdmin && <td className={tdCls}><span className="flex justify-end"><button className={chipDangerBtn} onClick={() => void remove(c.id)}>Delete</button></span></td>}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-        ))}
-      </div>
+        )}
+      </Card>
     </div>
   );
 }

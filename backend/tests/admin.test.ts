@@ -16,7 +16,7 @@ let paidOrderId = '';
 beforeAll(async () => {
   const order = await repo.createOrder({
     userId: 'user-1', customerName: 'Test User', customerEmail: 'user@example.com', customerPhone: null,
-    address: null, notes: null, couponCode: null,
+    address: null, notes: null, couponCode: null, currency: 'USD',
     items: [{ menuItemId: 1, name: 'Ember Classic', unitPrice: 24, quantity: 2 }],
     subtotal: 48, deliveryFee: 0, discount: 0, total: 48,
   });

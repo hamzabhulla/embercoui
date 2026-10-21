@@ -1,5 +1,6 @@
 import { Routes, Route, useLocation, useNavigate } from 'react-router-dom';
 import { CartProvider } from './context/CartContext.tsx';
+import { CurrencyProvider } from './context/CurrencyContext.tsx';
 import Navbar from './components/Navbar.tsx';
 import Hero from './components/Hero.tsx';
 import LiveStatus from './components/LiveStatus.tsx';
@@ -57,6 +58,7 @@ function App() {
   const goHome = () => navigate('/');
 
   return (
+    <CurrencyProvider>
     <CartProvider>
       <div className="min-h-screen" style={{ background: '#F5F0E8' }}>
         <Navbar forceDark={canonicalPath === '/menu' || canonicalPath === '/our-story' || canonicalPath === '/contact' || canonicalPath === '/account' || canonicalPath === '/reset-password' || canonicalPath === '/checkout' || canonicalPath.startsWith('/track-order') || canonicalPath.startsWith('/admin')} />
@@ -100,6 +102,7 @@ function App() {
         </Routes>
       </div>
     </CartProvider>
+    </CurrencyProvider>
   );
 }
 

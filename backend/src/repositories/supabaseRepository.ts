@@ -1,4 +1,5 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { currencyExponent, sanitizeCurrencyCode } from '../lib/currency';
 import type {
   CouponDTO, CreateOrderData, MenuItemDTO, OrderDTO, ProfileDTO,
   PublicSettingsDTO, ReservationDTO, ReservationInput, Repository, ReviewDTO,
@@ -29,6 +30,7 @@ function settingsDTO(r: Row): PublicSettingsDTO {
     kitchenOpen: r.kitchen_open !== false,
     waitMin: num(r.wait_min) || 20,
     waitMax: num(r.wait_max) || 30,
+    currency: sanitizeCurrencyCode(r.currency),
     restaurantName: str(r.restaurant_name) || 'Ember & Co.',
     phone: strOrNull(r.phone),
     email: strOrNull(r.email),
@@ -37,7 +39,7 @@ function settingsDTO(r: Row): PublicSettingsDTO {
   };
 }
 export const DEFAULT_SETTINGS: PublicSettingsDTO = {
-  kitchenOpen: true, waitMin: 20, waitMax: 30, restaurantName: 'Ember & Co.',
+  kitchenOpen: true, waitMin: 20, waitMax: 30, currency: 'USD', restaurantName: 'Ember & Co.',
   phone: null, email: null, address: null, openingHours: {},
 };
 function reviewDTO(r: Row): ReviewDTO {
@@ -83,6 +85,7 @@ function orderDTO(r: Row, items: OrderDTO['items']): OrderDTO {
     status: str(r.status) as OrderDTO['status'],
     paymentStatus: str(r.payment_status) as OrderDTO['paymentStatus'],
     paymentIntentId: strOrNull(r.payment_intent_id),
+    currency: sanitizeCurrencyCode(r.currency),
     subtotal: num(r.subtotal), deliveryFee: num(r.delivery_fee),
     discount: num(r.discount), total: num(r.total),
     couponCode: strOrNull(r.coupon_code),
@@ -225,7 +228,7 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
         .insert({
           user_id: data.userId, customer_name: data.customerName, customer_email: data.customerEmail,
           customer_phone: data.customerPhone, delivery_address: data.address, notes: data.notes,
-          coupon_code: data.couponCode, subtotal: data.subtotal, delivery_fee: data.deliveryFee,
+          coupon_code: data.couponCode, currency: data.currency, subtotal: data.subtotal, delivery_fee: data.deliveryFee,
           discount: data.discount, total: data.total, status: 'pending', payment_status: 'unpaid',
         })
         .select('*')
@@ -334,14 +337,18 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
     async adminListCustomers() {
       const { data: profiles, error } = await db.from('profiles').select('*').eq('role', 'customer').order('created_at', { ascending: false });
       if (error) throw new Error(`profiles query failed: ${error.message}`);
-      const { data: orders, error: ordersError } = await db.from('orders').select('user_id, total, payment_status');
+      // Lifetime spend is reported in the CURRENT settings currency only —
+      // orders placed in another currency are counted, never summed in,
+      // so two currencies are never silently added together.
+      const settings = await repo.getSettings();
+      const { data: orders, error: ordersError } = await db.from('orders').select('user_id, total, payment_status, currency');
       if (ordersError) throw new Error(`customer order aggregation failed: ${ordersError.message}`);
       const counts = new Map<string, { count: number; spent: number }>();
       for (const o of (orders ?? []) as Row[]) {
         if (!o.user_id) continue;
         const entry = counts.get(str(o.user_id)) ?? { count: 0, spent: 0 };
         entry.count += 1;
-        if (o.payment_status === 'paid') entry.spent += num(o.total);
+        if (o.payment_status === 'paid' && sanitizeCurrencyCode(o.currency) === settings.currency) entry.spent += num(o.total);
         counts.set(str(o.user_id), entry);
       }
       const out = [];
@@ -353,7 +360,8 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
           email = authUser?.user?.email ?? null;
         } catch { /* email is best-effort */ }
         const c = counts.get(dto.id) ?? { count: 0, spent: 0 };
-        out.push({ ...dto, email, orderCount: c.count, totalSpent: Math.round(c.spent * 100) / 100 });
+        const expFactor = 10 ** currencyExponent(settings.currency);
+        out.push({ ...dto, email, orderCount: c.count, totalSpent: Math.round(c.spent * expFactor) / expFactor });
       }
       return out;
     },
@@ -433,6 +441,7 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
       if (patch.kitchenOpen !== undefined) update.kitchen_open = patch.kitchenOpen;
       if (patch.waitMin !== undefined) update.wait_min = patch.waitMin;
       if (patch.waitMax !== undefined) update.wait_max = patch.waitMax;
+      if (patch.currency !== undefined) update.currency = patch.currency;
       if (patch.restaurantName !== undefined) update.restaurant_name = patch.restaurantName;
       if (patch.phone !== undefined) update.phone = patch.phone;
       if (patch.email !== undefined) update.email = patch.email;

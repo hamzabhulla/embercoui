@@ -12,7 +12,7 @@ export class FakeRepository implements Repository {
     { id: 3, name: 'Secret Special', description: 'Hidden', price: 50, image: 'img3', category: 'Pizza', tags: [], isAvailable: false, sortOrder: 2 },
   ];
   settings: PublicSettingsDTO = {
-    kitchenOpen: true, waitMin: 20, waitMax: 30, restaurantName: 'Ember & Co.',
+    kitchenOpen: true, waitMin: 20, waitMax: 30, currency: 'USD', restaurantName: 'Ember & Co.',
     phone: null, email: null, address: null, openingHours: {},
   };
   reviews: (ReviewDTO & { isApproved: boolean; userId?: string | null })[] = [
@@ -85,6 +85,7 @@ export class FakeRepository implements Repository {
       id: `order-${++this.seq}`,
       userId: data.userId, customerName: data.customerName, customerEmail: data.customerEmail,
       customerPhone: data.customerPhone, status: 'pending', paymentStatus: 'unpaid', paymentIntentId: null,
+      currency: data.currency,
       subtotal: data.subtotal, deliveryFee: data.deliveryFee, discount: data.discount, total: data.total,
       couponCode: data.couponCode, address: data.address, notes: data.notes,
       items: data.items.map((i) => ({ menuItemId: i.menuItemId, name: i.name, unitPrice: i.unitPrice, quantity: i.quantity })),
@@ -153,7 +154,7 @@ export class FakeRepository implements Repository {
           ...p,
           email: `${p.id}@example.com`,
           orderCount: userOrders.length,
-          totalSpent: Math.round(userOrders.filter((o) => o.paymentStatus === 'paid').reduce((sum, o) => sum + o.total, 0) * 100) / 100,
+          totalSpent: Math.round(userOrders.filter((o) => o.paymentStatus === 'paid' && o.currency === this.settings.currency).reduce((sum, o) => sum + o.total, 0) * 100) / 100,
         };
       });
   }

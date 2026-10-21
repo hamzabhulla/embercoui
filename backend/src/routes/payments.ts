@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { ApiError, notConfigured, stripeNotConfigured } from '../lib/errors';
 import type { StripeService } from '../lib/stripe';
 import { validateBody } from '../middleware/validate';
+import { cardMinimumMinorUnits, sanitizeCurrencyCode, toMinorUnits } from '../lib/currency';
 import type { Repository } from '../repositories/types';
 
 interface PaymentDeps {
@@ -23,13 +24,18 @@ export function paymentsRouter(deps: PaymentDeps) {
       const order = await deps.repo.getOrder(orderId);
       if (!order) throw new ApiError(404, 'Order not found');
       if (order.paymentStatus === 'paid') throw new ApiError(400, 'This order has already been paid');
-      if (Math.round(order.total * 100) < 50) {
+      // Charge in the currency the order was PLACED in (snapshotted on the
+      // order), never the restaurant's current one — and convert with that
+      // currency's real exponent (JPY totals stay whole, KWD gets ×1000).
+      const currency = sanitizeCurrencyCode(order.currency);
+      const amountMinor = toMinorUnits(order.total, currency);
+      if (amountMinor < cardMinimumMinorUnits(currency)) {
         throw new ApiError(400, 'This order total is below the card payment minimum — please pay on delivery instead');
       }
       const intent = await deps.stripe.createPaymentIntent({
         orderId: order.id,
-        amountCents: Math.round(order.total * 100),
-        currency: 'usd',
+        amountCents: amountMinor,
+        currency: currency.toLowerCase(),
       });
       await deps.repo.setOrderPaymentIntent(order.id, intent.id);
       res.json({ clientSecret: intent.clientSecret, paymentIntentId: intent.id });

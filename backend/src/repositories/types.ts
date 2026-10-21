@@ -12,6 +12,8 @@ export interface PublicSettingsDTO {
   kitchenOpen: boolean;
   waitMin: number;
   waitMax: number;
+  /** ISO 4217 uppercase code — the currency the restaurant currently trades in. */
+  currency: string;
   restaurantName: string;
   phone: string | null;
   email: string | null;
@@ -81,6 +83,8 @@ export interface OrderDTO {
   status: OrderStatus;
   paymentStatus: PaymentStatus;
   paymentIntentId: string | null;
+  /** ISO 4217 code snapshotted from the settings when the order was placed. */
+  currency: string;
   subtotal: number;
   deliveryFee: number;
   discount: number;
@@ -101,6 +105,8 @@ export interface CreateOrderData {
   address: Record<string, unknown> | null;
   notes: string | null;
   couponCode: string | null;
+  /** ISO 4217 code the order's money amounts are denominated in. */
+  currency: string;
   items: { menuItemId: number; name: string; unitPrice: number; quantity: number }[];
   subtotal: number;
   deliveryFee: number;

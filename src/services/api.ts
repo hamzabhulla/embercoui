@@ -10,6 +10,7 @@ export interface PublicSettings {
   kitchenOpen: boolean;
   waitMin: number;
   waitMax: number;
+  currency: string;
   restaurantName: string;
   phone: string | null;
   email: string | null;

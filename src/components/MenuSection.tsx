@@ -3,6 +3,7 @@ import { Plus, Check } from 'lucide-react';
 import { categories } from '../data/menu.ts';
 import { useMenuItems } from '../services/useMenuItems.ts';
 import { useCart } from '../context/CartContext.tsx';
+import { useCurrency } from '../context/CurrencyContext.tsx';
 import { useInView } from '../hooks/useInView.ts';
 import FavoriteButton from './FavoriteButton.tsx';
 
@@ -11,6 +12,7 @@ export default function MenuSection() {
   const [activeTab, setActiveTab] = useState('All');
   const [addedIds, setAddedIds] = useState<number[]>([]);
   const { addItem } = useCart();
+  const { format } = useCurrency();
 
   const filtered = activeTab === 'All' ? menuItems : menuItems.filter(i => i.category === activeTab);
 
@@ -146,8 +148,8 @@ export default function MenuSection() {
                   <span
                     className="text-[#C17A3A] md:text-ember text-[15px] md:text-base flex-shrink-0 mb-[10px] md:mb-0 md:font-semibold"
                   >
-                    <span className="md:hidden" style={{ fontFamily: 'Cormorant Garamond, serif' }}>${item.price.toFixed(2)}</span>
-                    <span className="hidden md:inline" style={{ fontFamily: 'Jost, sans-serif' }}>${item.price}</span>
+                    <span className="md:hidden" style={{ fontFamily: 'Cormorant Garamond, serif' }}>{format(item.price)}</span>
+                    <span className="hidden md:inline" style={{ fontFamily: 'Jost, sans-serif' }}>{format(item.price)}</span>
                   </span>
                 </div>
                 <p

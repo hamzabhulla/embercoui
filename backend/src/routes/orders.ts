@@ -4,9 +4,8 @@ import { ApiError, notConfigured } from '../lib/errors';
 import { optionalAuth, type AuthedRequest } from '../lib/auth';
 import type { TokenVerifier } from '../lib/auth';
 import { validateBody } from '../middleware/validate';
+import { fromMinorUnits, toMinorUnits } from '../lib/currency';
 import type { OrderDTO, Repository } from '../repositories/types';
-
-const money = (cents: number) => Math.round(cents) / 100;
 
 const orderSchema = z.object({
   customerName: z.string().trim().min(1, 'Full name is required'),
@@ -48,19 +47,25 @@ export function ordersRouter(deps: { repo: Repository | null; verifyToken: Token
       const body = req.body as z.infer<typeof orderSchema>;
       const r = repo();
 
+      // The order is denominated in the restaurant's CURRENT currency and
+      // snapshots it — a later currency switch never rewrites this order.
+      // All math runs in that currency's minor units (USD/PKR: 100 per
+      // major, JPY: 1, KWD: 1000), so no exponent can skew a total.
+      const { currency } = await r.getSettings();
+
       // Prices are ALWAYS recalculated from the database — anything the
       // client claims about prices is ignored by design.
       const lines: { menuItemId: number; name: string; unitPrice: number; quantity: number }[] = [];
-      let subtotalCents = 0;
+      let subtotalMinor = 0;
       for (const line of body.items) {
         const item = await r.getMenuItem(line.menuItemId);
         if (!item) throw new ApiError(400, 'One of the items in your cart is no longer available');
-        const unitCents = Math.round(item.price * 100);
-        subtotalCents += unitCents * line.quantity;
-        lines.push({ menuItemId: item.id, name: item.name, unitPrice: money(unitCents), quantity: line.quantity });
+        const unitMinor = toMinorUnits(item.price, currency);
+        subtotalMinor += unitMinor * line.quantity;
+        lines.push({ menuItemId: item.id, name: item.name, unitPrice: fromMinorUnits(unitMinor, currency), quantity: line.quantity });
       }
 
-      let discountCents = 0;
+      let discountMinor = 0;
       let appliedCoupon: string | null = null;
       if (body.couponCode) {
         const coupon = await r.getCouponByCode(body.couponCode);
@@ -68,19 +73,20 @@ export function ordersRouter(deps: { repo: Repository | null; verifyToken: Token
         if (!coupon || !coupon.isActive || expired) {
           throw new ApiError(400, 'This coupon code is not valid');
         }
-        discountCents =
+        // Fixed coupons are denominated in the current currency too.
+        discountMinor =
           coupon.type === 'percent'
-            ? Math.round((subtotalCents * coupon.value) / 100)
-            : Math.min(Math.round(coupon.value * 100), subtotalCents);
+            ? Math.round((subtotalMinor * coupon.value) / 100)
+            : Math.min(toMinorUnits(coupon.value, currency), subtotalMinor);
         appliedCoupon = coupon.code;
       }
 
       // Delivery is free — that is the promise the cart UI has always made.
-      const deliveryFeeCents = 0;
+      const deliveryFeeMinor = 0;
       // The stored discount never exceeds the subtotal (a coupon can cover at
       // most the whole bill), so totals and discounts always reconcile.
-      const effectiveDiscountCents = Math.min(discountCents, subtotalCents);
-      const totalCents = Math.max(0, subtotalCents - effectiveDiscountCents + deliveryFeeCents);
+      const effectiveDiscountMinor = Math.min(discountMinor, subtotalMinor);
+      const totalMinor = Math.max(0, subtotalMinor - effectiveDiscountMinor + deliveryFeeMinor);
 
       const order = await r.createOrder({
         userId: req.user?.id ?? null,
@@ -90,11 +96,12 @@ export function ordersRouter(deps: { repo: Repository | null; verifyToken: Token
         address: body.address ?? null,
         notes: body.notes ?? null,
         couponCode: appliedCoupon,
+        currency,
         items: lines,
-        subtotal: money(subtotalCents),
-        deliveryFee: money(deliveryFeeCents),
-        discount: money(effectiveDiscountCents),
-        total: money(totalCents),
+        subtotal: fromMinorUnits(subtotalMinor, currency),
+        deliveryFee: fromMinorUnits(deliveryFeeMinor, currency),
+        discount: fromMinorUnits(effectiveDiscountMinor, currency),
+        total: fromMinorUnits(totalMinor, currency),
       });
       res.status(201).json({ order });
     } catch (err) { next(err); }

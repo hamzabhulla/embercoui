@@ -3,12 +3,13 @@ import { useNavigate } from 'react-router-dom';
 import { Check, Heart, LogOut, Plus, Star, Trash2 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useCart } from '../context/CartContext.tsx';
+import { useCurrency } from '../context/CurrencyContext.tsx';
 import { apiRequest } from '../services/api.ts';
 import type { MenuItem } from '../data/menu.ts';
 
 interface OrderItem { menuItemId: number | null; name: string; unitPrice: number; quantity: number }
 interface Order {
-  id: string; status: string; paymentStatus: string; total: number; createdAt: string; items: OrderItem[];
+  id: string; status: string; paymentStatus: string; total: number; currency: string; createdAt: string; items: OrderItem[];
 }
 interface Address { label?: string; line1: string; city: string; postalCode?: string; phone?: string }
 
@@ -36,6 +37,7 @@ const emberButton: React.CSSProperties = {
 const cardStyle: React.CSSProperties = { background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' };
 
 export default function Account() {
+  const { format } = useCurrency();
   const navigate = useNavigate();
   const { user, profile, loading, signOut, refreshProfile } = useAuth();
   const { addItem } = useCart();
@@ -224,7 +226,7 @@ export default function Account() {
                   {order.items.map((i) => `${i.quantity} × ${i.name}`).join(' · ')}
                 </p>
                 <div className="flex items-center justify-between">
-                  <span style={{ fontFamily: 'Cormorant Garamond, serif', fontSize: '20px', color: '#C17A3A' }}>${order.total.toFixed(2)}</span>
+                  <span style={{ fontFamily: 'Cormorant Garamond, serif', fontSize: '20px', color: '#C17A3A' }}>{format(order.total, order.currency)}</span>
                   <button
                     onClick={() => navigate(`/track-order/${order.id}`)}
                     style={{ fontFamily: 'Jost, sans-serif', fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase', color: '#C17A3A' }}
@@ -257,7 +259,7 @@ export default function Account() {
                         <Heart size={16} color="#ef4444" fill="#ef4444" />
                       </button>
                     </div>
-                    <p className="mb-3" style={{ fontFamily: 'Jost, sans-serif', fontSize: '13px', color: '#C17A3A' }}>${item.price.toFixed(2)}</p>
+                    <p className="mb-3" style={{ fontFamily: 'Jost, sans-serif', fontSize: '13px', color: '#C17A3A' }}>{format(item.price)}</p>
                     <button
                       onClick={() => addItem({ id: item.id, name: item.name, price: item.price, image: item.image })}
                       className="w-full transition-all duration-300 hover:brightness-110"

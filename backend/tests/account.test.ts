@@ -10,13 +10,13 @@ const asUser = (r: request.Test) => r.set('Authorization', 'Bearer token-user');
 beforeAll(async () => {
   await repo.createOrder({
     userId: 'user-1', customerName: 'Test User', customerEmail: 'user@example.com', customerPhone: null,
-    address: null, notes: null, couponCode: null,
+    address: null, notes: null, couponCode: null, currency: 'USD',
     items: [{ menuItemId: 1, name: 'Ember Classic', unitPrice: 24, quantity: 1 }],
     subtotal: 24, deliveryFee: 0, discount: 0, total: 24,
   });
   await repo.createOrder({
     userId: 'admin-1', customerName: 'Admin', customerEmail: 'admin@example.com', customerPhone: null,
-    address: null, notes: null, couponCode: null,
+    address: null, notes: null, couponCode: null, currency: 'USD',
     items: [{ menuItemId: 2, name: 'Forest Truffle Burger', unitPrice: 38, quantity: 1 }],
     subtotal: 38, deliveryFee: 0, discount: 0, total: 38,
   });

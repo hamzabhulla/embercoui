@@ -3,6 +3,7 @@ import { Plus, Check, Search } from 'lucide-react';
 import { categories, MenuItem } from '../data/menu.ts';
 import { useMenuItems } from '../services/useMenuItems.ts';
 import { useCart } from '../context/CartContext.tsx';
+import { useCurrency } from '../context/CurrencyContext.tsx';
 import { useNavigate } from 'react-router-dom';
 import FavoriteButton from '../components/FavoriteButton.tsx';
 
@@ -78,6 +79,7 @@ const MenuCard = memo(({ item, isAdded, onAdd, index }: {
   onAdd: (item: MenuItem) => void;
   index: number;
 }) => {
+  const { format } = useCurrency();
   const tags = useMemo(() => getDietaryTags(item), [item]);
   const ref = useReveal<HTMLDivElement>((index % 3) * 100);
 
@@ -108,7 +110,7 @@ const MenuCard = memo(({ item, isAdded, onAdd, index }: {
             className="text-[#C17A3A] font-medium text-[14px] md:text-base flex-shrink-0"
             style={{ fontFamily: 'Jost, sans-serif' }}
           >
-            ${item.price}
+            {format(item.price)}
           </span>
         </div>
         <p

@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { adminGet } from '../../services/adminApi';
-import { ErrorNote, LoadingNote, PageTitle, StatCard, StatusPill, fmtDate, money } from '../../components/admin/ui';
+import { Avatar, Card, CardHead, EmptyNote, ErrorNote, LoadingNote, PageTitle, StatCard, StatusPill, fmtDate, money, tableCls, tdCls, thCls } from '../../components/admin/ui';
 
 interface DashData {
+  currency: string;
   stats: { revenue: number; totalOrders: number; pendingOrders: number; ordersByStatus: Record<string, number>; customers: number; pendingReservations: number };
-  recentOrders: { id: string; customerName: string; total: number; status: string; paymentStatus: string; createdAt: string }[];
+  recentOrders: { id: string; customerName: string; total: number; status: string; paymentStatus: string; createdAt: string; currency: string }[];
 }
 
 export default function AdminDashboard() {
@@ -24,32 +25,43 @@ export default function AdminDashboard() {
       {!data && !error && <LoadingNote />}
       {data && (
         <>
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-10">
-            <StatCard label="Revenue (paid)" value={money(data.stats.revenue)} />
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5 mb-6">
+            <StatCard label={`Revenue (paid) · ${data.currency}`} value={money(data.stats.revenue, data.currency)} foot="Paid orders in this currency only" />
             <StatCard label="Total orders" value={data.stats.totalOrders} />
-            <StatCard label="Pending orders" value={data.stats.pendingOrders} />
+            <StatCard label="Pending orders" value={data.stats.pendingOrders} foot="Waiting to be confirmed" />
             <StatCard label="Customers" value={data.stats.customers} />
-            <StatCard label="Pending reservations" value={data.stats.pendingReservations} />
+            <StatCard label="Pending reservations" value={data.stats.pendingReservations} foot="Bookings to confirm" />
             {Object.entries(data.stats.ordersByStatus).map(([status, count]) => (
               <StatCard key={status} label={status.replace(/_/g, ' ')} value={count} />
             ))}
           </div>
-          <h2 className="font-display text-2xl mb-4">Recent orders</h2>
-          {data.recentOrders.length === 0 ? (
-            <p className="font-bodytext text-sm text-[#F5F0E8]/50">No orders yet.</p>
-          ) : (
-            <div className="space-y-3">
-              {data.recentOrders.map((o) => (
-                <div key={o.id} className="flex flex-wrap items-center justify-between gap-3 bg-[#1C2B1E] border border-white/10 px-5 py-4">
-                  <div>
-                    <p className="font-bodytext text-sm">{o.customerName}</p>
-                    <p className="font-bodytext text-xs text-[#F5F0E8]/45">{fmtDate(o.createdAt)} · {money(o.total)}</p>
-                  </div>
-                  <div className="flex gap-2"><StatusPill status={o.status} /><StatusPill status={o.paymentStatus} /></div>
-                </div>
-              ))}
-            </div>
-          )}
+          <Card>
+            <CardHead title="Recent orders" />
+            {data.recentOrders.length === 0 ? (
+              <EmptyNote message="No orders yet." />
+            ) : (
+              <div className="overflow-x-auto">
+                <table className={tableCls}>
+                  <thead>
+                    <tr><th className={thCls}>Order</th><th className={thCls}>Customer</th><th className={thCls}>Date</th><th className={thCls}>Status</th><th className={`${thCls} text-right`}>Total</th></tr>
+                  </thead>
+                  <tbody>
+                    {data.recentOrders.map((o) => (
+                      <tr key={o.id} className="hover:bg-[#FDFBF7]">
+                        <td className={`${tdCls} font-semibold text-[#8A551F]`}>#{o.id.slice(0, 8)}</td>
+                        <td className={tdCls}>
+                          <span className="flex items-center gap-2.5"><Avatar name={o.customerName} /><b className="font-semibold">{o.customerName}</b></span>
+                        </td>
+                        <td className={`${tdCls} text-[#5C665C] whitespace-nowrap`}>{fmtDate(o.createdAt)}</td>
+                        <td className={tdCls}><span className="flex gap-1.5 flex-wrap"><StatusPill status={o.status} /><StatusPill status={o.paymentStatus} /></span></td>
+                        <td className={`${tdCls} text-right font-semibold [font-variant-numeric:tabular-nums]`}>{money(o.total, o.currency)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Card>
         </>
       )}
     </div>

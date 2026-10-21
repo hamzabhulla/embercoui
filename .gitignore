@@ -19,3 +19,4 @@ dist/
 
 # Vercel
 .vercel
+*.tsbuildinfo

@@ -3,11 +3,12 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { Check } from 'lucide-react';
 import { apiRequest } from '../services/api.ts';
 import { supabase } from '../lib/supabase.ts';
+import { useCurrency } from '../context/CurrencyContext.tsx';
 
 interface OrderItem { menuItemId: number | null; name: string; unitPrice: number; quantity: number }
 interface Order {
   id: string; status: string; paymentStatus: string;
-  subtotal: number; deliveryFee: number; discount: number; total: number;
+  subtotal: number; deliveryFee: number; discount: number; total: number; currency: string;
   items: OrderItem[]; createdAt: string;
   address: { line1?: string; city?: string } | null;
   customerName: string;
@@ -31,6 +32,7 @@ const paymentText: Record<string, string> = {
 };
 
 export default function TrackOrder() {
+  const { format } = useCurrency();
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [order, setOrder] = useState<Order | null>(null);
@@ -173,16 +175,16 @@ export default function TrackOrder() {
             {order.items.map((i, idx) => (
               <div key={idx} className="flex justify-between gap-3">
                 <span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: 'rgba(245,240,232,0.7)' }}>{i.quantity} × {i.name}</span>
-                <span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: '#F5F0E8' }}>${(i.unitPrice * i.quantity).toFixed(2)}</span>
+                <span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: '#F5F0E8' }}>{format(i.unitPrice * i.quantity, order.currency)}</span>
               </div>
             ))}
           </div>
           <div style={{ height: '1px', background: 'rgba(255,255,255,0.08)', marginBottom: '14px' }} />
           <div className="flex flex-col gap-2">
-            <div className="flex justify-between"><span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: 'rgba(245,240,232,0.5)' }}>Subtotal</span><span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: '#F5F0E8' }}>${order.subtotal.toFixed(2)}</span></div>
-            {order.discount > 0 && <div className="flex justify-between"><span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: 'rgba(245,240,232,0.5)' }}>Discount</span><span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: '#4ade80' }}>−${order.discount.toFixed(2)}</span></div>}
+            <div className="flex justify-between"><span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: 'rgba(245,240,232,0.5)' }}>Subtotal</span><span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: '#F5F0E8' }}>{format(order.subtotal, order.currency)}</span></div>
+            {order.discount > 0 && <div className="flex justify-between"><span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: 'rgba(245,240,232,0.5)' }}>Discount</span><span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: '#4ade80' }}>−{format(order.discount, order.currency)}</span></div>}
             <div className="flex justify-between"><span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: 'rgba(245,240,232,0.5)' }}>Delivery</span><span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: '#4ade80' }}>Free</span></div>
-            <div className="flex justify-between mt-1"><span style={{ fontFamily: 'Jost, sans-serif', fontSize: '13px', color: '#F5F0E8' }}>Total</span><span style={{ fontFamily: 'Cormorant Garamond, serif', fontSize: '22px', color: '#C17A3A' }}>${order.total.toFixed(2)}</span></div>
+            <div className="flex justify-between mt-1"><span style={{ fontFamily: 'Jost, sans-serif', fontSize: '13px', color: '#F5F0E8' }}>Total</span><span style={{ fontFamily: 'Cormorant Garamond, serif', fontSize: '22px', color: '#C17A3A' }}>{format(order.total, order.currency)}</span></div>
           </div>
           {order.address?.line1 && (
             <p className="mt-5" style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: 'rgba(245,240,232,0.45)' }}>

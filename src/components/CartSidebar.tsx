@@ -1,10 +1,12 @@
 import { X } from 'lucide-react';
 import { useCart } from '../context/CartContext.tsx';
+import { useCurrency } from '../context/CurrencyContext.tsx';
 import { useNavigate } from 'react-router-dom';
 
 export default function CartSidebar() {
   const navigate = useNavigate();
   const { items, isOpen, setIsOpen, updateQuantity } = useCart();
+  const { format } = useCurrency();
 
   const total = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
 
@@ -211,7 +213,7 @@ export default function CartSidebar() {
                           color: '#C17A3A'
                         }}
                       >
-                        ${(item.price * item.quantity).toFixed(2)}
+                        {format(item.price * item.quantity)}
                       </span>
                     </div>
                   </div>
@@ -245,7 +247,7 @@ export default function CartSidebar() {
                   fontSize: '18px',
                   color: '#F5F0E8'
                 }}>
-                  ${total.toFixed(2)}
+                  {format(total)}
                 </span>
               </div>
               <div className="flex justify-between items-center">

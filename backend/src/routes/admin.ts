@@ -5,6 +5,7 @@ import { requireAuth, requireRole } from '../lib/auth';
 import type { TokenVerifier } from '../lib/auth';
 import { validateBody } from '../middleware/validate';
 import { assertImageUpload, type StorageService } from '../lib/storage';
+import { isValidCurrencyCode, roundMajorUnits } from '../lib/currency';
 import type { OrderStatus, Repository } from '../repositories/types';
 
 const ORDER_STATUSES = ['pending', 'confirmed', 'preparing', 'ready', 'out_for_delivery', 'delivered', 'cancelled'] as const;
@@ -39,6 +40,12 @@ const settingsSchema = z.object({
   kitchenOpen: z.boolean().optional(),
   waitMin: z.number().int().min(0).max(240).optional(),
   waitMax: z.number().int().min(0).max(240).optional(),
+  currency: z
+    .string()
+    .trim()
+    .transform((s) => s.toUpperCase())
+    .refine((s) => isValidCurrencyCode(s), 'Unsupported currency code — use an ISO 4217 code like USD, EUR or PKR')
+    .optional(),
   restaurantName: z.string().trim().min(1).max(120).optional(),
   phone: z.string().trim().max(30).nullable().optional(),
   email: z.string().trim().email('Invalid email format').nullable().optional(),
@@ -69,14 +76,21 @@ export function adminRouter(deps: AdminDeps) {
   router.get('/dashboard', async (_req, res, next) => {
     try {
       const r = repo();
-      const [orders, customers, reservations] = await Promise.all([
-        r.adminListOrders(), r.adminListCustomers(), r.adminListReservations(),
+      const [orders, customers, reservations, settings] = await Promise.all([
+        r.adminListOrders(), r.adminListCustomers(), r.adminListReservations(), r.getSettings(),
       ]);
-      const revenue = orders.filter((o) => o.paymentStatus === 'paid').reduce((s, o) => s + o.total, 0);
+      const currency = settings.currency;
+      // Revenue is money: only orders denominated in the CURRENT currency
+      // may be summed — never silently add different currencies together.
+      // Counts (orders/customers/reservations) are not money and stay global.
+      const revenue = orders
+        .filter((o) => o.paymentStatus === 'paid' && o.currency === currency)
+        .reduce((s, o) => s + o.total, 0);
       const byStatus = Object.fromEntries(ORDER_STATUSES.map((s) => [s, orders.filter((o) => o.status === s).length]));
       res.json({
+        currency,
         stats: {
-          revenue: Math.round(revenue * 100) / 100,
+          revenue: roundMajorUnits(revenue, currency),
           totalOrders: orders.length,
           pendingOrders: byStatus.pending ?? 0,
           ordersByStatus: byStatus,
@@ -242,7 +256,14 @@ export function adminRouter(deps: AdminDeps) {
 
   router.get('/finance', async (_req, res, next) => {
     try {
-      const orders = (await repo().adminListOrders()).filter((o) => o.paymentStatus === 'paid');
+      const r = repo();
+      const settings = await r.getSettings();
+      const currency = settings.currency;
+      // The whole finance report is money: restrict it to paid orders in the
+      // CURRENT currency so totals/byDay/byMonth never mix currencies.
+      const orders = (await r.adminListOrders()).filter(
+        (o) => o.paymentStatus === 'paid' && o.currency === currency,
+      );
       const byDay = new Map<string, { date: string; revenue: number; orders: number }>();
       const byMonth = new Map<string, { month: string; revenue: number; orders: number }>();
       for (const o of orders) {
@@ -253,8 +274,9 @@ export function adminRouter(deps: AdminDeps) {
         const m = byMonth.get(month) ?? { month, revenue: 0, orders: 0 };
         m.revenue += o.total; m.orders += 1; byMonth.set(month, m);
       }
-      const round = (n: number) => Math.round(n * 100) / 100;
+      const round = (n: number) => roundMajorUnits(n, currency);
       res.json({
+        currency,
         totalRevenue: round(orders.reduce((s, o) => s + o.total, 0)),
         totalPaidOrders: orders.length,
         averageOrderValue: orders.length ? round(orders.reduce((s, o) => s + o.total, 0) / orders.length) : 0,

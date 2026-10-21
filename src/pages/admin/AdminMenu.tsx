@@ -1,7 +1,8 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { adminGet, adminSend } from '../../services/adminApi';
 import { useAuth } from '../../context/AuthContext';
-import { ErrorNote, LoadingNote, PageTitle, dangerBtn, ghostBtn, inputCls, labelCls, money, primaryBtn } from '../../components/admin/ui';
+import { useCurrency } from '../../context/CurrencyContext';
+import { Card, EmptyNote, ErrorNote, FChip, LoadingNote, NoticeNote, PageTitle, SearchInput, Toggle, chipDangerBtn, chipGhostBtn, ghostBtn, inputCls, labelCls, money, primaryBtn, tableCls, tdCls, thCls } from '../../components/admin/ui';
 
 interface Item { id: number; name: string; description: string; price: number; image: string; category: string; tags: string[]; isAvailable: boolean; sortOrder: number }
 const EMPTY: Omit<Item, 'id'> = { name: '', description: '', price: 0, image: '', category: '', tags: [], isAvailable: true, sortOrder: 0 };
@@ -71,9 +72,14 @@ export default function AdminMenu() {
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
+  const { currency } = useCurrency();
+  const [loaded, setLoaded] = useState(false);
+  const [query, setQuery] = useState('');
+  const [catFilter, setCatFilter] = useState('All');
 
   const load = () => {
-    adminGet<{ items: Item[] }>('/api/v1/admin/menu').then((d) => setItems(d.items)).catch((e: Error) => setError(e.message));
+    adminGet<{ items: Item[] }>('/api/v1/admin/menu').then((d) => setItems(d.items)).catch((e: Error) => setError(e.message)).finally(() => setLoaded(true));
   };
   useEffect(load, []);
 
@@ -111,16 +117,70 @@ export default function AdminMenu() {
     catch (e) { setError((e as Error).message); }
   };
 
+  const categories = useMemo(() => [...new Set(items.map((i) => i.category))], [items]);
+  const filtered = items.filter((i) =>
+    (catFilter === 'All' || i.category === catFilter) &&
+    i.name.toLowerCase().includes(query.trim().toLowerCase()));
+  const scrollToForm = () => formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  const startAdd = () => { setForm(EMPTY); setTagsText(''); scrollToForm(); };
+
   return (
     <div>
-      <PageTitle sub="Changes appear on the public menu immediately">Menu</PageTitle>
+      <PageTitle sub="Changes appear on the public menu immediately" actions={<>
+        <SearchInput value={query} onChange={setQuery} placeholder="Search dishes…" />
+        <button className={primaryBtn} onClick={startAdd}>+ Add dish</button>
+      </>}>Menu</PageTitle>
       {error && <ErrorNote message={error} />}
-      {notice && <p className="font-bodytext text-sm text-[#4ade80] mb-4">{notice}</p>}
-      <form onSubmit={save} className="bg-[#1C2B1E] border border-white/10 p-6 mb-10 grid md:grid-cols-2 gap-4">
+      {notice && <NoticeNote message={notice} />}
+      <div className="flex flex-wrap gap-2 mb-5">
+        <FChip active={catFilter === 'All'} onClick={() => setCatFilter('All')}>All · {items.length}</FChip>
+        {categories.map((c) => (
+          <FChip key={c} active={catFilter === c} onClick={() => setCatFilter(c)}>{c} · {items.filter((i) => i.category === c).length}</FChip>
+        ))}
+      </div>
+      <Card className="mb-8 overflow-hidden">
+        {!loaded && <LoadingNote />}
+        {loaded && filtered.length === 0 && <EmptyNote message={items.length === 0 ? 'No dishes yet — add your first dish below.' : 'No dishes match this filter.'} />}
+        {filtered.length > 0 && (
+          <div className="overflow-x-auto">
+            <table className={tableCls}>
+              <thead>
+                <tr><th className={thCls}>Dish</th><th className={thCls}>Category</th><th className={thCls}>Tags</th><th className={thCls}>Price</th><th className={thCls}>Available</th><th className={thCls}></th></tr>
+              </thead>
+              <tbody>
+                {filtered.map((item) => (
+                  <tr key={item.id} className="hover:bg-[#FDFBF7]">
+                    <td className={tdCls}>
+                      <span className="flex items-center gap-3 min-w-0">
+                        {item.image && <img src={item.image} alt="" className="w-11 h-11 rounded-[9px] object-cover shrink-0" />}
+                        <span className="min-w-0"><b className="font-semibold block truncate max-w-[260px]">{item.name}</b><span className="block text-[12px] text-[#98A096] truncate max-w-[260px]">{item.description}</span></span>
+                      </span>
+                    </td>
+                    <td className={`${tdCls} text-[#5C665C]`}>{item.category}</td>
+                    <td className={tdCls}>
+                      {item.tags.length ? <span className="flex gap-1 flex-wrap">{item.tags.map((t) => <span key={t} className="px-2 py-[2px] rounded-full bg-[#EFE9DB] text-[#5C665C] text-[11px] font-medium whitespace-nowrap">{t}</span>)}</span> : <span className="text-[#98A096]">—</span>}
+                    </td>
+                    <td className={`${tdCls} font-semibold text-[#8A551F] whitespace-nowrap`}>{money(item.price, currency)}</td>
+                    <td className={tdCls}><Toggle on={item.isAvailable} onClick={() => void toggleAvailable(item)} label={`${item.isAvailable ? 'Hide' : 'Show'} ${item.name} on the public menu`} /></td>
+                    <td className={tdCls}>
+                      <span className="flex gap-2 justify-end">
+                        <button className={chipGhostBtn} onClick={() => { setForm(item); setTagsText(item.tags.join(', ')); scrollToForm(); }}>Edit</button>
+                        {isAdmin && <button className={chipDangerBtn} disabled={busy} onClick={() => void remove(item.id)}>Delete</button>}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+      <form ref={formRef} onSubmit={save} className="bg-white border border-[#EAE3D3] rounded-[14px] shadow-[0_1px_2px_rgba(22,36,26,0.03),0_10px_24px_-18px_rgba(22,36,26,0.18)] p-6 grid md:grid-cols-2 gap-4 scroll-mt-24">
+        <h2 className="font-display text-[22px] font-semibold text-[#16241A] md:col-span-2">{form.id ? 'Edit dish' : 'Add a dish'}</h2>
         <div><label className={labelCls} htmlFor="m-name">Name</label><input id="m-name" className={inputCls} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required /></div>
         <div><label className={labelCls} htmlFor="m-cat">Category</label><input id="m-cat" className={inputCls} value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} required /></div>
         <div className="md:col-span-2"><label className={labelCls} htmlFor="m-desc">Description</label><textarea id="m-desc" className={inputCls} rows={2} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
-        <div><label className={labelCls} htmlFor="m-price">Price ($)</label><input id="m-price" type="number" min="0" step="0.01" className={inputCls} value={form.price} onChange={(e) => setForm({ ...form, price: Number(e.target.value) })} required /></div>
+        <div><label className={labelCls} htmlFor="m-price">Price ({currency})</label><input id="m-price" type="number" min="0" step="0.01" className={inputCls} value={form.price} onChange={(e) => setForm({ ...form, price: Number(e.target.value) })} required /></div>
         <div><label className={labelCls} htmlFor="m-sort">Sort order</label><input id="m-sort" type="number" className={inputCls} value={form.sortOrder} onChange={(e) => setForm({ ...form, sortOrder: Number(e.target.value) })} /></div>
         <div>
           <label className={labelCls} htmlFor="m-img">Image URL</label>
@@ -131,33 +191,14 @@ export default function AdminMenu() {
           </div>
         </div>
         <div><label className={labelCls} htmlFor="m-tags">Dietary tags (comma separated)</label><input id="m-tags" className={inputCls} value={tagsText} onChange={(e) => setTagsText(e.target.value)} placeholder="Vegan, Gluten-Free" /></div>
-        <label className="flex items-center gap-2 font-bodytext text-sm md:col-span-2">
-          <input type="checkbox" checked={form.isAvailable} onChange={(e) => setForm({ ...form, isAvailable: e.target.checked })} className="accent-[#C17A3A]" /> Available on the public menu
+        <label className="flex items-center gap-2 font-bodytext text-[13.5px] text-[#16241A] md:col-span-2">
+          <input type="checkbox" checked={form.isAvailable} onChange={(e) => setForm({ ...form, isAvailable: e.target.checked })} className="accent-[#C17A3A] w-4 h-4" /> Available on the public menu
         </label>
         <div className="md:col-span-2 flex gap-2">
           <button type="submit" disabled={busy} className={primaryBtn}>{form.id ? 'Save changes' : 'Add dish'}</button>
           {form.id && <button type="button" className={ghostBtn} onClick={() => { setForm(EMPTY); setTagsText(''); }}>Cancel edit</button>}
         </div>
       </form>
-      {items.length === 0 && <LoadingNote />}
-      <div className="space-y-3">
-        {items.map((item) => (
-          <div key={item.id} className="flex flex-wrap items-center justify-between gap-3 bg-[#1C2B1E] border border-white/10 px-5 py-4">
-            <div className="flex items-center gap-4 min-w-0">
-              {item.image && <img src={item.image} alt="" className="w-14 h-14 object-cover" />}
-              <div>
-                <p className="font-bodytext text-sm">{item.name} <span className="text-[#C17A3A]">{money(item.price)}</span></p>
-                <p className="font-bodytext text-xs text-[#F5F0E8]/45">{item.category}{item.tags.length ? ` · ${item.tags.join(', ')}` : ''} · {item.isAvailable ? 'Available' : 'Hidden'}</p>
-              </div>
-            </div>
-            <div className="flex gap-2">
-              <button className={ghostBtn} onClick={() => void toggleAvailable(item)}>{item.isAvailable ? 'Hide' : 'Show'}</button>
-              <button className={ghostBtn} onClick={() => { setForm(item); setTagsText(item.tags.join(', ')); window.scrollTo({ top: 0, behavior: 'smooth' }); }}>Edit</button>
-              {isAdmin && <button className={dangerBtn} disabled={busy} onClick={() => void remove(item.id)}>Delete</button>}
-            </div>
-          </div>
-        ))}
-      </div>
     </div>
   );
 }

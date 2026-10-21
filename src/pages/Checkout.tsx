@@ -6,6 +6,8 @@ import { useCart } from '../context/CartContext.tsx';
 import { useAuth } from '../context/AuthContext.tsx';
 import { apiRequest } from '../services/api.ts';
 import { stripePromise } from '../lib/stripe.ts';
+import { useCurrency } from '../context/CurrencyContext.tsx';
+import { fromMinorUnits, toMinorUnits } from '../lib/currency.ts';
 
 interface CreatedOrder { id: string; total: number }
 interface AppliedCoupon { code: string; type: 'percent' | 'fixed'; value: number }
@@ -61,6 +63,7 @@ function CardPaymentForm({ orderId, onPaid }: { orderId: string; onPaid: (id: st
 }
 
 export default function Checkout() {
+  const { format, currency } = useCurrency();
   const navigate = useNavigate();
   const { items, clearCart } = useCart();
   const { profile } = useAuth();
@@ -99,12 +102,13 @@ export default function Checkout() {
   const subtotal = useMemo(() => items.reduce((s, i) => s + i.price * i.quantity, 0), [items]);
   const discount = useMemo(() => {
     if (!coupon) return 0;
-    // Mirror the server's integer-cent math so the preview never differs by a cent.
-    const discountCents = coupon.type === 'percent'
-      ? Math.round(subtotal * 100 * (coupon.value / 100))
-      : Math.round(Math.min(coupon.value, subtotal) * 100);
-    return discountCents / 100;
-  }, [coupon, subtotal]);
+    // Mirror the server's integer minor-unit math (in the active
+    // currency) so the preview never differs from the charged amount.
+    const discountMinor = coupon.type === 'percent'
+      ? Math.round(toMinorUnits(subtotal, currency) * (coupon.value / 100))
+      : Math.min(toMinorUnits(coupon.value, currency), toMinorUnits(subtotal, currency));
+    return fromMinorUnits(discountMinor, currency);
+  }, [coupon, subtotal, currency]);
   const total = Math.max(0, subtotal - discount);
 
   const applyCoupon = async () => {
@@ -116,7 +120,7 @@ export default function Checkout() {
     });
     if (res.ok && res.data?.valid && res.data.coupon) {
       setCoupon(res.data.coupon);
-      setCouponMsg(`Coupon applied — ${res.data.coupon.type === 'percent' ? `${res.data.coupon.value}% off` : `$${res.data.coupon.value} off`}.`);
+      setCouponMsg(`Coupon applied — ${res.data.coupon.type === 'percent' ? `${res.data.coupon.value}% off` : `${format(res.data.coupon.value)} off`}.`);
     } else {
       setCoupon(null);
       setCouponMsg('This coupon code is not valid.');
@@ -263,7 +267,7 @@ export default function Checkout() {
                 {items.map((i) => (
                   <div key={i.id} className="flex justify-between gap-3">
                     <span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: 'rgba(245,240,232,0.7)' }}>{i.quantity} × {i.name}</span>
-                    <span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: '#F5F0E8' }}>${(i.price * i.quantity).toFixed(2)}</span>
+                    <span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: '#F5F0E8' }}>{format(i.price * i.quantity)}</span>
                   </div>
                 ))}
               </div>
@@ -278,10 +282,10 @@ export default function Checkout() {
               {couponMsg && <p className="mb-4" style={{ fontFamily: 'Jost, sans-serif', fontSize: '11px', color: coupon ? '#4ade80' : '#ef4444' }}>{couponMsg}</p>}
               <div style={{ height: '1px', background: 'rgba(255,255,255,0.08)', marginBottom: '16px' }} />
               <div className="flex flex-col gap-2 mb-6">
-                <div className="flex justify-between"><span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: 'rgba(245,240,232,0.5)' }}>Subtotal</span><span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: '#F5F0E8' }}>${subtotal.toFixed(2)}</span></div>
-                {discount > 0 && <div className="flex justify-between"><span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: 'rgba(245,240,232,0.5)' }}>Discount</span><span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: '#4ade80' }}>−${discount.toFixed(2)}</span></div>}
+                <div className="flex justify-between"><span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: 'rgba(245,240,232,0.5)' }}>Subtotal</span><span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: '#F5F0E8' }}>{format(subtotal)}</span></div>
+                {discount > 0 && <div className="flex justify-between"><span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: 'rgba(245,240,232,0.5)' }}>Discount</span><span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: '#4ade80' }}>−{format(discount)}</span></div>}
                 <div className="flex justify-between"><span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: 'rgba(245,240,232,0.5)' }}>Delivery</span><span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: '#4ade80' }}>Free</span></div>
-                <div className="flex justify-between mt-2"><span style={{ fontFamily: 'Jost, sans-serif', fontSize: '13px', color: '#F5F0E8' }}>Total</span><span style={{ fontFamily: 'Cormorant Garamond, serif', fontSize: '22px', color: '#C17A3A' }}>${total.toFixed(2)}</span></div>
+                <div className="flex justify-between mt-2"><span style={{ fontFamily: 'Jost, sans-serif', fontSize: '13px', color: '#F5F0E8' }}>Total</span><span style={{ fontFamily: 'Cormorant Garamond, serif', fontSize: '22px', color: '#C17A3A' }}>{format(total)}</span></div>
               </div>
               {error && <p className="text-[#ef4444] mb-4" style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px' }}>{error}</p>}
               <button type="submit" disabled={placing} style={emberButton} className="transition-all duration-300 hover:brightness-110 disabled:opacity-60">
