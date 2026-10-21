@@ -15,6 +15,7 @@ export interface PublicSettings {
   phone: string | null;
   email: string | null;
   address: string | null;
+  whatsappNumber: string | null;
   openingHours: Record<string, unknown>;
 }
 

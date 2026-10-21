@@ -13,7 +13,7 @@ export class FakeRepository implements Repository {
   ];
   settings: PublicSettingsDTO = {
     kitchenOpen: true, waitMin: 20, waitMax: 30, currency: 'USD', restaurantName: 'Ember & Co.',
-    phone: null, email: null, address: null, openingHours: {},
+    phone: null, email: null, address: null, whatsappNumber: null, openingHours: {},
   };
   reviews: (ReviewDTO & { isApproved: boolean; userId?: string | null })[] = [
     { id: 'rev-1', name: 'Amélie Fontaine', rating: 5, comment: 'Wonderful.', country: 'France', createdAt: '2026-01-01T00:00:00Z', isApproved: true },
@@ -217,6 +217,6 @@ export function testEnv(overrides: Partial<import('../src/config/env').Env> = {}
     nodeEnv: 'test', port: 0, corsOrigins: ['http://localhost:5173'],
     supabaseUrl: 'https://example.supabase.co', supabaseServiceRoleKey: 'service-key',
     supabaseConfigured: true, stripeSecretKey: 'sk_test_fake', stripeWebhookSecret: 'whsec_fake',
-    stripeConfigured: true, ...overrides,
+    stripeConfigured: true, geminiApiKey: null, geminiConfigured: false, ...overrides,
   };
 }

@@ -14,6 +14,8 @@ import type { StorageService } from './lib/storage';
 import type { StripeService } from './lib/stripe';
 import { formsRouter } from './routes/forms';
 import { accountRouter } from './routes/account';
+import { chatRouter } from './routes/chat';
+import type { ChatService } from './lib/chat';
 
 export interface AppDeps {
   env: Env;
@@ -21,6 +23,7 @@ export interface AppDeps {
   verifyToken: TokenVerifier;
   stripe?: StripeService | null;
   storage?: StorageService | null;
+  chat?: ChatService | null;
 }
 
 export function createApp(deps: AppDeps): Express {
@@ -59,6 +62,7 @@ export function createApp(deps: AppDeps): Express {
       status: 'ok',
       supabaseConfigured: deps.env.supabaseConfigured,
       stripeConfigured: deps.env.stripeConfigured,
+      geminiConfigured: deps.env.geminiConfigured,
       timestamp: new Date().toISOString(),
     });
   });
@@ -67,6 +71,7 @@ export function createApp(deps: AppDeps): Express {
   app.use('/api/v1', formsRouter(deps));
   app.use('/api/v1/account', accountRouter(deps));
   app.use('/api/v1', ordersRouter(deps));
+  app.use('/api/v1', chatRouter({ repo: deps.repo, chat: deps.chat ?? null }));
   app.use('/api/v1', paymentsRouter({ repo: deps.repo, stripe: deps.stripe ?? null }));
   app.use('/api/v1/admin', adminRouter({ repo: deps.repo, verifyToken: deps.verifyToken, storage: deps.storage ?? null }));
 

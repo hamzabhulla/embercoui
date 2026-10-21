@@ -19,6 +19,7 @@ import { createApp } from '../backend/src/app.js';
 import { createSupabaseRepository } from '../backend/src/repositories/supabaseRepository.js';
 import { createSupabaseTokenVerifier, type TokenVerifier } from '../backend/src/lib/auth.js';
 import { createStripeService, type StripeService } from '../backend/src/lib/stripe.js';
+import { createGeminiChatService, type ChatService } from '../backend/src/lib/chat.js';
 import { createStorageService, type StorageService } from '../backend/src/lib/storage.js';
 import type { Repository } from '../backend/src/repositories/types.js';
 
@@ -40,6 +41,7 @@ const storage: StorageService | null =
     ? createStorageService(env.supabaseUrl, env.supabaseServiceRoleKey)
     : null;
 
-const app = createApp({ env, repo, verifyToken, stripe, storage });
+const chat: ChatService | null = env.geminiApiKey ? createGeminiChatService(env.geminiApiKey) : null;
+const app = createApp({ env, repo, verifyToken, stripe, storage, chat });
 
 export default app;

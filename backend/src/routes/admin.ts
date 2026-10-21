@@ -50,6 +50,13 @@ const settingsSchema = z.object({
   phone: z.string().trim().max(30).nullable().optional(),
   email: z.string().trim().email('Invalid email format').nullable().optional(),
   address: z.string().trim().max(300).nullable().optional(),
+  whatsappNumber: z
+    .string()
+    .trim()
+    .max(25)
+    .refine((v) => { const d = v.replace(/\D/g, ''); return d.length >= 7 && d.length <= 15; }, 'WhatsApp number must contain 7–15 digits (with country code)')
+    .nullable()
+    .optional(),
   openingHours: z.record(z.unknown()).optional(),
 });
 const uploadSchema = z.object({

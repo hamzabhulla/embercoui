@@ -5,6 +5,7 @@ import { createSupabaseTokenVerifier, type TokenVerifier } from './lib/auth';
 import { createApp } from './app';
 import { createStripeService, type StripeService } from './lib/stripe';
 import { createStorageService, type StorageService } from './lib/storage';
+import { createGeminiChatService, type ChatService } from './lib/chat';
 import type { Repository } from './repositories/types';
 
 function main() {
@@ -28,7 +29,11 @@ function main() {
     env.supabaseConfigured && env.supabaseUrl && env.supabaseServiceRoleKey
       ? createStorageService(env.supabaseUrl, env.supabaseServiceRoleKey)
       : null;
-  const app = createApp({ env, repo, verifyToken, stripe, storage });
+  const chat: ChatService | null = env.geminiApiKey ? createGeminiChatService(env.geminiApiKey) : null;
+  if (!chat) {
+    console.warn('[ember] GEMINI_API_KEY is not set — Ember AI chat will respond 503 until it is configured.');
+  }
+  const app = createApp({ env, repo, verifyToken, stripe, storage, chat });
   app.listen(env.port, () => {
     console.log(`[ember] API listening on http://localhost:${env.port} (${env.nodeEnv})`);
   });

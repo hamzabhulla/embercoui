@@ -8,6 +8,8 @@ export interface Env {
   stripeSecretKey: string | null;
   stripeWebhookSecret: string | null;
   stripeConfigured: boolean;
+  geminiApiKey: string | null;
+  geminiConfigured: boolean;
 }
 
 function parsePort(raw: string | undefined): number {
@@ -28,6 +30,7 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
     );
   }
   const stripeSecretKey = source.STRIPE_SECRET_KEY?.trim() || null;
+  const geminiApiKey = source.GEMINI_API_KEY?.trim() || null;
   const stripeWebhookSecret = source.STRIPE_WEBHOOK_SECRET?.trim() || null;
   return {
     nodeEnv: source.NODE_ENV || 'development',
@@ -42,5 +45,7 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
     stripeSecretKey,
     stripeWebhookSecret,
     stripeConfigured: Boolean(stripeSecretKey),
+    geminiApiKey,
+    geminiConfigured: Boolean(geminiApiKey),
   };
 }

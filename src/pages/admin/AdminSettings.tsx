@@ -7,6 +7,7 @@ import { Card, CardHead, ErrorNote, LoadingNote, NoticeNote, PageTitle, Toggle, 
 interface Settings {
   kitchenOpen: boolean; waitMin: number; waitMax: number; currency: string;
   restaurantName: string; phone: string | null; email: string | null; address: string | null;
+  whatsappNumber: string | null;
   openingHours: Record<string, unknown>;
 }
 
@@ -42,6 +43,7 @@ export default function AdminSettings() {
       const res = await adminSend<{ settings: Settings }>('PATCH', '/api/v1/admin/settings', {
         kitchenOpen: form.kitchenOpen, waitMin: form.waitMin, waitMax: form.waitMax, currency: form.currency,
         restaurantName: form.restaurantName, phone: form.phone, email: form.email, address: form.address,
+        whatsappNumber: form.whatsappNumber,
         openingHours: form.openingHours,
       });
       setForm(res.settings);
@@ -105,6 +107,9 @@ export default function AdminSettings() {
               </SetRow>
               <SetRow title="Address" desc="Contact page aur delivery ke liye">
                 <input id="s-addr" className={inputCls} value={form.address ?? ''} onChange={(e) => setForm({ ...form, address: e.target.value || null })} />
+              </SetRow>
+              <SetRow title="WhatsApp number" desc="Site par tairne wala WhatsApp button isi number par khulta hai — khaali chhoro ge to button nahi dikhega. Country code ke saath likho">
+                <input id="s-whatsapp" className={inputCls} placeholder="+92 300 1234567" value={form.whatsappNumber ?? ''} onChange={(e) => setForm({ ...form, whatsappNumber: e.target.value || null })} />
               </SetRow>
             </div>
           </Card>

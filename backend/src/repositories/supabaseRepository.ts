@@ -35,12 +35,13 @@ function settingsDTO(r: Row): PublicSettingsDTO {
     phone: strOrNull(r.phone),
     email: strOrNull(r.email),
     address: strOrNull(r.address),
+    whatsappNumber: strOrNull(r.whatsapp_number),
     openingHours: (r.opening_hours as Record<string, unknown>) ?? {},
   };
 }
 export const DEFAULT_SETTINGS: PublicSettingsDTO = {
   kitchenOpen: true, waitMin: 20, waitMax: 30, currency: 'USD', restaurantName: 'Ember & Co.',
-  phone: null, email: null, address: null, openingHours: {},
+  phone: null, email: null, address: null, whatsappNumber: null, openingHours: {},
 };
 function reviewDTO(r: Row): ReviewDTO {
   return { id: str(r.id), name: str(r.name), rating: num(r.rating), comment: str(r.comment), country: strOrNull(r.country), createdAt: str(r.created_at) };
@@ -446,6 +447,7 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
       if (patch.phone !== undefined) update.phone = patch.phone;
       if (patch.email !== undefined) update.email = patch.email;
       if (patch.address !== undefined) update.address = patch.address;
+      if (patch.whatsappNumber !== undefined) update.whatsapp_number = patch.whatsappNumber;
       if (patch.openingHours !== undefined) update.opening_hours = patch.openingHours;
       const { error } = await db.from('restaurant_settings').update(update).eq('id', 1);
       if (error) throw new Error(`settings update failed: ${error.message}`);

@@ -18,6 +18,8 @@ export interface PublicSettingsDTO {
   phone: string | null;
   email: string | null;
   address: string | null;
+  /** Digits (with country code) for the site's floating WhatsApp button; null hides the button. */
+  whatsappNumber: string | null;
   openingHours: Record<string, unknown>;
 }
 

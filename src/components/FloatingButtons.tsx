@@ -1,8 +1,92 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { apiRequest, fetchMenuItems, fetchPublicSettings } from '../services/api.ts';
+import { useCart } from '../context/CartContext.tsx';
+
+interface ChatMsg { role: 'user' | 'assistant' | 'note'; content: string }
+interface CartAction { menuItemId: number; quantity: number }
 
 export default function FloatingButtons() {
   const [isOpen, setIsOpen] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
+  const [chatMessages, setChatMessages] = useState<ChatMsg[]>([]);
+  const [draft, setDraft] = useState('');
+  const [sending, setSending] = useState(false);
+  const [sendFailed, setSendFailed] = useState(false);
+  const [unavailable, setUnavailable] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const { addItem, updateQuantity, setIsOpen: setCartOpen, items: cartItems } = useCart();
+  const [whatsapp, setWhatsapp] = useState<string | null>(null);
+
+  // The WhatsApp button exists only when the restaurant set a number in
+  // Admin → Settings. Digits only — wa.me wants the international format.
+  useEffect(() => {
+    void fetchPublicSettings().then((settings) => {
+      const digits = (settings?.whatsappNumber ?? '').replace(/\D/g, '');
+      setWhatsapp(digits.length >= 7 ? digits : null);
+    });
+  }, []);
+
+  const applyCartActions = async (actions: CartAction[]) => {
+    const menu = await fetchMenuItems();
+    if (!menu) return;
+    const byId = new Map(menu.map((m) => [m.id, m]));
+    const running = new Map(cartItems.map((i) => [i.id, i.quantity]));
+    const added: string[] = [];
+    for (const a of actions) {
+      const m = byId.get(a.menuItemId);
+      if (!m) continue;
+      addItem({ id: m.id, name: m.name, price: m.price, image: m.image });
+      const target = (running.get(m.id) ?? 0) + a.quantity;
+      updateQuantity(m.id, target);
+      running.set(m.id, target);
+      added.push(`${a.quantity} × ${m.name}`);
+    }
+    if (added.length) {
+      setChatMessages((prev) => [...prev, { role: 'note', content: `Added to your cart: ${added.join(' · ')} — review it and check out whenever you're ready.` }]);
+      window.setTimeout(() => setCartOpen(true), 900);
+    }
+  };
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
+  }, [chatMessages, sending, isChatOpen]);
+
+  const sendChat = async (text: string, history: ChatMsg[]) => {
+    // Notes are display-only — the API accepts just user/assistant turns.
+    const payload: ChatMsg[] = [...history.filter((m) => m.role !== 'note'), { role: 'user' as const, content: text }].slice(-12);
+    setChatMessages([...history, { role: 'user', content: text }]);
+    setSending(true);
+    setSendFailed(false);
+    const res = await apiRequest<{ reply: string; actions?: CartAction[] }>('/api/v1/chat', {
+      method: 'POST',
+      body: JSON.stringify({ messages: payload }),
+    });
+    setSending(false);
+    if (res.ok && res.data?.reply) {
+      setChatMessages((prev) => [...prev, { role: 'assistant', content: res.data!.reply }]);
+      if (res.data.actions?.length) void applyCartActions(res.data.actions);
+    } else if (res.status === 503) {
+      setUnavailable(true);
+      setChatMessages((prev) => [...prev, { role: 'assistant', content: "I'm not available right now — please browse the menu above, or call us and we'll be happy to help." }]);
+    } else {
+      setSendFailed(true);
+    }
+  };
+
+  const submitChat = (e: React.FormEvent) => {
+    e.preventDefault();
+    const text = draft.trim();
+    if (!text || sending || unavailable) return;
+    setDraft('');
+    void sendChat(text, chatMessages);
+  };
+
+  const retryChat = () => {
+    const lastUser = [...chatMessages].reverse().find((m) => m.role === 'user');
+    if (!lastUser || sending) return;
+    const history = chatMessages.slice(0, chatMessages.lastIndexOf(lastUser));
+    void sendChat(lastUser.content, history);
+  };
 
   useEffect(() => {
     if (isChatOpen) {
@@ -59,34 +143,74 @@ export default function FloatingButtons() {
         </div>
         
         {/* Body */}
-        <div className="flex-1 pt-[32px] px-[24px] pb-[32px] flex flex-col bg-[#FDFAF5] items-center justify-center text-center overflow-y-auto">
-          <div className="w-16 h-16 bg-[#C17A3A]/10 rounded-full flex items-center justify-center mb-4 shrink-0">
-            <span className="text-3xl text-[#C17A3A]" style={{ fontFamily: 'Cormorant Garamond, serif' }}>✦</span>
-          </div>
-          <h3 className="text-xl font-medium mb-2 shrink-0" style={{ fontFamily: 'Cormorant Garamond, serif', color: '#1C2B1E' }}>
-            Ember AI Assistant
-          </h3>
-          <p className="text-[13px] opacity-70 max-w-[250px] shrink-0" style={{ fontFamily: 'Jost, sans-serif' }}>
-            I'm here to help with reservations, menu questions, and more.
-          </p>
+        <div ref={scrollRef} className="flex-1 bg-[#FDFAF5] overflow-y-auto px-[18px] py-[20px]">
+          {chatMessages.length === 0 ? (
+            <div className="h-full flex flex-col items-center justify-center text-center">
+              <div className="w-16 h-16 bg-[#C17A3A]/10 rounded-full flex items-center justify-center mb-4 shrink-0">
+                <span className="text-3xl text-[#C17A3A]" style={{ fontFamily: 'Cormorant Garamond, serif' }}>✦</span>
+              </div>
+              <h3 className="text-xl font-medium mb-2 shrink-0" style={{ fontFamily: 'Cormorant Garamond, serif', color: '#1C2B1E' }}>
+                Ember AI Assistant
+              </h3>
+              <p className="text-[13px] opacity-70 max-w-[250px] shrink-0" style={{ fontFamily: 'Jost, sans-serif' }}>
+                Ask me anything about our menu, reservations, or dining experience.
+              </p>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {chatMessages.map((m, i) => m.role === 'note' ? (
+                <div key={i} className="self-center text-center px-3 py-1.5 rounded-full border border-[#C17A3A]/30 bg-[#C17A3A]/10 text-[11.5px] text-[#8A5A24]" style={{ fontFamily: 'Jost, sans-serif' }}>
+                  ✓ {m.content}
+                </div>
+              ) : (
+                <div
+                  key={i}
+                  className={`max-w-[85%] px-3.5 py-2.5 text-[13px] leading-relaxed whitespace-pre-wrap ${m.role === 'user' ? 'self-end text-white rounded-2xl rounded-br-md' : 'self-start text-[#1C2B1E] rounded-2xl rounded-bl-md border border-black/5'}`}
+                  style={{ fontFamily: 'Jost, sans-serif', background: m.role === 'user' ? '#C17A3A' : '#F5F0E8' }}
+                >
+                  {m.content}
+                </div>
+              ))}
+              {sending && (
+                <div className="self-start px-3.5 py-2.5 rounded-2xl rounded-bl-md border border-black/5 animate-pulse" style={{ fontFamily: 'Jost, sans-serif', background: '#F5F0E8', fontSize: '13px', color: 'rgba(28,43,30,0.55)' }}>
+                  Ember AI is typing…
+                </div>
+              )}
+              {sendFailed && !sending && (
+                <div className="self-start text-[12px]" style={{ fontFamily: 'Jost, sans-serif', color: '#B4552D' }}>
+                  That message didn't go through.{' '}
+                  <button type="button" onClick={retryChat} className="underline font-medium">Try again</button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Bottom Input */}
         <div className="bg-white border-t border-black/5 p-3 shrink-0">
-          <div className="flex items-center gap-2 bg-[#F5F0E8] rounded-full px-4 py-2">
-            <input 
-              type="text" 
-              placeholder="Ask me anything about our menu, reservations, or dining experience." 
-              className="flex-1 bg-transparent border-none outline-none text-sm text-[#1C2B1E] placeholder:text-[#1C2B1E]/40"
+          <form onSubmit={submitChat} className="flex items-center gap-2 bg-[#F5F0E8] rounded-full px-4 py-2">
+            <input
+              type="text"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              maxLength={1000}
+              disabled={unavailable}
+              placeholder={unavailable ? 'Ember AI is unavailable right now' : 'Ask about the menu, timings, reservations…'}
+              className="flex-1 bg-transparent border-none outline-none text-sm text-[#1C2B1E] placeholder:text-[#1C2B1E]/40 disabled:opacity-50"
               style={{ fontFamily: 'Jost, sans-serif' }}
-              readOnly
+              aria-label="Message Ember AI"
             />
-            <button className="w-8 h-8 rounded-full bg-[#C17A3A] text-white flex items-center justify-center shrink-0 hover:bg-[#A66932] transition-colors">
+            <button
+              type="submit"
+              disabled={sending || unavailable || !draft.trim()}
+              className="w-8 h-8 rounded-full bg-[#C17A3A] text-white flex items-center justify-center shrink-0 hover:bg-[#A66932] transition-colors disabled:opacity-40"
+              aria-label="Send message"
+            >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="ml-1">
                 <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
               </svg>
             </button>
-          </div>
+          </form>
         </div>
       </div>
 
@@ -144,7 +268,8 @@ export default function FloatingButtons() {
           </button>
         </div>
 
-        {/* BUTTON 1: WhatsApp */}
+        {/* BUTTON 1: WhatsApp (only when the restaurant set a number) */}
+        {whatsapp && (
         <div 
           className="absolute flex items-center gap-3 right-[36px] will-change-transform"
           style={{
@@ -182,7 +307,7 @@ export default function FloatingButtons() {
           {/* Button */}
           <button
             onClick={() => {
-              window.open('https://wa.me/15035551234', '_blank');
+              window.open(`https://wa.me/${whatsapp}`, '_blank');
               setIsOpen(false);
             }}
             className="w-12 h-12 bg-[#25D366] text-white rounded-full shadow-lg hover:shadow-xl transition-transform hover:scale-110 flex items-center justify-center flex-shrink-0"
@@ -193,6 +318,7 @@ export default function FloatingButtons() {
             </svg>
           </button>
         </div>
+        )}
 
         {/* MAIN SPEED DIAL BUTTON */}
         <div className="absolute bottom-[32px] right-[32px] pointer-events-auto flex items-center justify-center will-change-transform">
