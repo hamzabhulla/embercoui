@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { adminGet, adminSend } from '../../services/adminApi';
 import { useAuth } from '../../context/AuthContext';
 import { useCurrency } from '../../context/CurrencyContext';
+import { currencyExponent } from '../../lib/currency';
 import { Card, EmptyNote, ErrorNote, LoadingNote, NoticeNote, PageTitle, StatusPill, Toggle, chipDangerBtn, inputCls, labelCls, money, primaryBtn, tableCls, tdCls, thCls } from '../../components/admin/ui';
 
 interface Coupon { id: string; code: string; type: 'percent' | 'fixed'; value: number; isActive: boolean; expiresAt: string | null }
@@ -52,7 +53,7 @@ export default function AdminMarketing() {
             <select id="c-type" className={inputCls} value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value as 'percent' | 'fixed' })}>
               <option value="percent">Percent off</option><option value="fixed">Fixed amount</option>
             </select></div>
-          <div><label className={labelCls} htmlFor="c-value">Value{form.type === 'fixed' ? ` (${currency})` : ''}</label><input id="c-value" type="number" min="0" max={form.type === 'percent' ? 100 : undefined} step="0.01" className={inputCls} value={form.value} onChange={(e) => setForm({ ...form, value: Number(e.target.value) })} required /></div>
+          <div><label className={labelCls} htmlFor="c-value">Value{form.type === 'fixed' ? ` (${currency})` : ''}</label><input id="c-value" type="number" min="0" max={form.type === 'percent' ? 100 : undefined} step={form.type === 'fixed' ? 10 ** -currencyExponent(currency) : 0.01} className={inputCls} value={form.value} onChange={(e) => setForm({ ...form, value: Number(e.target.value) })} required /></div>
           <div><label className={labelCls} htmlFor="c-exp">Expires (optional)</label><input id="c-exp" type="date" className={inputCls} value={form.expiresAt} onChange={(e) => setForm({ ...form, expiresAt: e.target.value })} /></div>
           <button type="submit" className={primaryBtn}>Create coupon</button>
         </form>

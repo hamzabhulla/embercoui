@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { adminGet, adminSend } from '../../services/adminApi';
 import { useAuth } from '../../context/AuthContext';
 import { useCurrency } from '../../context/CurrencyContext';
+import { currencyExponent } from '../../lib/currency';
 import { Card, EmptyNote, ErrorNote, FChip, LoadingNote, NoticeNote, PageTitle, SearchInput, Toggle, chipDangerBtn, chipGhostBtn, ghostBtn, inputCls, labelCls, money, primaryBtn, tableCls, tdCls, thCls } from '../../components/admin/ui';
 
 interface Item { id: number; name: string; description: string; price: number; image: string; category: string; tags: string[]; isAvailable: boolean; sortOrder: number }
@@ -191,7 +192,7 @@ export default function AdminMenu() {
         <div><label className={labelCls} htmlFor="m-name">Name</label><input id="m-name" className={inputCls} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required /></div>
         <div><label className={labelCls} htmlFor="m-cat">Category</label><input id="m-cat" className={inputCls} value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} required /></div>
         <div className="md:col-span-2"><label className={labelCls} htmlFor="m-desc">Description</label><textarea id="m-desc" className={inputCls} rows={2} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
-        <div><label className={labelCls} htmlFor="m-price">Price ({currency})</label><input id="m-price" type="number" min="0" step="0.01" className={inputCls} value={form.price} onChange={(e) => setForm({ ...form, price: Number(e.target.value) })} required /></div>
+        <div><label className={labelCls} htmlFor="m-price">Price ({currency})</label><input id="m-price" type="number" min="0" step={10 ** -currencyExponent(currency)} className={inputCls} value={form.price} onChange={(e) => setForm({ ...form, price: Number(e.target.value) })} required /></div>
         <div><label className={labelCls} htmlFor="m-sort">Sort order</label><input id="m-sort" type="number" className={inputCls} value={form.sortOrder} onChange={(e) => setForm({ ...form, sortOrder: Number(e.target.value) })} /></div>
         <div>
           <label className={labelCls} htmlFor="m-img">Image URL</label>

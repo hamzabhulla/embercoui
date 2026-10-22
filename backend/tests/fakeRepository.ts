@@ -1,3 +1,4 @@
+import { currencyExponent } from '../src/lib/currency';
 import { ApiError } from '../src/lib/errors';
 import { DEFAULT_SETTINGS } from '../src/repositories/supabaseRepository';
 import type {
@@ -242,6 +243,12 @@ export class FakeRepository implements Repository {
   async adminListCustomers(): Promise<CustomerDTO[]>;
   async adminListCustomers(page: PageParams): Promise<Page<CustomerDTO>>;
   async adminListCustomers(page?: PageParams): Promise<CustomerDTO[] | Page<CustomerDTO>> {
+    const settingsCurrency = (this.settings ?? DEFAULT_SETTINGS).currency;
+    // Same rounding as the real repository: at the settings currency's
+    // own ISO exponent (3dp for KWD/BHD/…), never a hardcoded 2dp — a
+    // 2dp round here would hide exactly the storage-precision class of
+    // bug migration 0011 fixes (audit-2 fix 5).
+    const expFactor = 10 ** currencyExponent(settingsCurrency);
     const all = [...this.profiles.values()]
       .filter((p) => p.role === 'customer')
       // Same order as the real repository's profiles page:
@@ -255,7 +262,7 @@ export class FakeRepository implements Repository {
           ...p,
           email: `${p.id}@example.com`,
           orderCount: userOrders.length,
-          totalSpent: Math.round(userOrders.filter((o) => o.paymentStatus === 'paid' && o.currency === (this.settings ?? DEFAULT_SETTINGS).currency).reduce((sum, o) => sum + o.total, 0) * 100) / 100,
+          totalSpent: Math.round(userOrders.filter((o) => o.paymentStatus === 'paid' && o.currency === settingsCurrency).reduce((sum, o) => sum + o.total, 0) * expFactor) / expFactor,
         };
       });
     if (!page) return all;
