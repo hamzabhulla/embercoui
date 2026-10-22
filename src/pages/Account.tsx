@@ -64,7 +64,7 @@ const cardBg = 'linear-gradient(180deg, rgba(245,240,232,0.028), rgba(245,240,23
 export default function Account() {
   const { format } = useCurrency();
   const navigate = useNavigate();
-  const { user, profile, loading, signOut, refreshProfile } = useAuth();
+  const { user, profile, loading, profileLoading, profileError, signOut, refreshProfile } = useAuth();
   const { addItem, updateQuantity, setIsOpen, items: cartItems } = useCart();
   const [tab, setTab] = useState<Tab>('Orders');
   const [orders, setOrders] = useState<Order[]>([]);
@@ -253,7 +253,10 @@ export default function Account() {
 
   const handleSignOut = async () => { await signOut(); navigate('/'); };
 
-  if (loading) {
+  // Signed in but the profile has not arrived yet (and has not failed):
+  // the same skeleton as the session load — the page below is built on
+  // profile data, so it must not render before the profile settles.
+  if (loading || (user && !profile && !profileError)) {
     return (
       <div className="min-h-screen pt-[120px] px-6" style={{ background: '#0D1A0E' }}>
         <div className="max-w-5xl mx-auto animate-pulse">
@@ -275,6 +278,27 @@ export default function Account() {
           </p>
           <button onClick={() => navigate('/login', { state: { from: '/account' } })} style={emberButton} className="transition-all duration-300 hover:brightness-110">
             Sign In
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!profile) {
+    // Signed in, but the profile fetch failed (the skeleton above covers
+    // the in-flight window). Say so honestly and offer a retry — never
+    // render an empty name, zero addresses and blank stats as if they
+    // were the account's real data.
+    return (
+      <div className="min-h-screen flex items-center justify-center px-6 py-24" style={{ background: '#0D1A0E' }}>
+        <div className="text-center max-w-md">
+          <p className="uppercase mb-3" style={{ fontFamily: JOST, fontSize: '10px', letterSpacing: '0.25em', color: '#C17A3A' }}>✦ &nbsp; My Account</p>
+          <h1 className="mb-4" style={{ fontFamily: SERIF, fontWeight: 600, color: '#F5F0E8', fontSize: '40px' }}>We couldn't load your account</h1>
+          <p className="mb-8" style={{ fontFamily: JOST, fontSize: '13px', color: '#D9907E', lineHeight: 1.7 }}>
+            {profileError ?? 'Something went wrong while loading your profile.'}
+          </p>
+          <button onClick={() => void refreshProfile()} disabled={profileLoading} style={emberButton} className="transition-all duration-300 hover:brightness-110 disabled:opacity-60 disabled:cursor-not-allowed">
+            {profileLoading ? 'Loading…' : 'Try Again'}
           </button>
         </div>
       </div>

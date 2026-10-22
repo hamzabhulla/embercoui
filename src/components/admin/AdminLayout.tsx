@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { Avatar, primaryBtn } from './ui';
+import { Avatar, ghostBtn, primaryBtn } from './ui';
 
 const ic = (path: React.ReactNode) => (
   <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{path}</svg>
@@ -36,11 +36,17 @@ const NAV_GROUPS: { label: string; items: { to: string; label: string; end?: boo
   },
 ];
 
+function GuardLoading() {
+  return <div className="min-h-screen bg-[#F7F4EE] flex items-center justify-center"><p className="font-bodytext text-[#98A096] tracking-[0.2em] uppercase text-xs">Loading…</p></div>;
+}
+
 export function AdminGuard({ children }: { children: React.ReactNode }) {
-  const { user, profile, loading } = useAuth();
+  const { user, profile, loading, profileLoading, profileError, refreshProfile } = useAuth();
   const navigate = useNavigate();
-  if (loading) {
-    return <div className="min-h-screen bg-[#F7F4EE] flex items-center justify-center"><p className="font-bodytext text-[#98A096] tracking-[0.2em] uppercase text-xs">Loading…</p></div>;
+  // A signed-in session whose profile is still loading is a loading
+  // state — never the no-access denial below.
+  if (loading || (user && !profile && profileLoading)) {
+    return <GuardLoading />;
   }
   if (!user) {
     return (
@@ -53,7 +59,28 @@ export function AdminGuard({ children }: { children: React.ReactNode }) {
       </div>
     );
   }
-  if (!profile || (profile.role !== 'admin' && profile.role !== 'staff')) {
+  if (!profile && profileError) {
+    // The session is real but the profile fetch failed: an error state
+    // with a retry, NOT the permissions denial — the account's actual
+    // role is simply unknown right now.
+    return (
+      <div className="min-h-screen bg-[#F7F4EE] flex items-center justify-center px-6">
+        <div className="text-center bg-white border border-[#EAE3D3] rounded-2xl px-8 py-10 max-w-sm w-full shadow-[0_18px_40px_-24px_rgba(22,36,26,0.35)]">
+          <h1 className="font-display text-3xl text-[#16241A] mb-3">We couldn't load your account</h1>
+          <p className="font-bodytext text-[#5C665C] text-sm mb-6">{profileError}</p>
+          <div className="flex gap-2 justify-center">
+            <button onClick={() => void refreshProfile()} className={primaryBtn}>Retry</button>
+            <button onClick={() => navigate('/')} className={ghostBtn}>Back to site</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  if (!profile) {
+    // Signed in and no error, so the profile fetch is still settling.
+    return <GuardLoading />;
+  }
+  if (profile.role !== 'admin' && profile.role !== 'staff') {
     return (
       <div className="min-h-screen bg-[#F7F4EE] flex items-center justify-center px-6">
         <div className="text-center bg-white border border-[#EAE3D3] rounded-2xl px-8 py-10 max-w-sm w-full shadow-[0_18px_40px_-24px_rgba(22,36,26,0.35)]">
