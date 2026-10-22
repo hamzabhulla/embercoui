@@ -19,158 +19,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 type Row = Record<string, unknown>;
 
-const stub = vi.hoisted(() => {
-  const tables = new Map<string, Row[]>();
-  const querySeq = new Map<string, number>();
-  const CAP = 1000;
+// The stub lives in ./stubSupabase (shared with the repository
+// write-path tests) — a faithful PostgREST miniature: 1000-row cap,
+// filtered exact counts, tie rotation, 22P02 for the 'not-a-uuid'
+// sentinel.
+const stub = stubSupabase;
 
-  type StubError = { code: string; message: string };
-  type StubResult = { data: unknown; error: StubError | null; count: number | null };
-
-  class StubQuery {
-    private filters: ((r: Row) => boolean)[] = [];
-    private eqValues: unknown[] = [];
-    private orders: { col: string; asc: boolean }[] = [];
-    private rangeSlice: [number, number] | null = null;
-    private limitN: number | null = null;
-    private singleMode = false;
-    private cols: string | null = null;
-    private wantCount = false;
-    private op: 'select' | 'update' | 'delete' = 'select';
-    private patch: Row = {};
-    private returnCols: string | null = null;
-
-    constructor(private table: string) {}
-
-    select(cols: string, opts?: { count?: string }) {
-      // After update()/delete(), .select() names the RETURNING columns.
-      if (this.op === 'select') {
-        this.cols = cols;
-        this.wantCount = opts?.count === 'exact';
-      } else {
-        this.returnCols = cols;
-      }
-      return this;
-    }
-    update(patch: Row) { this.op = 'update'; this.patch = patch; return this; }
-    delete() { this.op = 'delete'; return this; }
-    eq(col: string, v: unknown) { this.filters.push((r) => r[col] === v); this.eqValues.push(v); return this; }
-    neq(col: string, v: unknown) { this.filters.push((r) => r[col] !== v); return this; }
-    in(col: string, vs: unknown[]) { const s = new Set(vs); this.filters.push((r) => s.has(r[col])); return this; }
-    order(col: string, opts?: { ascending?: boolean }) { this.orders.push({ col, asc: opts?.ascending !== false }); return this; }
-    range(from: number, to: number) { this.rangeSlice = [from, to]; return this; }
-    limit(n: number) { this.limitN = n; return this; }
-    maybeSingle() { this.singleMode = true; return this; }
-    single() { this.singleMode = true; return this; }
-
-    then<TResult1 = StubResult, TResult2 = never>(
-      onfulfilled?: ((value: StubResult) => TResult1 | PromiseLike<TResult1>) | null,
-      onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
-    ): Promise<TResult1 | TResult2> {
-      return Promise.resolve(this.execute()).then(onfulfilled, onrejected);
-    }
-
-    private execute(): StubResult {
-      const seq = (querySeq.get(this.table) ?? 0) + 1;
-      querySeq.set(this.table, seq);
-      // Postgres rejects a non-UUID literal compared against a uuid
-      // column with 22P02 — BEFORE any row logic. The repository's
-      // malformed-id translation (fix 8) keys on exactly this code;
-      // without it, the calls below would throw like the old code.
-      if (this.eqValues.some((v) => v === 'not-a-uuid')) {
-        return { data: null, error: { code: '22P02', message: 'invalid input syntax for type uuid: "not-a-uuid"' }, count: null };
-      }
-      const tableRows = tables.get(this.table) ?? [];
-      const matched = tableRows.filter((r) => this.filters.every((f) => f(r)));
-      if (this.op === 'update') {
-        for (const r of matched) Object.assign(r, this.patch);
-        const out = matched.map((r) => this.projectWith(this.returnCols, r));
-        if (this.singleMode) return { data: out[0] ?? null, error: null, count: null };
-        return { data: this.returnCols ? out : null, error: null, count: null };
-      }
-      if (this.op === 'delete') {
-        tables.set(this.table, tableRows.filter((r) => !matched.includes(r)));
-        const out = matched.map((r) => this.projectWith(this.returnCols, r));
-        if (this.singleMode) return { data: out[0] ?? null, error: null, count: null };
-        return { data: this.returnCols ? out : null, error: null, count: null };
-      }
-      let rows = matched;
-      const total = rows.length;
-      rows = this.applyOrder(rows, seq);
-      if (this.singleMode) {
-        return { data: rows[0] ?? null, error: null, count: null };
-      }
-      if (this.rangeSlice) {
-        const [from, to] = this.rangeSlice;
-        rows = rows.slice(from, from + Math.min(to - from + 1, CAP));
-      } else if (this.limitN != null) {
-        rows = rows.slice(0, this.limitN);
-      } else {
-        rows = rows.slice(0, CAP); // PostgREST max-rows on an unbounded response
-      }
-      const projected = rows.map((r) => this.project(r));
-      return { data: projected, error: null, count: this.wantCount ? total : null };
-    }
-
-    private applyOrder(rows: Row[], seq: number): Row[] {
-      const keys = this.orders;
-      const sorted = [...rows].sort((a, b) => {
-        for (const { col, asc } of keys) {
-          const av = a[col] as string | number;
-          const bv = b[col] as string | number;
-          if (av === bv) continue;
-          const cmp = av < bv ? -1 : 1;
-          return asc ? cmp : -cmp;
-        }
-        return 0;
-      });
-      // Rotate each tie group by the query sequence number: ties have
-      // no stable order across queries unless a unique key breaks them.
-      const out: Row[] = [];
-      let i = 0;
-      while (i < sorted.length) {
-        let j = i + 1;
-        while (j < sorted.length && keys.every(({ col }) => sorted[j][col] === sorted[i][col])) j++;
-        const group = sorted.slice(i, j);
-        if (group.length > 1) {
-          const shift = seq % group.length;
-          out.push(...group.slice(shift), ...group.slice(0, shift));
-        } else {
-          out.push(...group);
-        }
-        i = j;
-      }
-      return out;
-    }
-
-    private project(r: Row): Row {
-      return this.projectWith(this.cols, r);
-    }
-
-    private projectWith(cols: string | null, r: Row): Row {
-      if (!cols || cols === '*') return { ...r };
-      const keep = cols.split(',').map((c) => c.trim());
-      const out: Row = {};
-      for (const k of keep) out[k] = r[k];
-      return out;
-    }
-  }
-
-  const client = {
-    from: (table: string) => new StubQuery(table),
-    auth: { admin: { listUsers: async () => ({ data: { users: [] }, error: null }) } },
-  };
-
-  return {
-    tables,
-    createClient: () => client,
-    reset() { tables.clear(); querySeq.clear(); },
-    seed(table: string, rows: Row[]) { tables.set(table, rows); },
-  };
+vi.mock('@supabase/supabase-js', async () => {
+  const m = await import('./stubSupabase');
+  return { createClient: m.stubSupabase.createClient };
 });
 
-vi.mock('@supabase/supabase-js', () => ({ createClient: stub.createClient }));
-
+import { stubSupabase } from './stubSupabase';
 import { createSupabaseRepository } from '../src/repositories/supabaseRepository';
 import { FakeRepository } from './fakeRepository';
 

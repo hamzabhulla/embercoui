@@ -370,3 +370,52 @@ describe('favorites read is one batched lookup (fix 8)', () => {
     expect(singleLookups).toBe(0);
   });
 });
+
+// ─── Fix 10 (audit-2, H-5): two route behaviours the fix-8 auditor
+// noted as implemented-but-unpinned. Same fake suite, same idioms.
+
+describe('idempotency replay — guest email casing (fix 10 pin)', () => {
+  it('a guest replay with a DIFFERENTLY-CASED email still returns the full order', async () => {
+    const repo = new FakeRepository();
+    const app = buildApp(repo);
+    const first = await placeOrder(app, {
+      idempotencyKey: 'replay-case-0001',
+      customerEmail: 'Guest@Example.COM',
+    });
+    expect(first.status).toBe(201);
+
+    // Email identity is case-insensitive: the mailbox is the same
+    // principal, so the replay is answered with the FULL order —
+    // not the redacted { id } stub a stranger gets.
+    const replay = await placeOrder(app, {
+      idempotencyKey: 'replay-case-0001',
+      customerEmail: 'guest@example.com',
+      customerName: 'Someone Else',
+      items: [{ menuItemId: 2, quantity: 3 }],
+    });
+    expect(replay.status).toBe(201);
+    expect(replay.body.alreadyCreated).toBeUndefined();
+    expect(replay.body.order.id).toBe(first.body.order.id);
+    expect(replay.body.order.customerName).toBe('Guest One');
+    expect(replay.body.order.customerEmail).toBe('Guest@Example.COM'); // the stored first-write wins
+    expect(replay.body.order.items).toHaveLength(1);
+    expect(repo.orders).toHaveLength(1);
+  });
+});
+
+describe('favorites read — duplicate ids (fix 10 pin)', () => {
+  it('GET /favorites preserves duplicate ids, in order', async () => {
+    const repo = new FakeRepository();
+    const app = buildApp(repo);
+    const profile = repo.profiles.get('user-1')!;
+    // A duplicated favorite can exist in the stored list (the toggle
+    // endpoint dedupes on write, but stored data is only ever read
+    // back through this batch lookup) — the read must mirror the
+    // stored list faithfully, duplicates included, not silently
+    // dedupe or reorder it.
+    profile.favorites = [2, 1, 2];
+    const res = await request(app).get('/api/v1/account/favorites').set('Authorization', 'Bearer token-user');
+    expect(res.status).toBe(200);
+    expect(res.body.items.map((i: { id: number }) => i.id)).toEqual([2, 1, 2]);
+  });
+});
