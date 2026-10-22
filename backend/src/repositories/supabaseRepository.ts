@@ -4,7 +4,7 @@ import { ApiError } from '../lib/errors';
 import type {
   AdminReservationInput, CouponDTO, CreateOrderData, CustomerDTO, MenuItemDTO, NewsletterSubscriberDTO,
   OrderDTO, Page, PageParams, ProfileDTO, PublicSettingsDTO, ReservationDTO, ReservationInput,
-  Repository, ReviewDTO,
+  Repository, ReviewDTO, SettingsPatch, SiteLocations,
 } from './types';
 
 type Row = Record<string, unknown>;
@@ -52,6 +52,48 @@ const numOrFallback = (v: unknown, fallback: number): number => {
   const n = typeof v === 'number' ? v : Number(v);
   return Number.isNaN(n) ? fallback : n;
 };
+// Per-location contacts (migration 0010) live in one free-form JSONB
+// column, so reads sanitize defensively: anything that is not a plain
+// object group, and any value that is not a non-empty string, becomes
+// null — the frontend then falls back to the global profile fields.
+function emptySiteLocations(): SiteLocations {
+  return {
+    footer: { phone: null, email: null, address: null },
+    contact: { phone: null, email: null, address: null, hours: null, mapLocation: null },
+    reservation: { phone: null, address: null, hours: null, locationLabel: null },
+  };
+}
+function sanitizeSiteLocations(raw: unknown): SiteLocations {
+  const out = emptySiteLocations();
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  const groups = raw as Record<string, unknown>;
+  const pick = (group: unknown): Row =>
+    group && typeof group === 'object' && !Array.isArray(group) ? (group as Row) : {};
+  const footer = pick(groups.footer);
+  out.footer = { phone: strOrNull(footer.phone), email: strOrNull(footer.email), address: strOrNull(footer.address) };
+  const contact = pick(groups.contact);
+  out.contact = {
+    phone: strOrNull(contact.phone), email: strOrNull(contact.email), address: strOrNull(contact.address),
+    hours: strOrNull(contact.hours), mapLocation: strOrNull(contact.mapLocation),
+  };
+  const reservation = pick(groups.reservation);
+  out.reservation = {
+    phone: strOrNull(reservation.phone), address: strOrNull(reservation.address),
+    hours: strOrNull(reservation.hours), locationLabel: strOrNull(reservation.locationLabel),
+  };
+  return out;
+}
+// Migration 0010's site_locations column: until the owner runs 0010,
+// PostgREST rejects any settings write that names it — an unknown column
+// in a payload surfaces PGRST204 and filtering surfaces PG 42703 (the
+// same two signals createOrder watches for idempotency_key). A stale
+// schema cache can also word the failure directly, so the column name
+// in the message counts too.
+export function isMissingSiteLocationsError(error: { code?: string; message?: string } | null | undefined): boolean {
+  if (!error) return false;
+  if (error.code === '42703' || error.code === 'PGRST204') return true;
+  return typeof error.message === 'string' && error.message.includes('site_locations');
+}
 function settingsDTO(r: Row): PublicSettingsDTO {
   return {
     kitchenOpen: r.kitchen_open !== false,
@@ -69,11 +111,13 @@ function settingsDTO(r: Row): PublicSettingsDTO {
     whatsappNumber: strOrNull(r.whatsapp_number),
     reservationSlotCapacity: num(r.reservation_slot_capacity) || 40,
     openingHours: (r.opening_hours as Record<string, unknown>) ?? {},
+    siteLocations: sanitizeSiteLocations(r.site_locations),
   };
 }
 export const DEFAULT_SETTINGS: PublicSettingsDTO = {
   kitchenOpen: true, waitMin: 20, waitMax: 30, currency: 'USD', restaurantName: 'Ember & Co.',
   phone: null, email: null, address: null, whatsappNumber: null, reservationSlotCapacity: 40, openingHours: {},
+  siteLocations: emptySiteLocations(),
 };
 // Inverse of settingsDTO: a full settings DTO as a restaurant_settings
 // row (the singleton is always id 1 — see the check constraint in 0001).
@@ -91,6 +135,7 @@ function settingsRow(s: PublicSettingsDTO): Row {
     whatsapp_number: s.whatsappNumber,
     reservation_slot_capacity: s.reservationSlotCapacity,
     opening_hours: s.openingHours,
+    site_locations: s.siteLocations,
   };
 }
 function reviewDTO(r: Row): ReviewDTO {
@@ -688,7 +733,34 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
       if (patch.whatsappNumber !== undefined) update.whatsapp_number = patch.whatsappNumber;
       if (patch.reservationSlotCapacity !== undefined) update.reservation_slot_capacity = patch.reservationSlotCapacity;
       if (patch.openingHours !== undefined) update.opening_hours = patch.openingHours;
-      const { data, error } = await db.from('restaurant_settings').update(update).eq('id', 1).select('id');
+      // siteLocations merges per group over the CURRENT settings: a
+      // PATCH carrying only the footer group must not wipe the contact /
+      // reservation groups it never mentioned.
+      let mergedLocations: SiteLocations | undefined;
+      if (patch.siteLocations !== undefined) {
+        const current = await repo.getSettings();
+        mergedLocations = {
+          footer: { ...current.siteLocations.footer, ...(patch.siteLocations.footer ?? {}) },
+          contact: { ...current.siteLocations.contact, ...(patch.siteLocations.contact ?? {}) },
+          reservation: { ...current.siteLocations.reservation, ...(patch.siteLocations.reservation ?? {}) },
+        };
+        update.site_locations = mergedLocations;
+      }
+      // Pre-migration degradation (migration 0010): until the owner runs
+      // 0010 the site_locations column does not exist and PostgREST
+      // rejects any write naming it. Settings saves must keep working
+      // exactly as before in that state, so a missing-column failure
+      // retries the same write WITHOUT the new column — the location
+      // fields simply activate once 0010 has run.
+      const withoutLocations = (row: Row): Row => {
+        const rest = { ...row };
+        delete rest.site_locations;
+        return rest;
+      };
+      let { data, error } = await db.from('restaurant_settings').update(update).eq('id', 1).select('id');
+      if (error && 'site_locations' in update && isMissingSiteLocationsError(error)) {
+        ({ data, error } = await db.from('restaurant_settings').update(withoutLocations(update)).eq('id', 1).select('id'));
+      }
       if (error) throw new Error(`settings update failed: ${error.message}`);
       if ((data ?? []).length === 0) {
         // The singleton row is missing (seed never ran, or the row was
@@ -696,8 +768,17 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
         // save would evaporate behind a normal-looking defaults response.
         // Insert the row instead — the patch applied over the defaults —
         // so what the admin saved is what persists.
-        const merged: PublicSettingsDTO = { ...DEFAULT_SETTINGS, ...patch };
-        const { error: insertError } = await db.from('restaurant_settings').insert(settingsRow(merged));
+        const restPatch: SettingsPatch = { ...patch };
+        delete restPatch.siteLocations;
+        const merged: PublicSettingsDTO = {
+          ...DEFAULT_SETTINGS, ...restPatch,
+          siteLocations: mergedLocations ?? DEFAULT_SETTINGS.siteLocations,
+        };
+        const row = settingsRow(merged);
+        let { error: insertError } = await db.from('restaurant_settings').insert(row);
+        if (insertError && isMissingSiteLocationsError(insertError)) {
+          ({ error: insertError } = await db.from('restaurant_settings').insert(withoutLocations(row)));
+        }
         if (insertError) throw new Error(`settings insert failed: ${insertError.message}`);
       }
       return repo.getSettings();

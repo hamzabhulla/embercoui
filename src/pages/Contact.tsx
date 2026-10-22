@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { sendContactMessage } from '../services/api.ts';
+import { openingHoursLines, usePublicSettings } from '../hooks/usePublicSettings';
 import {
   MapPin, Phone, Mail, Clock, Car,
   Send, CheckCircle,
@@ -37,38 +38,21 @@ function useReveal<T extends HTMLElement>(delay = 0) {
 }
 
 /* ─── Contact info items ─────────────────────────────────────────────────── */
-const INFO = [
-  {
-    Icon: MapPin,
-    label: 'Location',
-    lines: ['412 Heritage Lane', 'Portland, Oregon 97204'],
-    href: 'https://maps.google.com/?q=Portland,Oregon',
-  },
-  {
-    Icon: Phone,
-    label: 'Phone',
-    lines: ['+1 (503) 555-1234'],
-    href: 'tel:+15035551234',
-  },
-  {
-    Icon: Mail,
-    label: 'Email',
-    lines: ['hello@emberandco.com'],
-    href: 'mailto:hello@emberandco.com',
-  },
-  {
-    Icon: Clock,
-    label: 'Hours',
-    lines: ['Monday – Sunday', '11:00 AM – 11:00 PM', 'Kitchen closes: 10:30 PM'],
-    href: null,
-  },
-  {
-    Icon: Car,
-    label: 'Parking',
-    lines: ['Complimentary valet parking', 'available on weekends'],
-    href: null,
-  },
-];
+type InfoItem = {
+  Icon: typeof MapPin;
+  label: string;
+  lines: string[];
+  href: string | null;
+};
+
+// The parking card is static page content — everything else comes from
+// the restaurant settings (see the component body).
+const PARKING: InfoItem = {
+  Icon: Car,
+  label: 'Parking',
+  lines: ['Complimentary valet parking', 'available on weekends'],
+  href: null,
+};
 
 const SUBJECTS = [
   'Reservations',
@@ -282,6 +266,39 @@ export default function Contact() {
   const [sending, setSending] = useState(false);
 
   useEffect(() => { window.scrollTo(0, 0); }, []);
+
+  // Contact details: the contact page's own overrides win, the global
+  // Restaurant profile fields are the fallback, and a card whose value
+  // resolves to null is omitted entirely — no hardcoded stand-ins.
+  const settings = usePublicSettings();
+  const contactContacts = settings?.siteLocations?.contact;
+  const infoAddress = contactContacts?.address ?? settings?.address ?? null;
+  const infoPhone = contactContacts?.phone ?? settings?.phone ?? null;
+  const infoEmail = contactContacts?.email ?? settings?.email ?? null;
+  const hoursLines = contactContacts?.hours
+    ? contactContacts.hours.split('\n').filter((l) => l.trim())
+    : openingHoursLines(settings);
+  const mapTarget = contactContacts?.mapLocation ?? infoAddress;
+  const INFO: InfoItem[] = [
+    infoAddress
+      ? {
+          Icon: MapPin,
+          label: 'Location',
+          lines: infoAddress.split('\n').filter((l) => l.trim()),
+          href: mapTarget ? `https://maps.google.com/?q=${encodeURIComponent(mapTarget)}` : null,
+        }
+      : null,
+    infoPhone
+      ? { Icon: Phone, label: 'Phone', lines: [infoPhone], href: `tel:${infoPhone.replace(/[^0-9+]/g, '')}` }
+      : null,
+    infoEmail
+      ? { Icon: Mail, label: 'Email', lines: [infoEmail], href: `mailto:${infoEmail}` }
+      : null,
+    hoursLines.length > 0
+      ? { Icon: Clock, label: 'Hours', lines: hoursLines, href: null }
+      : null,
+    PARKING,
+  ].filter((item): item is InfoItem => item !== null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -617,43 +634,47 @@ export default function Contact() {
         <div
           ref={mapRef}
           className="c-hidden"
-          style={{ position: 'relative', width: '100%', height: 400 }}
+          style={{ position: 'relative', width: '100%', height: mapTarget ? 400 : 0, overflow: 'hidden' }}
         >
-          <iframe
-            title="Ember & Co. Location"
-            src="https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d2795.0!2d-122.6784!3d45.5231!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x54950a0b5d37e9b3%3A0x3c5c6b7c7c7c7c7c!2sPortland%2C%20OR%2097204!5e0!3m2!1sen!2sus!4v1"
-            width="100%"
-            height="400"
-            style={{ border: 0, display: 'block' }}
-            allowFullScreen
-            loading="lazy"
-            referrerPolicy="no-referrer-when-downgrade"
-          />
-          {/* Address overlay */}
-          <div style={{
-            position: 'absolute',
-            bottom: 32, left: 'clamp(20px, 4vw, 48px)',
-            background: 'rgba(13,26,14,0.7)',
-            backdropFilter: 'blur(20px)',
-            padding: '24px 32px',
-            border: '1px solid rgba(245,240,232,0.05)',
-            borderLeft: '3px solid #C17A3A',
-            boxShadow: '0 20px 40px rgba(0,0,0,0.4)',
-          }}>
-            <p style={{
-              fontFamily: 'Jost, sans-serif', fontSize: '0.6rem',
-              letterSpacing: '0.25em', textTransform: 'uppercase',
-              color: '#C17A3A', margin: '0 0 6px',
-            }}>
-              ✦ Find Us
-            </p>
-            <p style={{
-              fontFamily: 'Cormorant Garamond, serif', fontSize: '1.1rem',
-              color: '#F5F0E8', margin: 0, lineHeight: 1.6,
-            }}>
-              412 Heritage Lane<br />Portland, Oregon 97204
-            </p>
-          </div>
+          {mapTarget && (
+            <>
+              <iframe
+                title="Ember & Co. Location"
+                src={`https://www.google.com/maps?q=${encodeURIComponent(mapTarget)}&output=embed`}
+                width="100%"
+                height="400"
+                style={{ border: 0, display: 'block' }}
+                allowFullScreen
+                loading="lazy"
+                referrerPolicy="no-referrer-when-downgrade"
+              />
+              {/* Address overlay */}
+              <div style={{
+                position: 'absolute',
+                bottom: 32, left: 'clamp(20px, 4vw, 48px)',
+                background: 'rgba(13,26,14,0.7)',
+                backdropFilter: 'blur(20px)',
+                padding: '24px 32px',
+                border: '1px solid rgba(245,240,232,0.05)',
+                borderLeft: '3px solid #C17A3A',
+                boxShadow: '0 20px 40px rgba(0,0,0,0.4)',
+              }}>
+                <p style={{
+                  fontFamily: 'Jost, sans-serif', fontSize: '0.6rem',
+                  letterSpacing: '0.25em', textTransform: 'uppercase',
+                  color: '#C17A3A', margin: '0 0 6px',
+                }}>
+                  ✦ Find Us
+                </p>
+                <p style={{
+                  fontFamily: 'Cormorant Garamond, serif', fontSize: '1.1rem',
+                  color: '#F5F0E8', margin: 0, lineHeight: 1.6, whiteSpace: 'pre-line',
+                }}>
+                  {infoAddress ?? mapTarget}
+                </p>
+              </div>
+            </>
+          )}
         </div>
 
       </div>

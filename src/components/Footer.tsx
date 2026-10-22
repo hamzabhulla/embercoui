@@ -1,10 +1,21 @@
 import { useRef, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useGoToReservations } from '../lib/nav.ts';
+import { usePublicSettings } from '../hooks/usePublicSettings';
 
 export default function Footer() {
   const navigate = useNavigate();
   const goToReservations = useGoToReservations();
+  const settings = usePublicSettings();
+  // Footer contact details: the footer's own overrides win, the global
+  // Restaurant profile fields are the fallback, and a value that resolves
+  // to null is simply not rendered — there is no hardcoded stand-in.
+  const brandName = settings?.restaurantName ?? 'Ember & Co.';
+  const footerContacts = settings?.siteLocations?.footer;
+  const address = footerContacts?.address ?? settings?.address ?? null;
+  const phone = footerContacts?.phone ?? settings?.phone ?? null;
+  const email = footerContacts?.email ?? settings?.email ?? null;
+  const telHref = phone ? `tel:${phone.replace(/[^0-9+]/g, '')}` : null;
   const colRefs = useRef<(HTMLDivElement | null)[]>([]);
   const [colVisible, setColVisible] = useState<boolean[]>(new Array(3).fill(false));
 
@@ -42,7 +53,7 @@ export default function Footer() {
                 className="text-white text-lg font-semibold"
                 style={{ fontFamily: 'Cormorant Garamond, serif' }}
               >
-                Ember &amp; Co.
+                {brandName}
               </span>
             </div>
             <p
@@ -69,18 +80,21 @@ export default function Footer() {
               className="text-xs space-y-2 leading-relaxed"
               style={{ color: 'rgba(255,255,255,0.65)', fontFamily: 'Jost, sans-serif', fontWeight: 300 }}
             >
-              <p>412 Heritage Lane</p>
-              <p>Portland, Oregon 97204</p>
-              <p className="pt-2">
-                <a href="tel:+15035551234" className="hover:text-ember transition-colors">
-                  +1 (503) 555-1234
-                </a>
-              </p>
-              <p>
-                <a href="mailto:hello@emberandco.com" className="hover:text-ember transition-colors">
-                  hello@emberandco.com
-                </a>
-              </p>
+              {address && <p style={{ whiteSpace: 'pre-line' }}>{address}</p>}
+              {phone && telHref && (
+                <p className="pt-2">
+                  <a href={telHref} className="hover:text-ember transition-colors">
+                    {phone}
+                  </a>
+                </p>
+              )}
+              {email && (
+                <p>
+                  <a href={`mailto:${email}`} className="hover:text-ember transition-colors">
+                    {email}
+                  </a>
+                </p>
+              )}
             </div>
           </div>
 
@@ -112,7 +126,7 @@ export default function Footer() {
           style={{ color: 'rgba(255,255,255,0.3)', fontFamily: 'Jost, sans-serif', fontSize: '0.75rem' }}
         >
           <p className="text-center">
-            © 2009–2026 Ember &amp; Co. All rights reserved.
+            © 2009–2026 {brandName}. All rights reserved.
           </p>
         </div>
       </div>

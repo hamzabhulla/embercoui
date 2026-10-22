@@ -8,6 +8,53 @@ export interface MenuItemDTO {
   tags: string[];
 }
 
+/**
+ * Per-location contact overrides for the public website (migration
+ * 0010). Each location on the site — footer, contact page, reservation
+ * section — can carry its own contact details; a null field means "fall
+ * back to the global Restaurant profile field". Stored as one
+ * `site_locations` JSONB column on the settings singleton.
+ */
+export interface FooterContacts {
+  phone: string | null;
+  email: string | null;
+  address: string | null;
+}
+
+export interface ContactContacts {
+  phone: string | null;
+  email: string | null;
+  address: string | null;
+  hours: string | null;
+  /** Free-text place/address used for the map embed and the directions link. */
+  mapLocation: string | null;
+}
+
+export interface ReservationContacts {
+  phone: string | null;
+  address: string | null;
+  hours: string | null;
+  /** Small line under "Book Your Table" (e.g. the neighbourhood/city). */
+  locationLabel: string | null;
+}
+
+export interface SiteLocations {
+  footer: FooterContacts;
+  contact: ContactContacts;
+  reservation: ReservationContacts;
+}
+
+/** A settings PATCH may carry a partial siteLocations — groups/fields merged server-side. */
+export type SiteLocationsPatch = {
+  footer?: Partial<FooterContacts>;
+  contact?: Partial<ContactContacts>;
+  reservation?: Partial<ReservationContacts>;
+};
+
+export type SettingsPatch = Partial<Omit<PublicSettingsDTO, 'siteLocations'>> & {
+  siteLocations?: SiteLocationsPatch;
+};
+
 export interface PublicSettingsDTO {
   kitchenOpen: boolean;
   waitMin: number;
@@ -23,6 +70,8 @@ export interface PublicSettingsDTO {
   /** Guests that fit in one reservation time slot; drives the admin day board. */
   reservationSlotCapacity: number;
   openingHours: Record<string, unknown>;
+  /** Per-location contact overrides (migration 0010); see SiteLocations. */
+  siteLocations: SiteLocations;
 }
 
 export interface ReviewDTO {
@@ -238,5 +287,5 @@ export interface Repository {
   deleteCoupon(id: string): Promise<boolean>;
   adminListStaff(): Promise<StaffDTO[]>;
   updateProfileRole(userId: string, role: ProfileDTO['role']): Promise<ProfileDTO | null>;
-  updateSettings(patch: Partial<PublicSettingsDTO> & { kitchenOpen?: boolean }): Promise<PublicSettingsDTO>;
+  updateSettings(patch: SettingsPatch): Promise<PublicSettingsDTO>;
 }

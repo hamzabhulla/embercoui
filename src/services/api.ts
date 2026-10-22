@@ -6,6 +6,34 @@ import { supabase } from '../lib/supabase.ts';
 // functions inside this very project, so a relative base is correct.
 export const API_URL = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? 'http://localhost:4000' : '');
 
+/** Per-location contact overrides — a null field falls back to the profile field of the same name. */
+export interface FooterContacts {
+  phone: string | null;
+  email: string | null;
+  address: string | null;
+}
+
+export interface ContactContacts {
+  phone: string | null;
+  email: string | null;
+  address: string | null;
+  hours: string | null;
+  mapLocation: string | null;
+}
+
+export interface ReservationContacts {
+  phone: string | null;
+  address: string | null;
+  hours: string | null;
+  locationLabel: string | null;
+}
+
+export interface SiteLocations {
+  footer: FooterContacts;
+  contact: ContactContacts;
+  reservation: ReservationContacts;
+}
+
 export interface PublicSettings {
   kitchenOpen: boolean;
   waitMin: number;
@@ -17,6 +45,7 @@ export interface PublicSettings {
   address: string | null;
   whatsappNumber: string | null;
   openingHours: Record<string, unknown>;
+  siteLocations: SiteLocations;
 }
 
 export interface ApprovedReview {

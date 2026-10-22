@@ -20,7 +20,8 @@ Supabase Dashboard → **SQL Editor** → paste and run, in this order:
 7. `supabase/migrations/0007_indexes.sql` — supporting indexes for the paged admin lists (reservations by date + status, menu by availability/category/sort order, orders by creation time)
 8. `supabase/migrations/0008_api_only_writes.sql` — drops the permissive client INSERT policies from 0001 (reservations, newsletter, contact, reviews): all writes flow through the backend API, which validates and rate-limits; the service-role backend is unaffected
 9. `supabase/migrations/0009_hero_bucket.sql` — creates the public `hero-portfolio-video` storage bucket + policies (same model as `menu-images` in 0002)
-10. `supabase/seed.sql` — starter content: restaurant settings, the current menu (15 items), and 3 testimonials as approved reviews
+10. `supabase/migrations/0010_site_locations.sql` — per-location website contacts: a `site_locations` JSON on the settings (footer / contact page / reservation section overrides of the global profile fields); settings saves degrade gracefully until it runs
+11. `supabase/seed.sql` — starter content: restaurant settings, the current menu (15 items), and 3 testimonials as approved reviews
 
 ## 2. Hero media files (manual, one minute)
 The `hero-portfolio-video` bucket itself is created by migration **0009** above — no manual bucket setup. Only the media files are uploaded by hand:

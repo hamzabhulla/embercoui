@@ -19,6 +19,11 @@ export class FakeRepository implements Repository {
   settings: PublicSettingsDTO | null = {
     kitchenOpen: true, waitMin: 20, waitMax: 30, currency: 'USD', restaurantName: 'Ember & Co.',
     phone: null, email: null, address: null, whatsappNumber: null, reservationSlotCapacity: 40, openingHours: {},
+    siteLocations: {
+      footer: { phone: null, email: null, address: null },
+      contact: { phone: null, email: null, address: null, hours: null, mapLocation: null },
+      reservation: { phone: null, address: null, hours: null, locationLabel: null },
+    },
   };
   reviews: (ReviewDTO & { isApproved: boolean; userId?: string | null })[] = [
     { id: 'rev-1', name: 'Amélie Fontaine', rating: 5, comment: 'Wonderful.', country: 'France', createdAt: '2026-01-01T00:00:00Z', isApproved: true },
@@ -277,7 +282,10 @@ export class FakeRepository implements Repository {
   async updateSettings(patch: Partial<PublicSettingsDTO>) {
     // Mirror the real repository: patching while the row is missing
     // creates the singleton (defaults + patch) — the save must persist,
-    // never silently evaporate.
+    // never silently evaporate. One deliberate simplification: the
+    // patch spread replaces siteLocations wholesale, where the real
+    // repository merges it per group over the stored value (route tests
+    // exercise the schema/route contract, not that merge).
     this.settings = { ...(this.settings ?? DEFAULT_SETTINGS), ...patch };
     return { ...this.settings };
   }

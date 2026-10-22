@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext.tsx';
 import { ShoppingBag, User, X, Menu } from 'lucide-react';
 import { useCart } from '../context/CartContext.tsx';
 import { useGoToReservations } from '../lib/nav.ts';
+import { usePublicSettings } from '../hooks/usePublicSettings';
 
 const links = ['Menu', 'Our Story', 'Reservations', 'Contact'];
 
@@ -16,6 +17,13 @@ export default function Navbar({ forceDark = false }: { forceDark?: boolean }) {
   const location = useLocation();
   const { user } = useAuth();
   const goToReservations = useGoToReservations();
+  const settings = usePublicSettings();
+  // The brand is the admin's Restaurant name once settings load; the
+  // static text is only the pre-load placeholder.
+  const brandName = settings?.restaurantName ?? 'Ember & Co.';
+  useEffect(() => {
+    if (settings?.restaurantName) document.title = `${settings.restaurantName} | Premium Forest-to-Table Dining`;
+  }, [settings]);
 
   const handleLoginClick = () => {
     // Record where the visitor is now so a successful sign-in returns
@@ -112,7 +120,7 @@ export default function Navbar({ forceDark = false }: { forceDark?: boolean }) {
               className={`font-heading ${logoColor} text-2xl font-semibold tracking-wide`}
               style={{ fontFamily: 'Cormorant Garamond, serif' }}
             >
-              Ember &amp; Co.
+              {brandName}
             </span>
           </a>
 
@@ -226,7 +234,7 @@ export default function Navbar({ forceDark = false }: { forceDark?: boolean }) {
             className="font-heading text-xl"
             style={{ fontFamily: 'Cormorant Garamond, serif', color: '#F5F0E8' }}
           >
-            Ember &amp; Co.
+            {brandName}
           </a>
           <button
             onClick={() => setSidebarOpen(false)}

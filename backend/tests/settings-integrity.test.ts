@@ -2,6 +2,7 @@ import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 import { createApp } from '../src/app';
 import { assertImageUpload } from '../src/lib/storage';
+import { isMissingSiteLocationsError } from '../src/repositories/supabaseRepository';
 import { FakeRepository, fakeVerifyToken, testEnv } from './fakeRepository';
 import { FakeStorageService } from './fakeStorage';
 
@@ -57,6 +58,93 @@ describe('settings integrity (audit fix 11)', () => {
     const ok = await as(request(app).patch('/api/v1/admin/settings').send({ waitMax: 45 }), 'token-admin');
     expect(ok.status).toBe(200);
     expect(ok.body.settings).toMatchObject({ waitMin: 20, waitMax: 45 });
+  });
+});
+
+describe('per-location website contacts (migration 0010)', () => {
+  const locations = {
+    footer: { phone: '+1 555 010 1111', email: 'footer@example.com', address: '1 Footer Way\nFootertown' },
+    contact: {
+      phone: '+1 555 010 2222', email: 'hello@example.com', address: '2 Contact Road',
+      hours: 'Mon–Sun: 9am – 10pm', mapLocation: '2 Contact Road, Springfield',
+    },
+    reservation: {
+      phone: '+1 555 010 3333', address: '3 Reservation Lane', hours: 'Tue–Sun: 5pm – 11pm', locationLabel: 'Downtown',
+    },
+  };
+
+  it('a valid siteLocations PATCH round-trips through GET (admin + public)', async () => {
+    const app = buildApp();
+    const patched = await as(request(app).patch('/api/v1/admin/settings').send({ siteLocations: locations }), 'token-admin');
+    expect(patched.status).toBe(200);
+    expect(patched.body.settings.siteLocations).toEqual(locations);
+    const admin = await as(request(app).get('/api/v1/admin/settings'), 'token-admin');
+    expect(admin.body.settings.siteLocations).toEqual(locations);
+    const pub = await request(app).get('/api/v1/settings/public');
+    expect(pub.body.settings.siteLocations).toEqual(locations);
+  });
+
+  it('settings reads carry the full all-null siteLocations shape by default', async () => {
+    const app = buildApp();
+    const pub = await request(app).get('/api/v1/settings/public');
+    expect(pub.body.settings.siteLocations).toEqual({
+      footer: { phone: null, email: null, address: null },
+      contact: { phone: null, email: null, address: null, hours: null, mapLocation: null },
+      reservation: { phone: null, address: null, hours: null, locationLabel: null },
+    });
+  });
+
+  it('an over-cap location field is a 400 (footer address over 300 chars)', async () => {
+    const app = buildApp();
+    const res = await as(
+      request(app).patch('/api/v1/admin/settings').send({ siteLocations: { footer: { address: 'x'.repeat(301) } } }),
+      'token-admin',
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it('an invalid location email is a 400 (footer and contact)', async () => {
+    const app = buildApp();
+    const footer = await as(
+      request(app).patch('/api/v1/admin/settings').send({ siteLocations: { footer: { email: 'not-an-email' } } }),
+      'token-admin',
+    );
+    expect(footer.status).toBe(400);
+    const contact = await as(
+      request(app).patch('/api/v1/admin/settings').send({ siteLocations: { contact: { email: 'also@not' } } }),
+      'token-admin',
+    );
+    expect(contact.status).toBe(400);
+  });
+
+  it('an empty-string location phone normalizes to null (use the profile value)', async () => {
+    const app = buildApp();
+    const patched = await as(
+      request(app).patch('/api/v1/admin/settings').send({ siteLocations: { footer: { phone: '' } } }),
+      'token-admin',
+    );
+    expect(patched.status).toBe(200);
+    expect(patched.body.settings.siteLocations.footer.phone).toBeNull();
+    const pub = await request(app).get('/api/v1/settings/public');
+    expect(pub.body.settings.siteLocations.footer.phone).toBeNull();
+  });
+});
+
+describe('isMissingSiteLocationsError (migration 0010 degradation)', () => {
+  it('matches the PostgREST/PG missing-column signals', () => {
+    expect(isMissingSiteLocationsError({ code: '42703' })).toBe(true);
+    expect(isMissingSiteLocationsError({ code: 'PGRST204' })).toBe(true);
+    expect(
+      isMissingSiteLocationsError({ message: "Could not find the 'site_locations' column of 'restaurant_settings' in the schema cache" }),
+    ).toBe(true);
+  });
+
+  it('does not match unrelated errors', () => {
+    expect(isMissingSiteLocationsError({ code: '23505', message: 'duplicate key value violates unique constraint' })).toBe(false);
+    expect(isMissingSiteLocationsError({ message: 'connection reset by peer' })).toBe(false);
+    expect(isMissingSiteLocationsError({})).toBe(false);
+    expect(isMissingSiteLocationsError(null)).toBe(false);
+    expect(isMissingSiteLocationsError(undefined)).toBe(false);
   });
 });
 

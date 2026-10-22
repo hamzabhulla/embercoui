@@ -57,6 +57,55 @@ const couponSchema = couponObject.superRefine((data, ctx) => {
   }
 });
 const roleSchema = z.object({ role: z.enum(['customer', 'admin', 'staff']) });
+// Per-location website contacts (migration 0010). Every field is a
+// nullable string; an empty string means "no override for this
+// location" and normalizes to null, so the website falls back to the
+// global Restaurant profile value. Unknown keys are stripped, never
+// rejected — the admin form and the API may grow fields independently.
+const locationField = (max: number) =>
+  z
+    .string()
+    .trim()
+    .max(max)
+    .transform((s) => (s === '' ? null : s))
+    .nullable()
+    .optional();
+const locationEmailField = z
+  .string()
+  .trim()
+  .max(254)
+  .transform((s) => (s === '' ? null : s))
+  .refine((v) => v === null || z.string().email().safeParse(v).success, 'Invalid email format')
+  .nullable()
+  .optional();
+const siteLocationsSchema = z
+  .object({
+    footer: z
+      .object({
+        phone: locationField(30),
+        email: locationEmailField,
+        address: locationField(300),
+      })
+      .optional(),
+    contact: z
+      .object({
+        phone: locationField(30),
+        email: locationEmailField,
+        address: locationField(300),
+        hours: locationField(160),
+        mapLocation: locationField(300),
+      })
+      .optional(),
+    reservation: z
+      .object({
+        phone: locationField(30),
+        address: locationField(300),
+        hours: locationField(160),
+        locationLabel: locationField(120),
+      })
+      .optional(),
+  })
+  .optional();
 const settingsSchema = z.object({
   kitchenOpen: z.boolean().optional(),
   waitMin: z.number().int().min(0).max(240).optional(),
@@ -80,6 +129,7 @@ const settingsSchema = z.object({
     .optional(),
   reservationSlotCapacity: z.number().int().min(1).max(500).optional(),
   openingHours: z.record(z.unknown()).optional(),
+  siteLocations: siteLocationsSchema,
 });
 // Walk-in / phone bookings created from the admin panel. Email is optional
 // (walk-ins don't always leave one); date/time rules mirror the public form.

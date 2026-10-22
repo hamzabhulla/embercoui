@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ArrowRight, Check } from 'lucide-react';
 import { useInView } from '../hooks/useInView';
+import { openingHoursLines, usePublicSettings } from '../hooks/usePublicSettings';
 import { submitReservation } from '../services/api.ts';
 
 // ONE slot list for both layouts. The desktop <select> and the mobile
@@ -32,6 +33,16 @@ export default function Reservation() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [step, setStep] = useState(1);
   const { ref, isInView } = useInView<HTMLDivElement>(0.1);
+  // Reservation contact details: this section's own overrides win, the
+  // global Restaurant profile fields are the fallback, and a line whose
+  // value resolves to null is omitted — no hardcoded stand-ins.
+  const settings = usePublicSettings();
+  const reservationContacts = settings?.siteLocations?.reservation;
+  const resAddress = reservationContacts?.address ?? settings?.address ?? null;
+  const resPhone = reservationContacts?.phone ?? settings?.phone ?? null;
+  const resHours = reservationContacts?.hours
+    ?? (openingHoursLines(settings).length > 0 ? openingHoursLines(settings).join(' · ') : null);
+  const locationLabel = reservationContacts?.locationLabel ?? resAddress;
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     setForm(prev => ({ ...prev, [e.target.name]: e.target.value }));
@@ -129,9 +140,9 @@ export default function Reservation() {
                 ...getRevealStyle('0.4s')
               }}
             >
-              <p>📍 412 Heritage Lane, Portland</p>
-              <p>📞 +1 (503) 555-1234</p>
-              <p>🕐 Mon–Sun: 11am – 11pm</p>
+              {resAddress && <p style={{ whiteSpace: 'pre-line' }}>📍 {resAddress}</p>}
+              {resPhone && <p>📞 {resPhone}</p>}
+              {resHours && <p>🕐 {resHours}</p>}
             </div>
           </div>
 
@@ -269,9 +280,11 @@ export default function Reservation() {
                     <h2 className="mb-[4px] leading-none" style={{ fontFamily: 'Cormorant Garamond, serif', fontSize: '28px', color: '#F5F0E8', fontWeight: 300 }}>
                       Book Your Table
                     </h2>
-                    <p className="mb-[24px]" style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: 'rgba(245,240,232,0.4)' }}>
-                      Portland, Oregon
-                    </p>
+                    {locationLabel && (
+                      <p className="mb-[24px]" style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: 'rgba(245,240,232,0.4)' }}>
+                        {locationLabel}
+                      </p>
+                    )}
                   </div>
 
                   {/* STEP INDICATOR */}
