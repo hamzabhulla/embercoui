@@ -8,6 +8,8 @@ import AuthShell from './AuthShell.tsx';
 interface Props {
   onClose: () => void;
   onNavigate: (path: string) => void;
+  /** App path the visitor came from — sign-up returns there, not home. */
+  returnTo?: string;
 }
 
 const SUBMIT_GRADIENT = 'linear-gradient(135deg, #C98A44 0%, #C17A3A 45%, #A66932 100%)';
@@ -32,7 +34,7 @@ function SuccessMedallion({ mounted }: { mounted: boolean }) {
   );
 }
 
-export default function SignupModal({ onClose, onNavigate }: Props) {
+export default function SignupModal({ onClose, onNavigate, returnTo }: Props) {
   const [mounted, setMounted] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
   const [successMounted, setSuccessMounted] = useState(false);
@@ -219,7 +221,7 @@ export default function SignupModal({ onClose, onNavigate }: Props) {
                 Your account is ready, {name.split(' ')[0]} — you're signed in.
               </p>
               <button
-                onClick={() => onNavigate('/')}
+                onClick={() => onClose()}
                 className={`transition-all duration-700 delay-500 transform hover:bg-[rgba(193,122,58,0.1)] hover:shadow-[0_0_15px_rgba(193,122,58,0.2)] ${successMounted ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0'}`}
                 style={outlineBtnStyle}
               >
@@ -246,7 +248,7 @@ export default function SignupModal({ onClose, onNavigate }: Props) {
             </p>
           </div>
 
-          <GoogleButton onError={setFormError} />
+          <GoogleButton onError={setFormError} returnTo={returnTo} />
 
           <div className="flex items-center gap-4 my-7">
             <div className="flex-1 h-[1px] bg-[rgba(255,255,255,0.08)]" />

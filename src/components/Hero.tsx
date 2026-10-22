@@ -1,10 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
+import { useGoToReservations } from '../lib/nav.ts';
 
 export default function Hero() {
+  const goToReservations = useGoToReservations();
   const heroRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
-  const [isMobile, setIsMobile] = useState(false);
+  // Initialise from the real viewport on the FIRST render — starting
+  // at false and correcting in an effect made phones paint the desktop
+  // video hero for a beat before swapping to the mobile image.
+  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768);
 
   useEffect(() => {
     const check = () => setIsMobile(window.innerWidth < 768);
@@ -138,7 +143,8 @@ export default function Hero() {
             <span className="relative z-10">View Our Menu</span>
           </a>
           <a
-            href="#reservations"
+            href="/#reservations"
+            onClick={goToReservations}
             className="group relative overflow-hidden bg-[#C17A3A] hover:bg-[#A66932] text-white px-8 py-3.5 text-xs tracking-widest uppercase transition-all duration-300 w-full sm:w-auto text-center hover:shadow-xl hover:shadow-[#C17A3A]/30"
             style={{ fontFamily: 'Jost, sans-serif', letterSpacing: '0.2em', fontSize: '0.72rem' }}
           >
@@ -178,7 +184,8 @@ export default function Hero() {
             View Menu
           </a>
           <a
-            href="#reservations"
+            href="/#reservations"
+            onClick={goToReservations}
             className="flex-1 flex items-center justify-center bg-[#C17A3A] text-white uppercase transition-colors hover:bg-[#A66932]"
             style={{ fontFamily: 'Jost, sans-serif', letterSpacing: '0.15em', fontSize: '11px', height: '52px' }}
           >

@@ -3,11 +3,32 @@ import { ArrowRight, Check } from 'lucide-react';
 import { useInView } from '../hooks/useInView';
 import { submitReservation } from '../services/api.ts';
 
+// ONE slot list for both layouts. The desktop <select> and the mobile
+// slot grid used to keep separate lists that had drifted apart (lunch
+// slots only on mobile, 17:00/17:30 only on desktop) — the same kitchen
+// hours must be offered everywhere.
+const TIME_SLOTS = [
+  '12:00', '12:30', '13:00', '13:30',
+  '17:00', '17:30', '18:00', '18:30', '19:00', '19:30',
+  '20:00', '20:30', '21:00', '21:30',
+];
+
+// Today in the visitor's local timezone, as a yyyy-mm-dd value for the
+// date inputs' min attribute (toISOString would give the UTC date,
+// which is already tomorrow for part of the local evening).
+function todayLocal(): string {
+  const d = new Date();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${mm}-${dd}`;
+}
+
 export default function Reservation() {
   const [form, setForm] = useState({
     name: '', email: '', phone: '', date: '', time: '', guests: ''
   });
   const [submitted, setSubmitted] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [step, setStep] = useState(1);
   const { ref, isInView } = useInView<HTMLDivElement>(0.1);
@@ -18,11 +39,14 @@ export default function Reservation() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting) return; // one booking per tap — no duplicate submissions
     setSubmitError(null);
+    setSubmitting(true);
     const res = await submitReservation({
       name: form.name, email: form.email, phone: form.phone,
       date: form.date, time: form.time, guests: Number(form.guests),
     });
+    setSubmitting(false);
     if (!res.ok) {
       // Never fake a booking: keep the details and show what went wrong.
       setSubmitError(res.error ?? 'We could not save your reservation — please try again or call us.');
@@ -172,7 +196,7 @@ export default function Reservation() {
                   {/* Date */}
                   <div className="relative group pt-4" style={getRevealStyle('0.4s')}>
                     <input
-                      type="text" name="date" id="date" value={form.date} onChange={handleChange}
+                      type="text" name="date" id="date" value={form.date} onChange={handleChange} min={todayLocal()}
                       onFocus={(e) => (e.target.type = 'date')} onBlur={(e) => (e.target.type = form.date ? 'date' : 'text')} required
                       className="peer w-full bg-transparent border-0 border-b border-[rgba(255,255,255,0.15)] focus:border-[#C17A3A] py-2 text-[#F5F0E8] focus:outline-none transition-colors duration-[250ms] [color-scheme:dark] min-h-[36px]"
                       style={{ fontFamily: 'Jost, sans-serif', fontSize: '14px' }}
@@ -190,7 +214,7 @@ export default function Reservation() {
                         style={{ fontFamily: 'Jost, sans-serif', fontSize: '14px' }}
                       >
                         <option value="" disabled className="bg-[#1C2B1E] hidden"></option>
-                        {['17:00', '17:30', '18:00', '18:30', '19:00', '19:30', '20:00', '20:30', '21:00'].map(t => (
+                        {TIME_SLOTS.map(t => (
                           <option key={t} value={t} className="bg-[#1C2B1E] text-[#F5F0E8]">{t}</option>
                         ))}
                       </select>
@@ -217,10 +241,11 @@ export default function Reservation() {
                   <div className="pt-4" style={getRevealStyle('0.6s')}>
                     <button
                       type="submit"
-                      className="w-full bg-[#C17A3A] hover:bg-[#A66932] text-white py-4 px-6 flex items-center justify-between transition-all duration-[250ms] hover:shadow-[0_0_20px_rgba(193,122,58,0.4)] uppercase"
+                      disabled={submitting}
+                      className="w-full bg-[#C17A3A] hover:bg-[#A66932] text-white py-4 px-6 flex items-center justify-between transition-all duration-[250ms] hover:shadow-[0_0_20px_rgba(193,122,58,0.4)] uppercase disabled:opacity-50"
                       style={{ fontFamily: 'Jost, sans-serif', fontSize: '11px', letterSpacing: '0.2em' }}
                     >
-                      <span>Submit</span>
+                      <span>{submitting ? 'Submitting…' : 'Submit'}</span>
                       <ArrowRight className="w-4 h-4" />
                     </button>
                   </div>
@@ -272,23 +297,23 @@ export default function Reservation() {
                     {/* STEP 1 */}
                     <div className={`absolute top-0 left-0 w-full transition-all duration-500 flex flex-col space-y-[28px] ${step === 1 ? 'opacity-100 translate-x-0' : 'opacity-0 -translate-x-full pointer-events-none'}`}>
                       <div className="relative">
-                        <label className="text-[9px] text-[#C17A3A] uppercase tracking-[0.15em] block mb-[6px]" style={{ fontFamily: 'Jost, sans-serif' }}>Full Name</label>
-                        <input 
-                          type="text" name="name" value={form.name} onChange={handleChange} required={step === 1}
+                        <label htmlFor="name-mobile" className="text-[9px] text-[#C17A3A] uppercase tracking-[0.15em] block mb-[6px]" style={{ fontFamily: 'Jost, sans-serif' }}>Full Name</label>
+                        <input
+                          type="text" name="name" id="name-mobile" value={form.name} onChange={handleChange} required={step === 1}
                           className="w-full bg-[rgba(255,255,255,0.05)] border-0 border-b border-[rgba(255,255,255,0.12)] focus:border-b-[#C17A3A] text-[#F5F0E8] p-[14px_0] outline-none text-[16px] transition-colors rounded-none"
                         />
                       </div>
                       <div className="relative">
-                        <label className="text-[9px] text-[#C17A3A] uppercase tracking-[0.15em] block mb-[6px]" style={{ fontFamily: 'Jost, sans-serif' }}>Email Address</label>
-                        <input 
-                          type="email" name="email" value={form.email} onChange={handleChange} required={step === 1}
+                        <label htmlFor="email-mobile" className="text-[9px] text-[#C17A3A] uppercase tracking-[0.15em] block mb-[6px]" style={{ fontFamily: 'Jost, sans-serif' }}>Email Address</label>
+                        <input
+                          type="email" name="email" id="email-mobile" value={form.email} onChange={handleChange} required={step === 1}
                           className="w-full bg-[rgba(255,255,255,0.05)] border-0 border-b border-[rgba(255,255,255,0.12)] focus:border-b-[#C17A3A] text-[#F5F0E8] p-[14px_0] outline-none text-[16px] transition-colors rounded-none"
                         />
                       </div>
                       <div className="relative">
-                        <label className="text-[9px] text-[#C17A3A] uppercase tracking-[0.15em] block mb-[6px]" style={{ fontFamily: 'Jost, sans-serif' }}>Phone Number</label>
-                        <input 
-                          type="tel" name="phone" value={form.phone} onChange={handleChange} required={step === 1}
+                        <label htmlFor="phone-mobile" className="text-[9px] text-[#C17A3A] uppercase tracking-[0.15em] block mb-[6px]" style={{ fontFamily: 'Jost, sans-serif' }}>Phone Number</label>
+                        <input
+                          type="tel" name="phone" id="phone-mobile" value={form.phone} onChange={handleChange} required={step === 1}
                           className="w-full bg-[rgba(255,255,255,0.05)] border-0 border-b border-[rgba(255,255,255,0.12)] focus:border-b-[#C17A3A] text-[#F5F0E8] p-[14px_0] outline-none text-[16px] transition-colors rounded-none"
                         />
                       </div>
@@ -329,17 +354,17 @@ export default function Reservation() {
                     {/* STEP 2 */}
                     <div className={`absolute top-0 left-0 w-full transition-all duration-500 flex flex-col space-y-[28px] ${step === 2 ? 'opacity-100 translate-x-0' : 'opacity-0 translate-x-full pointer-events-none'}`}>
                       <div className="relative">
-                        <label className="text-[9px] text-[#C17A3A] uppercase tracking-[0.15em] block mb-[6px]" style={{ fontFamily: 'Jost, sans-serif' }}>Select Date</label>
-                        <input 
-                          type="date" name="date" value={form.date} onChange={handleChange} required={step === 2}
+                        <label htmlFor="date-mobile" className="text-[9px] text-[#C17A3A] uppercase tracking-[0.15em] block mb-[6px]" style={{ fontFamily: 'Jost, sans-serif' }}>Select Date</label>
+                        <input
+                          type="date" name="date" id="date-mobile" value={form.date} onChange={handleChange} required={step === 2} min={todayLocal()}
                           className="w-full bg-[rgba(255,255,255,0.05)] border-0 border-b border-[rgba(255,255,255,0.12)] focus:border-b-[#C17A3A] text-[#F5F0E8] p-[14px_0] outline-none text-[16px] [color-scheme:dark] transition-colors rounded-none"
                         />
                       </div>
-                      
+
                       <div>
                         <label className="text-[9px] text-[#C17A3A] uppercase tracking-[0.15em] block mb-[16px]" style={{ fontFamily: 'Jost, sans-serif' }}>Select Time</label>
                         <div className="grid grid-cols-3 gap-[10px]">
-                          {['12:00', '12:30', '13:00', '13:30', '18:00', '18:30', '19:00', '19:30', '20:00', '20:30', '21:00', '21:30'].map(t => (
+                          {TIME_SLOTS.map(t => (
                             <button 
                               key={t} type="button"
                               onClick={() => setForm(prev => ({...prev, time: t}))}
@@ -363,13 +388,13 @@ export default function Reservation() {
                         >
                           Back
                         </button>
-                        <button 
+                        <button
                           type="submit"
                           className="w-2/3 bg-[#C17A3A] text-white p-[18px] text-[10px] tracking-[0.2em] uppercase flex items-center justify-center transition-all duration-300 shadow-lg disabled:opacity-50 hover:bg-[#A66932] rounded-none"
                           style={{ fontFamily: 'Jost, sans-serif' }}
-                          disabled={!form.date || !form.time}
+                          disabled={!form.date || !form.time || submitting}
                         >
-                          Confirm
+                          {submitting ? 'Confirming…' : 'Confirm'}
                         </button>
                       </div>
                     </div>

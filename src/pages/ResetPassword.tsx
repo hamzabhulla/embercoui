@@ -26,15 +26,30 @@ export default function ResetPassword() {
     window.scrollTo(0, 0);
     if (!supabase) { setState('invalid'); return; }
     let settled = false;
+    const markReady = () => { settled = true; setState('ready'); };
+    // "Ready" requires evidence that THIS visit came from a recovery
+    // email — never merely "some session exists". Two signals qualify:
+    //
+    //  1. Supabase fires PASSWORD_RECOVERY when it establishes a
+    //     session from a recovery link's URL fragment (the client is
+    //     created with detectSessionInUrl). A plain SIGNED_IN — e.g. a
+    //     normal login in another tab — does NOT qualify.
+    //  2. The URL fragment still carries type=recovery. The implicit
+    //     flow in this auth-js version never rewrites the fragment
+    //     away, so it survives a mid-flow refresh and the callback
+    //     simply replays (signal 1 fires again). The fragment is only
+    //     trusted together with the session Supabase extracted from
+    //     it — getSession() awaits that extraction, and an expired or
+    //     forged fragment yields no session.
+    const hashSaysRecovery = window.location.hash.includes('type=recovery');
     const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
-      if (session && (event === 'PASSWORD_RECOVERY' || event === 'SIGNED_IN')) {
-        settled = true;
-        setState('ready');
-      }
+      if (session && event === 'PASSWORD_RECOVERY') markReady();
     });
-    supabase.auth.getSession().then(({ data }) => {
-      if (!settled && data.session) { settled = true; setState('ready'); }
-    });
+    if (hashSaysRecovery) {
+      supabase.auth.getSession().then(({ data }) => {
+        if (!settled && data.session) markReady();
+      });
+    }
     const t = setTimeout(() => { if (!settled) setState('invalid'); }, 2500);
     return () => { listener.subscription.unsubscribe(); clearTimeout(t); };
   }, []);

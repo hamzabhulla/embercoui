@@ -62,6 +62,30 @@ export async function signOut(): Promise<void> {
   await supabase.auth.signOut();
 }
 
+// Pages that must never be a post-auth landing: the auth screens
+// themselves, and /reset-password — without a live recovery link it
+// only renders its "invalid link" state, so returning there after a
+// successful sign-in would strand the visitor on a dead end.
+const NO_RETURN_PATHS = ['/login', '/signup', '/forgot-password', '/reset-password'];
+
+/**
+ * Sanitise a post-auth return target "by construction" — the single
+ * definition shared by the router (App.tsx) and Google OAuth below, so
+ * the two can never drift apart. Only a plain same-origin app path is
+ * honoured: it must start with exactly one '/' — a second '/' makes it
+ * protocol-relative ('//evil.com'), and a backslash ('/\evil.com') is
+ * treated the same way by some URL parsers — and it must contain no
+ * backslash anywhere, so it can never be reinterpreted as an off-site
+ * URL by the router or by OAuth's redirectTo. Anything else (empty,
+ * absolute, or an auth route itself) falls back to the home page.
+ */
+export function sanitizeReturnPath(path: string | null | undefined): string {
+  if (!path || !path.startsWith('/')) return '/';
+  if (path[1] === '/' || path.includes('\\')) return '/';
+  if (NO_RETURN_PATHS.includes(path)) return '/';
+  return path;
+}
+
 /**
  * Google sign-in / sign-up via Supabase OAuth (full-page redirect).
  * The provider must be enabled in Supabase Dashboard -> Authentication ->
@@ -70,11 +94,17 @@ export async function signOut(): Promise<void> {
  * session up automatically and the profile row is created by the
  * handle_new_user trigger (full_name comes from the Google profile).
  */
-export async function signInWithGoogle(): Promise<AuthResult> {
+export async function signInWithGoogle(returnPath = '/'): Promise<AuthResult> {
   if (!supabase) return { error: NOT_AVAILABLE };
+  // Land back on the page the visitor came from, not unconditionally
+  // the home page — sanitised by the same helper the router uses, so
+  // only same-origin app paths are honoured, and never an auth route
+  // itself (returning to /login while signed in would just re-open
+  // the form).
+  const safePath = sanitizeReturnPath(returnPath);
   const { error } = await supabase.auth.signInWithOAuth({
     provider: 'google',
-    options: { redirectTo: `${window.location.origin}/` },
+    options: { redirectTo: `${window.location.origin}${safePath}` },
   });
   return { error: error ? friendly(error) : null };
 }

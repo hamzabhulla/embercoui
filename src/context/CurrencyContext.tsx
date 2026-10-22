@@ -17,9 +17,18 @@ export function CurrencyProvider({ children }: { children: React.ReactNode }) {
   const [currency, setCurrency] = useState('USD');
 
   const refresh = useCallback(async () => {
-    const settings = await fetchPublicSettings();
-    if (settings?.currency && isValidCurrencyCode(settings.currency)) {
-      setCurrency(settings.currency.toUpperCase());
+    // The settings fetch carries a 10s timeout (services/api); if it
+    // still fails — a cold start, a flaky first connection — retry ONCE
+    // before giving up. If both attempts fail we keep the USD default:
+    // formatting must never crash, and showing prices in the fallback
+    // currency is the documented behaviour until a later successful
+    // refresh (e.g. after admin settings are saved) corrects it.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const settings = await fetchPublicSettings();
+      if (settings?.currency && isValidCurrencyCode(settings.currency)) {
+        setCurrency(settings.currency.toUpperCase());
+        return;
+      }
     }
   }, []);
 

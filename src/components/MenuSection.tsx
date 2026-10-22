@@ -47,7 +47,7 @@ export default function MenuSection() {
   const displayed = filtered.slice(0, 6);
 
   const handleAdd = (item: typeof menuItems[0]) => {
-    addItem({ id: item.id, name: item.name, price: item.price, image: item.image });
+    addItem({ id: item.id, name: item.name, price: item.price, image: item.image, description: item.description });
     setAddedIds(prev => [...prev, item.id]);
     setTimeout(() => {
       setAddedIds(prev => prev.filter(id => id !== item.id));

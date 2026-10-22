@@ -1,14 +1,66 @@
+import { useState } from 'react';
 import { X } from 'lucide-react';
-import { useCart } from '../context/CartContext.tsx';
+import { useCart, type AppliedCoupon } from '../context/CartContext.tsx';
 import { useCurrency } from '../context/CurrencyContext.tsx';
 import { useNavigate } from 'react-router-dom';
+import { apiRequest } from '../services/api.ts';
+import { fromMinorUnits, toMinorUnits } from '../lib/currency.ts';
 
 export default function CartSidebar() {
   const navigate = useNavigate();
-  const { items, isOpen, setIsOpen, updateQuantity } = useCart();
-  const { format } = useCurrency();
+  const { items, isOpen, setIsOpen, updateQuantity, coupon, applyCoupon, removeCoupon } = useCart();
+  const { format, currency } = useCurrency();
 
-  const total = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  const [couponInput, setCouponInput] = useState('');
+  const [couponBusy, setCouponBusy] = useState(false);
+  const [couponMsg, setCouponMsg] = useState<{ text: string; ok: boolean } | null>(null);
+
+  const subtotal = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  // Mirror the server's discount math exactly (backend orders route):
+  // integer minor units; percent → round(subtotal × value / 100);
+  // fixed → min(value, subtotal); the result never exceeds the
+  // subtotal. It is recomputed from the live subtotal on every render,
+  // so the line can never overstate what the coupon is worth right
+  // now — the server remains the final authority at order time.
+  const subtotalMinor = toMinorUnits(subtotal, currency);
+  const discountMinor = !coupon
+    ? 0
+    : coupon.type === 'percent'
+      ? Math.round((subtotalMinor * coupon.value) / 100)
+      : Math.min(toMinorUnits(coupon.value, currency), subtotalMinor);
+  const discount = fromMinorUnits(Math.min(discountMinor, subtotalMinor), currency);
+  const total = Math.max(0, subtotal - discount);
+
+  const handleApplyCoupon = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const code = couponInput.trim();
+    if (!code || couponBusy) return;
+    setCouponBusy(true);
+    setCouponMsg(null);
+    // The same validation endpoint Checkout uses — the drawer holds no
+    // coupon logic of its own beyond displaying the outcome.
+    const res = await apiRequest<{ valid: boolean; coupon?: AppliedCoupon }>('/api/v1/coupons/validate', {
+      method: 'POST', body: JSON.stringify({ code }),
+    });
+    setCouponBusy(false);
+    if (res.ok && res.data?.valid && res.data.coupon) {
+      applyCoupon(res.data.coupon);
+      setCouponInput('');
+      setCouponMsg({
+        text: `Coupon applied — ${res.data.coupon.type === 'percent' ? `${res.data.coupon.value}% off` : `${format(res.data.coupon.value)} off`}.`,
+        ok: true,
+      });
+    } else if (res.ok) {
+      setCouponMsg({ text: 'This coupon code is not valid.', ok: false });
+    } else {
+      setCouponMsg({ text: res.error ?? 'We could not check that coupon — please try again.', ok: false });
+    }
+  };
+
+  const handleRemoveCoupon = () => {
+    removeCoupon();
+    setCouponMsg(null);
+  };
 
   return (
     <>
@@ -150,18 +202,24 @@ export default function CartSidebar() {
                       >
                         {item.name}
                       </h3>
-                      <p
-                        className="mt-1"
-                        style={{ 
-                          fontFamily: 'Jost, sans-serif',
-                          fontSize: '11px',
-                          color: 'rgba(245,240,232,0.35)',
-                          fontWeight: 300,
-                          lineHeight: '1.4'
-                        }}
-                      >
-                        Our signature preparation
-                      </p>
+                      {item.description && (
+                        <p
+                          className="mt-1"
+                          style={{
+                            fontFamily: 'Jost, sans-serif',
+                            fontSize: '11px',
+                            color: 'rgba(245,240,232,0.35)',
+                            fontWeight: 300,
+                            lineHeight: '1.4',
+                            display: '-webkit-box',
+                            WebkitLineClamp: 2,
+                            WebkitBoxOrient: 'vertical',
+                            overflow: 'hidden'
+                          }}
+                        >
+                          {item.description}
+                        </p>
+                      )}
                     </div>
                     
                     <div className="flex items-center justify-between mt-3">
@@ -232,9 +290,9 @@ export default function CartSidebar() {
               borderTop: '1px solid rgba(255,255,255,0.07)'
             }}
           >
-            <div className="space-y-3 mb-6">
+            <div className="space-y-3 mb-5">
               <div className="flex justify-between items-center">
-                <span style={{ 
+                <span style={{
                   fontFamily: 'Jost, sans-serif',
                   fontSize: '12px',
                   color: 'rgba(245,240,232,0.4)',
@@ -242,59 +300,131 @@ export default function CartSidebar() {
                 }}>
                   Subtotal
                 </span>
-                <span style={{ 
+                <span style={{
                   fontFamily: 'Cormorant Garamond, serif',
                   fontSize: '18px',
                   color: '#F5F0E8'
                 }}>
-                  {format(total)}
+                  {format(subtotal)}
                 </span>
               </div>
-              <div className="flex justify-between items-center">
-                <span style={{ 
-                  fontFamily: 'Jost, sans-serif',
-                  fontSize: '12px',
-                  color: 'rgba(245,240,232,0.4)',
-                  letterSpacing: '0.06em'
-                }}>
-                  Delivery
-                </span>
-                <span style={{ 
-                  fontFamily: 'Jost, sans-serif',
-                  fontSize: '14px',
-                  color: '#4CAF50'
-                }}>
-                  Free
-                </span>
+              {coupon && (
+                <div className="flex justify-between items-center">
+                  <span style={{
+                    fontFamily: 'Jost, sans-serif',
+                    fontSize: '12px',
+                    color: 'rgba(245,240,232,0.4)',
+                    letterSpacing: '0.06em'
+                  }}>
+                    Discount ({coupon.code})
+                  </span>
+                  <span style={{
+                    fontFamily: 'Jost, sans-serif',
+                    fontSize: '14px',
+                    color: '#4ade80'
+                  }}>
+                    −{format(discount)}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            <div style={{ height: '1px', background: 'rgba(255,255,255,0.07)', marginBottom: '16px' }} />
+
+            <div className="flex justify-between items-center">
+              <span style={{
+                fontFamily: 'Jost, sans-serif',
+                fontSize: '13px',
+                color: '#F5F0E8',
+                letterSpacing: '0.06em'
+              }}>
+                Total
+              </span>
+              <span style={{
+                fontFamily: 'Cormorant Garamond, serif',
+                fontSize: '22px',
+                color: '#C17A3A'
+              }}>
+                {format(total)}
+              </span>
+            </div>
+            <p
+              className="mt-1 mb-6"
+              style={{
+                fontFamily: 'Jost, sans-serif',
+                fontSize: '10px',
+                color: 'rgba(245,240,232,0.35)'
+              }}
+            >
+              Delivery is calculated at checkout
+            </p>
+
+            {coupon ? (
+              <div className="mb-6">
+                <div className="flex items-center justify-between pb-2" style={{ borderBottom: '1px solid rgba(255,255,255,0.12)' }}>
+                  <span style={{ fontFamily: 'Jost, sans-serif', fontSize: '13px', color: '#F5F0E8', letterSpacing: '0.08em' }}>
+                    {coupon.code}
+                    <span style={{ color: 'rgba(245,240,232,0.4)', letterSpacing: 'normal' }}>
+                      {' '}· {coupon.type === 'percent' ? `${coupon.value}% off` : `${format(coupon.value)} off`}
+                    </span>
+                  </span>
+                  <button
+                    onClick={handleRemoveCoupon}
+                    className="transition-colors hover:text-white"
+                    style={{
+                      color: '#C17A3A',
+                      fontFamily: 'Jost, sans-serif',
+                      fontSize: '12px',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.05em'
+                    }}
+                  >
+                    Remove
+                  </button>
+                </div>
+                {couponMsg && (
+                  <p className="mt-2" style={{ fontFamily: 'Jost, sans-serif', fontSize: '11px', color: couponMsg.ok ? '#4ade80' : '#ef4444' }}>
+                    {couponMsg.text}
+                  </p>
+                )}
               </div>
-            </div>
-
-            <div style={{ height: '1px', background: 'rgba(255,255,255,0.07)', marginBottom: '20px' }} />
-
-            <div className="relative mb-6">
-              <input 
-                type="text"
-                placeholder="Coupon code"
-                className="w-full bg-transparent outline-none pb-2 transition-colors focus:border-[#C17A3A] placeholder-[rgba(245,240,232,0.3)]"
-                style={{
-                  borderBottom: '1px solid rgba(255,255,255,0.12)',
-                  color: '#F5F0E8',
-                  fontFamily: 'Jost, sans-serif',
-                  fontSize: '13px'
-                }}
-              />
-              <button 
-                className="absolute right-0 top-0 pb-2 text-xs transition-colors hover:text-white"
-                style={{
-                  color: '#C17A3A',
-                  fontFamily: 'Jost, sans-serif',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.05em'
-                }}
-              >
-                Apply
-              </button>
-            </div>
+            ) : (
+              <div className="mb-6">
+                <form onSubmit={handleApplyCoupon} className="relative">
+                  <input
+                    type="text"
+                    value={couponInput}
+                    onChange={(e) => setCouponInput(e.target.value)}
+                    placeholder="Coupon code"
+                    className="w-full bg-transparent outline-none pb-2 transition-colors focus:border-[#C17A3A] placeholder-[rgba(245,240,232,0.3)]"
+                    style={{
+                      borderBottom: '1px solid rgba(255,255,255,0.12)',
+                      color: '#F5F0E8',
+                      fontFamily: 'Jost, sans-serif',
+                      fontSize: '13px'
+                    }}
+                  />
+                  <button
+                    type="submit"
+                    disabled={couponBusy || !couponInput.trim()}
+                    className="absolute right-0 top-0 pb-2 text-xs transition-colors hover:text-white disabled:opacity-50"
+                    style={{
+                      color: '#C17A3A',
+                      fontFamily: 'Jost, sans-serif',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.05em'
+                    }}
+                  >
+                    {couponBusy ? 'Checking…' : 'Apply'}
+                  </button>
+                </form>
+                {couponMsg && (
+                  <p className="mt-2" style={{ fontFamily: 'Jost, sans-serif', fontSize: '11px', color: couponMsg.ok ? '#4ade80' : '#ef4444' }}>
+                    {couponMsg.text}
+                  </p>
+                )}
+              </div>
+            )}
 
             <button
               onClick={() => { setIsOpen(false); navigate('/checkout'); }}

@@ -43,6 +43,9 @@ export default function AdminSettings() {
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!form) return;
+    // The same wait-range rule the API enforces on the merged settings —
+    // caught here so the admin sees the error without a round trip.
+    if (form.waitMax < form.waitMin) { setError('Maximum wait must be at least the minimum wait'); setNotice(''); return; }
     setBusy(true); setError(''); setNotice('');
     try {
       const res = await adminSend<{ settings: Settings }>('PATCH', '/api/v1/admin/settings', {

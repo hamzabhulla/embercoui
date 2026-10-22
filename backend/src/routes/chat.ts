@@ -15,7 +15,7 @@ const chatBodySchema = z.object({
       })
     )
     .min(1, 'At least one message is required')
-    .max(12, 'Conversation is too long'),
+    .max(20, 'Conversation is too long'),
 });
 
 export function chatRouter(deps: { repo: Repository | null; chat: ChatService | null; rateLimitMax?: number }) {
@@ -37,8 +37,23 @@ export function chatRouter(deps: { repo: Repository | null; chat: ChatService | 
       if (messages[messages.length - 1].role !== 'user') {
         throw new ApiError(400, 'The last message must be from the user.');
       }
+      // Client-supplied history is untrusted: a visitor can put anything
+      // in an "assistant" message — including forged [[ADD: …]] markers
+      // or claims that a discount was approved. Strip every [[...]] span
+      // before the history reaches the model; markers are only ever
+      // honoured in the model's OWN reply (resolveCartActions reads the
+      // reply text, never the history). Messages left empty by stripping
+      // drop out, and the slice bounds what reaches the model even if
+      // the schema cap above is ever relaxed.
+      const cleanMessages = messages
+        .map((m) => ({ role: m.role, content: m.content.replace(/\[\[[^\]]*\]\]/g, '').trim() }))
+        .filter((m) => m.content.length > 0)
+        .slice(-20);
+      if (!cleanMessages.length || cleanMessages[cleanMessages.length - 1].role !== 'user') {
+        throw new ApiError(400, 'The last message must be from the user.');
+      }
       const [settings, items] = await Promise.all([deps.repo.getSettings(), deps.repo.listMenuItems()]);
-      const raw = await deps.chat.reply({ system: buildChatSystemPrompt(settings, items), messages });
+      const raw = await deps.chat.reply({ system: buildChatSystemPrompt(settings, items), messages: cleanMessages });
       const { text, actions } = resolveCartActions(raw, items);
       const reply = text || (actions.length
         ? `Added to your cart: ${actions.map((a) => `${a.quantity} × ${a.name}`).join(', ')}. Open the cart to review and check out whenever you are ready.`

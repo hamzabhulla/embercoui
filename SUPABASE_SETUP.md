@@ -18,12 +18,14 @@ Supabase Dashboard → **SQL Editor** → paste and run, in this order:
 5. `supabase/migrations/0005_reservations_admin.sql` — admin reservation management: booking source + notes, optional email, per-slot guest capacity
 6. `supabase/migrations/0006_order_idempotency.sql` — idempotent checkout: a per-attempt key on `orders` (+ unique index) so a retried or double-submitted checkout returns the original order instead of duplicating it
 7. `supabase/migrations/0007_indexes.sql` — supporting indexes for the paged admin lists (reservations by date + status, menu by availability/category/sort order, orders by creation time)
-8. `supabase/seed.sql` — starter content: restaurant settings, the current menu (15 items), and 3 testimonials as approved reviews
+8. `supabase/migrations/0008_api_only_writes.sql` — drops the permissive client INSERT policies from 0001 (reservations, newsletter, contact, reviews): all writes flow through the backend API, which validates and rate-limits; the service-role backend is unaffected
+9. `supabase/migrations/0009_hero_bucket.sql` — creates the public `hero-portfolio-video` storage bucket + policies (same model as `menu-images` in 0002)
+10. `supabase/seed.sql` — starter content: restaurant settings, the current menu (15 items), and 3 testimonials as approved reviews
 
-## 2. Hero media bucket (manual, one minute)
-Dashboard → **Storage** → **New bucket**:
-- Name: `hero-portfolio-video`, **Public bucket** ON (public read).
-- Upload `hero-video.mp4` (homepage hero video) and `hero-mobile.jpg` (mobile hero photo).
+## 2. Hero media files (manual, one minute)
+The `hero-portfolio-video` bucket itself is created by migration **0009** above — no manual bucket setup. Only the media files are uploaded by hand:
+Dashboard → **Storage** → **`hero-portfolio-video`** → **Upload**:
+- `hero-video.mp4` (homepage hero video) and `hero-mobile.jpg` (mobile hero photo).
 
 `src/components/Hero.tsx` loads both files from this bucket's public URLs —
 after uploading, make sure the two URLs in `Hero.tsx` point at YOUR project's

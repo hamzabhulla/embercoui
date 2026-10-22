@@ -44,11 +44,15 @@ export default function AdminStaff() {
                     <td className={`${tdCls} text-[#5C665C]`}>{p.email ?? ''}</td>
                     <td className={tdCls}>
                       {isAdmin ? (
-                        <select aria-label={`Role for ${p.email ?? p.id}`} value={p.role}
-                          onChange={(e) => void changeRole(p.id, e.target.value)}
-                          className="bg-white border border-[#EAE3D3] rounded-[9px] px-3 py-2 font-bodytext text-[12.5px] capitalize focus:outline-none focus:border-[#C17A3A] cursor-pointer">
-                          {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
-                        </select>
+                        <span className="flex flex-col gap-1">
+                          <select aria-label={`Role for ${p.email ?? p.id}`} value={p.role}
+                            disabled={p.id === profile?.id}
+                            onChange={(e) => void changeRole(p.id, e.target.value)}
+                            className="bg-white border border-[#EAE3D3] rounded-[9px] px-3 py-2 font-bodytext text-[12.5px] capitalize focus:outline-none focus:border-[#C17A3A] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
+                            {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
+                          </select>
+                          {p.id === profile?.id && <span className="font-bodytext text-[11px] text-[#98A096]">That's you — another admin must change your role.</span>}
+                        </span>
                       ) : (
                         <span className="inline-flex px-2.5 py-[3px] rounded-full bg-[#EFE9DB] text-[#5C665C] font-bodytext text-[11px] font-semibold capitalize">{p.role}</span>
                       )}

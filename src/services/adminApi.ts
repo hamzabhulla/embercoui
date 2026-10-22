@@ -1,4 +1,4 @@
-import { API_URL, apiRequest } from './api';
+import { API_URL, apiRequest, fetchWithTimeout } from './api';
 import { supabase } from '../lib/supabase';
 
 export class ApiError extends Error {
@@ -31,7 +31,9 @@ export async function adminDownloadCsv(path: string): Promise<void> {
     const token = data.session?.access_token;
     if (token) headers.Authorization = `Bearer ${token}`;
   }
-  const res = await fetch(`${API_URL}${path}`, { headers });
+  // A file transfer gets a longer deadline than the 10s API default,
+  // but still a deadline — a stalled download must not hang forever.
+  const res = await fetchWithTimeout(`${API_URL}${path}`, { headers }, 30_000);
   if (!res.ok) throw new ApiError(res.status, 'Download failed');
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);

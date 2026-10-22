@@ -1,4 +1,5 @@
 import { ApiError } from '../src/lib/errors';
+import { DEFAULT_SETTINGS } from '../src/repositories/supabaseRepository';
 import type {
   AdminReservationInput, CouponDTO, CreateOrderData, CustomerDTO, MenuItemDTO, NewsletterSubscriberDTO,
   OrderDTO, Page, PageParams, ProfileDTO, PublicSettingsDTO,
@@ -13,7 +14,9 @@ export class FakeRepository implements Repository {
     { id: 2, name: 'Forest Truffle Burger', description: 'Wagyu', price: 38, image: 'img2', category: 'Burgers', tags: ['Spicy'], isAvailable: true, sortOrder: 1 },
     { id: 3, name: 'Secret Special', description: 'Hidden', price: 50, image: 'img3', category: 'Pizza', tags: [], isAvailable: false, sortOrder: 2 },
   ];
-  settings: PublicSettingsDTO = {
+  // Null simulates the missing restaurant_settings row (seed never ran):
+  // reads fall back to DEFAULT_SETTINGS, exactly like the real repository.
+  settings: PublicSettingsDTO | null = {
     kitchenOpen: true, waitMin: 20, waitMax: 30, currency: 'USD', restaurantName: 'Ember & Co.',
     phone: null, email: null, address: null, whatsappNumber: null, reservationSlotCapacity: 40, openingHours: {},
   };
@@ -48,7 +51,7 @@ export class FakeRepository implements Repository {
     const found = this.menu.find((m) => m.id === id && m.isAvailable);
     return found ? (({ isAvailable: _a, sortOrder: _s, ...dto }) => dto)(found) : null;
   }
-  async getSettings() { return { ...this.settings }; }
+  async getSettings() { return { ...(this.settings ?? DEFAULT_SETTINGS) }; }
   async listApprovedReviews() { return this.reviews.filter((r) => r.isApproved).map(({ isApproved: _a, ...dto }) => dto); }
 
   async getProfile(userId: string) { return this.profiles.get(userId) ?? null; }
@@ -209,7 +212,7 @@ export class FakeRepository implements Repository {
           ...p,
           email: `${p.id}@example.com`,
           orderCount: userOrders.length,
-          totalSpent: Math.round(userOrders.filter((o) => o.paymentStatus === 'paid' && o.currency === this.settings.currency).reduce((sum, o) => sum + o.total, 0) * 100) / 100,
+          totalSpent: Math.round(userOrders.filter((o) => o.paymentStatus === 'paid' && o.currency === (this.settings ?? DEFAULT_SETTINGS).currency).reduce((sum, o) => sum + o.total, 0) * 100) / 100,
         };
       });
     if (!page) return all;
@@ -272,7 +275,10 @@ export class FakeRepository implements Repository {
     return p;
   }
   async updateSettings(patch: Partial<PublicSettingsDTO>) {
-    Object.assign(this.settings, patch);
+    // Mirror the real repository: patching while the row is missing
+    // creates the singleton (defaults + patch) — the save must persist,
+    // never silently evaporate.
+    this.settings = { ...(this.settings ?? DEFAULT_SETTINGS), ...patch };
     return { ...this.settings };
   }
 }
@@ -290,6 +296,7 @@ export function testEnv(overrides: Partial<import('../src/config/env').Env> = {}
     nodeEnv: 'test', port: 0, corsOrigins: ['http://localhost:5173'],
     supabaseUrl: 'https://example.supabase.co', supabaseServiceRoleKey: 'service-key',
     supabaseConfigured: true, stripeSecretKey: 'sk_test_fake', stripeWebhookSecret: 'whsec_fake',
-    stripeConfigured: true, geminiApiKey: null, geminiConfigured: false, geminiModel: null, ...overrides,
+    stripeConfigured: true, geminiApiKey: null, geminiConfigured: false, geminiModel: null,
+    trustProxy: undefined, ...overrides,
   };
 }

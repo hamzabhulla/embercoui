@@ -44,11 +44,23 @@ function menuDTO(r: Row): MenuItemDTO {
 function menuFull(r: Row) {
   return { ...menuDTO(r), isAvailable: r.is_available !== false, sortOrder: num(r.sort_order) };
 }
+// Like num(), but a stored 0 is a real value: only a missing/NULL or
+// non-numeric value falls back. (`num(v) || fallback` would silently turn
+// a legitimate 0 into the fallback.)
+const numOrFallback = (v: unknown, fallback: number): number => {
+  if (v == null) return fallback;
+  const n = typeof v === 'number' ? v : Number(v);
+  return Number.isNaN(n) ? fallback : n;
+};
 function settingsDTO(r: Row): PublicSettingsDTO {
   return {
     kitchenOpen: r.kitchen_open !== false,
-    waitMin: num(r.wait_min) || 20,
-    waitMax: num(r.wait_max) || 30,
+    // 0 is a legitimate wait time ("no wait right now") — the settings
+    // schema allows min 0 — so these two use the nullish-aware parse.
+    // reservationSlotCapacity keeps `|| 40`: its schema minimum is 1, so a
+    // stored 0 is corruption, not a value, and the fallback is the guard.
+    waitMin: numOrFallback(r.wait_min, 20),
+    waitMax: numOrFallback(r.wait_max, 30),
     currency: sanitizeCurrencyCode(r.currency),
     restaurantName: str(r.restaurant_name) || 'Ember & Co.',
     phone: strOrNull(r.phone),
@@ -63,6 +75,24 @@ export const DEFAULT_SETTINGS: PublicSettingsDTO = {
   kitchenOpen: true, waitMin: 20, waitMax: 30, currency: 'USD', restaurantName: 'Ember & Co.',
   phone: null, email: null, address: null, whatsappNumber: null, reservationSlotCapacity: 40, openingHours: {},
 };
+// Inverse of settingsDTO: a full settings DTO as a restaurant_settings
+// row (the singleton is always id 1 — see the check constraint in 0001).
+function settingsRow(s: PublicSettingsDTO): Row {
+  return {
+    id: 1,
+    kitchen_open: s.kitchenOpen,
+    wait_min: s.waitMin,
+    wait_max: s.waitMax,
+    currency: s.currency,
+    restaurant_name: s.restaurantName,
+    phone: s.phone,
+    email: s.email,
+    address: s.address,
+    whatsapp_number: s.whatsappNumber,
+    reservation_slot_capacity: s.reservationSlotCapacity,
+    opening_hours: s.openingHours,
+  };
+}
 function reviewDTO(r: Row): ReviewDTO {
   return { id: str(r.id), name: str(r.name), rating: num(r.rating), comment: str(r.comment), country: strOrNull(r.country), createdAt: str(r.created_at) };
 }
@@ -658,8 +688,18 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
       if (patch.whatsappNumber !== undefined) update.whatsapp_number = patch.whatsappNumber;
       if (patch.reservationSlotCapacity !== undefined) update.reservation_slot_capacity = patch.reservationSlotCapacity;
       if (patch.openingHours !== undefined) update.opening_hours = patch.openingHours;
-      const { error } = await db.from('restaurant_settings').update(update).eq('id', 1);
+      const { data, error } = await db.from('restaurant_settings').update(update).eq('id', 1).select('id');
       if (error) throw new Error(`settings update failed: ${error.message}`);
+      if ((data ?? []).length === 0) {
+        // The singleton row is missing (seed never ran, or the row was
+        // deleted): an UPDATE alone would change nothing and the admin's
+        // save would evaporate behind a normal-looking defaults response.
+        // Insert the row instead — the patch applied over the defaults —
+        // so what the admin saved is what persists.
+        const merged: PublicSettingsDTO = { ...DEFAULT_SETTINGS, ...patch };
+        const { error: insertError } = await db.from('restaurant_settings').insert(settingsRow(merged));
+        if (insertError) throw new Error(`settings insert failed: ${insertError.message}`);
+      }
       return repo.getSettings();
     },
   };

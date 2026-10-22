@@ -53,11 +53,19 @@ export default function TrackOrder() {
   useEffect(() => {
     window.scrollTo(0, 0);
     void load();
-    // Polling fallback — also the only channel for guest orders, whose
-    // realtime events are restricted by row-level security.
+  }, [load]);
+
+  // Polling fallback — also the only channel for guest orders, whose
+  // realtime events are restricted by row-level security. It stops for
+  // good once the order reaches a terminal state (delivered/cancelled):
+  // nothing can change after that, so polling forever just burns
+  // requests (audit fix 15).
+  const status = order?.status;
+  useEffect(() => {
+    if (status === 'delivered' || status === 'cancelled') return;
     const interval = setInterval(() => void load(true), 15000);
     return () => clearInterval(interval);
-  }, [load]);
+  }, [load, status]);
 
   useEffect(() => {
     if (!supabase || !id) return;
@@ -183,7 +191,9 @@ export default function TrackOrder() {
           <div className="flex flex-col gap-2">
             <div className="flex justify-between"><span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: 'rgba(245,240,232,0.5)' }}>Subtotal</span><span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: '#F5F0E8' }}>{format(order.subtotal, order.currency)}</span></div>
             {order.discount > 0 && <div className="flex justify-between"><span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: 'rgba(245,240,232,0.5)' }}>Discount</span><span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: '#4ade80' }}>−{format(order.discount, order.currency)}</span></div>}
-            <div className="flex justify-between"><span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: 'rgba(245,240,232,0.5)' }}>Delivery</span><span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: '#4ade80' }}>Free</span></div>
+            <div className="flex justify-between"><span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: 'rgba(245,240,232,0.5)' }}>Delivery</span>{order.deliveryFee > 0
+              ? <span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: '#F5F0E8' }}>{format(order.deliveryFee, order.currency)}</span>
+              : <span style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: '#4ade80' }}>Free</span>}</div>
             <div className="flex justify-between mt-1"><span style={{ fontFamily: 'Jost, sans-serif', fontSize: '13px', color: '#F5F0E8' }}>Total</span><span style={{ fontFamily: 'Cormorant Garamond, serif', fontSize: '22px', color: '#C17A3A' }}>{format(order.total, order.currency)}</span></div>
           </div>
           {order.address?.line1 && (

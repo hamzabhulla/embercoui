@@ -229,7 +229,7 @@ export function adminRouter(deps: AdminDeps) {
       if (!deps.storage) throw new ApiError(503, 'Image storage is not configured');
       const { filename, contentType, dataBase64 } = req.body as z.infer<typeof uploadSchema>;
       const data = Buffer.from(dataBase64, 'base64');
-      assertImageUpload(contentType, data.byteLength);
+      assertImageUpload(contentType, data);
       const { publicUrl } = await deps.storage.uploadMenuImage({ filename, contentType, data });
       res.status(201).json({ url: publicUrl });
     } catch (err) { next(err); }
@@ -392,12 +392,29 @@ export function adminRouter(deps: AdminDeps) {
         m.revenue += o.total; m.orders += 1; byMonth.set(month, m);
       }
       const round = (n: number) => roundMajorUnits(n, currency);
+      // byDay is a continuous calendar series: the 30 days ending at the
+      // most recent paid order's day, zero-filled where nothing sold —
+      // previously only days WITH sales appeared, so quiet days vanished
+      // and the series silently compressed the calendar. (An order older
+      // than the window still counts toward the totals below; it simply
+      // falls off the daily chart, as it did when the series was capped
+      // at 30 entries.)
+      let byDaySeries: { date: string; revenue: number; orders: number }[] = [];
+      if (orders.length) {
+        const endDay = orders.reduce((max, o) => (o.createdAt.slice(0, 10) > max ? o.createdAt.slice(0, 10) : max), '');
+        const endMs = Date.parse(`${endDay}T00:00:00.000Z`);
+        byDaySeries = Array.from({ length: 30 }, (_, i) => {
+          const date = new Date(endMs - (29 - i) * 86_400_000).toISOString().slice(0, 10);
+          const agg = byDay.get(date);
+          return { date, revenue: round(agg?.revenue ?? 0), orders: agg?.orders ?? 0 };
+        }).reverse(); // newest first, as before
+      }
       res.json({
         currency,
         totalRevenue: round(orders.reduce((s, o) => s + o.total, 0)),
         totalPaidOrders: orders.length,
         averageOrderValue: orders.length ? round(orders.reduce((s, o) => s + o.total, 0) / orders.length) : 0,
-        byDay: [...byDay.values()].sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, 30).map((d) => ({ ...d, revenue: round(d.revenue) })),
+        byDay: byDaySeries,
         byMonth: [...byMonth.values()].sort((a, b) => (a.month < b.month ? 1 : -1)).slice(0, 12).map((m) => ({ ...m, revenue: round(m.revenue) })),
       });
     } catch (err) { next(err); }

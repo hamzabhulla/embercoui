@@ -28,9 +28,38 @@ export interface ApprovedReview {
   createdAt: string;
 }
 
+const DEFAULT_TIMEOUT_MS = 10_000;
+const TIMEOUT_MESSAGE = 'Request timed out — please try again';
+
+/**
+ * fetch with a hard deadline. Without one, a hung connection (captive
+ * portal, dead proxy, stalled cold start) leaves every caller spinning
+ * forever; the abort turns that into a normal, explainable failure.
+ * When the caller supplies their own signal it wins — the deadline is
+ * only the default safety net.
+ */
+export async function fetchWithTimeout(
+  url: string,
+  init: RequestInit = {},
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
+): Promise<Response> {
+  if (init.signal) return fetch(url, init);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function isTimeoutError(err: unknown): boolean {
+  return err instanceof DOMException && err.name === 'AbortError';
+}
+
 async function getJson<T>(path: string): Promise<T | null> {
   try {
-    const res = await fetch(`${API_URL}${path}`);
+    const res = await fetchWithTimeout(`${API_URL}${path}`);
     if (!res.ok) return null;
     return (await res.json()) as T;
   } catch {
@@ -84,12 +113,16 @@ export interface ApiResult<T> {
   error: string | null;
 }
 
-export async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<ApiResult<T>> {
+export async function apiRequest<T>(
+  path: string,
+  init: RequestInit = {},
+  options: { timeoutMs?: number } = {},
+): Promise<ApiResult<T>> {
   try {
-    const res = await fetch(`${API_URL}${path}`, {
+    const res = await fetchWithTimeout(`${API_URL}${path}`, {
       ...init,
       headers: { 'Content-Type': 'application/json', ...(await authHeaders()), ...(init.headers ?? {}) },
-    });
+    }, options.timeoutMs);
     const body = (await res.json().catch(() => null)) as (T & { error?: string }) | null;
     return {
       ok: res.ok,
@@ -97,7 +130,10 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
       data: body,
       error: res.ok ? null : (body?.error ?? 'Something went wrong — please try again'),
     };
-  } catch {
+  } catch (err) {
+    if (isTimeoutError(err)) {
+      return { ok: false, status: 0, data: null, error: TIMEOUT_MESSAGE };
+    }
     return { ok: false, status: 0, data: null, error: 'We could not reach the server — please check your connection and try again' };
   }
 }

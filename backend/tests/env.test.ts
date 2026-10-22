@@ -25,4 +25,17 @@ describe('loadEnv', () => {
     const env = loadEnv({ CORS_ORIGIN: 'https://a.com, https://b.com' });
     expect(env.corsOrigins).toEqual(['https://a.com', 'https://b.com']);
   });
+  it('parses TRUST_PROXY as an integer hop count', () => {
+    expect(loadEnv({}).trustProxy).toBeUndefined();
+    expect(loadEnv({ TRUST_PROXY: '1' }).trustProxy).toBe(1);
+    expect(loadEnv({ TRUST_PROXY: ' 2 ' }).trustProxy).toBe(2);
+    expect(loadEnv({ TRUST_PROXY: '0' }).trustProxy).toBe(0);
+  });
+  it('treats an invalid TRUST_PROXY as unset', () => {
+    expect(loadEnv({ TRUST_PROXY: '' }).trustProxy).toBeUndefined();
+    expect(loadEnv({ TRUST_PROXY: 'true' }).trustProxy).toBeUndefined();
+    expect(loadEnv({ TRUST_PROXY: 'abc' }).trustProxy).toBeUndefined();
+    expect(loadEnv({ TRUST_PROXY: '1.5' }).trustProxy).toBeUndefined();
+    expect(loadEnv({ TRUST_PROXY: '-1' }).trustProxy).toBeUndefined();
+  });
 });

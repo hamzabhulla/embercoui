@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { adminGet, adminSend } from '../../services/adminApi';
+import { useAuth } from '../../context/AuthContext';
 import {
   Card, CardHead, EmptyNote, ErrorNote, LoadingNote, NoticeNote, PageTitle, StatCard, StatusPill,
   chipBtn, chipDangerBtn, chipGhostBtn, ghostBtn, inputCls, labelCls, primaryBtn,
@@ -23,6 +24,8 @@ const PAGE_SIZE = 100;
 const EMPTY_FORM = { name: '', phone: '', email: '', date: '', time: '19:00', guests: 2, status: 'confirmed', notes: '' };
 
 export default function AdminReservations() {
+  const { profile } = useAuth();
+  const isAdmin = profile?.role === 'admin';
   const [rows, setRows] = useState<Reservation[]>([]);
   const [total, setTotal] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -172,7 +175,10 @@ export default function AdminReservations() {
               );
             })}
           </div>
-          <p className="font-bodytext text-[11.5px] text-[#98A096] mt-3">Capacity {capacity} guests per time slot — Settings se badal sakti hai. Cancelled / completed bookings capacity nahi roktay.</p>
+          {/* The Settings hint is admin-only truth: staff cannot open
+              Settings (fix 4), so telling them to change it there sent
+              them to a page they can never reach (audit fix 15). */}
+          <p className="font-bodytext text-[11.5px] text-[#98A096] mt-3">Capacity {capacity} guests per time slot{isAdmin ? ' — Settings se badal sakti hai' : ''}. Cancelled / completed bookings capacity nahi roktay.</p>
         </div>
       </Card>
 

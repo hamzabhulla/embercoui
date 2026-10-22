@@ -77,4 +77,19 @@ describe('optionalAuth', () => {
     const res = await request(app).get('/optional').set('Authorization', 'Bearer token-user');
     expect(res.body.userId).toBe('user-1');
   });
+  it('passes as guest when the token is invalid (verifier returns null)', async () => {
+    const res = await request(app).get('/optional').set('Authorization', 'Bearer nope');
+    expect(res.status).toBe(200);
+    expect(res.body.userId).toBeNull();
+  });
+  it('503s when the verifier itself fails and a token was presented', async () => {
+    const throwing = protectedApp(async () => { throw new Error('network down'); });
+    const res = await request(throwing).get('/optional').set('Authorization', 'Bearer token-user');
+    expect(res.status).toBe(503);
+    // …but a tokenless request to the same broken-verifier app is still
+    // just a guest — no token, nothing to verify, no outage to report.
+    const anon = await request(throwing).get('/optional');
+    expect(anon.status).toBe(200);
+    expect(anon.body.userId).toBeNull();
+  });
 });

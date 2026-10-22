@@ -18,15 +18,18 @@ function blobToBase64(blob: Blob): Promise<string> {
 
 interface PreparedImage { dataBase64: string; contentType: string; filename: string }
 
-// The API runs as a serverless function whose request body is capped at
-// 4.5 MB. Base64 inflates data by ~1.37x, so a file of ~3 MB or less
-// (~4.1 MB encoded) always fits and is sent UNTOUCHED — PNG transparency
-// and GIF animation survive. Larger files (typical phone photos) are
-// downscaled/re-encoded as JPEG in the browser, retrying smaller until
-// the encoded result provably fits; if nothing fits, the admin gets a
-// clear error instead of a silent platform 413.
+// Three layered caps keep uploads clear of the serverless platform's
+// 4.5 MB request-body cap: this client caps the base64 payload at 4.2M
+// chars (~4.2 MB JSON body), the API's own parser limit is 4.4 MB (an
+// oversized body gets the API's clear 413, not the platform's opaque
+// one), and only then comes the platform cap. Base64 inflates data by
+// ~1.37x, so a file of ~3 MB or less (4.0 MB encoded) always fits and is
+// sent UNTOUCHED — PNG transparency and GIF animation survive. Larger
+// files (typical phone photos) are downscaled/re-encoded as JPEG in the
+// browser, retrying smaller until the encoded result provably fits; if
+// nothing fits, the admin gets a clear error instead of a silent 413.
 const SAFE_UPLOAD_BYTES = 3_000_000;
-const MAX_ENCODED_CHARS = 4_400_000;
+const MAX_ENCODED_CHARS = 4_200_000;
 
 async function encodeScaledJpeg(file: File, maxDim: number, quality: number): Promise<PreparedImage | null> {
   const bitmap = await createImageBitmap(file);
@@ -46,8 +49,16 @@ async function encodeScaledJpeg(file: File, maxDim: number, quality: number): Pr
   };
 }
 
+// Formats the upload picker accepts — only these may skip re-encoding.
+const PASSTHROUGH_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+
 async function prepareImageUpload(file: File): Promise<PreparedImage> {
-  if (!file.type.startsWith('image/') || file.size <= SAFE_UPLOAD_BYTES) {
+  // Untouched ONLY when the file is already in an accepted format AND
+  // small enough that its base64 form provably fits the caps above. The
+  // old condition (!image/ || small) let ANY non-image file — and any
+  // oversized non-image — through untouched, bypassing every cap
+  // (audit fix 15).
+  if (PASSTHROUGH_TYPES.includes(file.type) && file.size <= SAFE_UPLOAD_BYTES) {
     return { dataBase64: await blobToBase64(file), contentType: file.type, filename: file.name };
   }
   const attempts: Array<[number, number]> = [[1600, 0.82], [1280, 0.7], [1024, 0.6]];

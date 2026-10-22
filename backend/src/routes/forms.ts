@@ -67,7 +67,21 @@ export function formsRouter(deps: { repo: Repository | null; verifyToken: TokenV
   router.post('/reservations', formLimiter, optionalAuth(deps), validateBody(reservationSchema), async (req: AuthedRequest, res, next) => {
     try {
       const body = req.body as z.infer<typeof reservationSchema>;
-      const reservation = await repo().createReservation({ ...body, userId: req.user?.id ?? null });
+      // Build the repository input field by field instead of spreading
+      // `body`: z.infer's object type only keeps its properties required
+      // under strict TS configs, and not every toolchain that compiles
+      // this file (the Vercel builder uses strict: false) preserves
+      // them — the explicit literal is a ReservationInput under any
+      // config, and it documents exactly what the repository receives.
+      const reservation = await repo().createReservation({
+        userId: req.user?.id ?? null,
+        name: body.name,
+        email: body.email,
+        phone: body.phone,
+        date: body.date,
+        time: body.time,
+        guests: body.guests,
+      });
       res.status(201).json({ reservation });
     } catch (err) { next(err); }
   });

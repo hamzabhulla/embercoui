@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { Leaf, ChefHat, Sprout } from 'lucide-react';
+import { useGoToReservations } from '../lib/nav.ts';
 
 /* ─── Scroll reveal hook ──────────────────────────────────────────────────── */
 function useScrollReveal<T extends HTMLElement>() {
@@ -79,7 +79,7 @@ const values = [
 
 /* ─── Page component ──────────────────────────────────────────────────────── */
 export default function OurStory() {
-  const navigate = useNavigate();
+  const goToReservations = useGoToReservations();
   const heroRef = useScrollReveal<HTMLDivElement>();
   const s1TextRef = useScrollReveal<HTMLDivElement>();
   const s1ImgRef = useScrollReveal<HTMLDivElement>();
@@ -92,11 +92,6 @@ export default function OurStory() {
   useEffect(() => {
     window.scrollTo(0, 0);
   }, []);
-
-  const navigateTo = (path: string) => (e: React.MouseEvent) => {
-    e.preventDefault();
-    navigate(path);
-  };
 
   return (
     <>
@@ -455,7 +450,7 @@ export default function OurStory() {
             </p>
             <a
               href="/#reservations"
-              onClick={navigateTo('/')}
+              onClick={goToReservations}
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',

@@ -50,14 +50,23 @@ describe('phase 4 audit fixes', () => {
     expect(pub.body.settings.waitMin).toBeLessThanOrEqual(pub.body.settings.waitMax);
   });
 
-  it('upload: a ~800 KB image succeeds; >5 MB gets the designed 400', async () => {
-    const ok800k = Buffer.alloc(800 * 1024, 7).toString('base64');
-    const ok = await as(request(app).post('/api/v1/admin/menu/upload').send({ filename: 'big.png', contentType: 'image/png', dataBase64: ok800k }), 'token-admin');
+  it('upload: a ~800 KB image succeeds; a >5 MB file is refused by the body limit', async () => {
+    // Buffers carry a real PNG signature — Fix 11 sniffs content, so a
+    // fixture declared image/png must actually look like one.
+    const pngOf = (size: number) => {
+      const b = Buffer.alloc(size, 7);
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(b);
+      return b.toString('base64');
+    };
+    const ok = await as(request(app).post('/api/v1/admin/menu/upload').send({ filename: 'big.png', contentType: 'image/png', dataBase64: pngOf(800 * 1024) }), 'token-admin');
     expect(ok.status).toBe(201);
-    const tooBig = Buffer.alloc(5 * 1024 * 1024 + 1, 7).toString('base64');
-    const res = await as(request(app).post('/api/v1/admin/menu/upload').send({ filename: 'huge.png', contentType: 'image/png', dataBase64: tooBig }), 'token-admin');
-    expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/5 MB or smaller/);
+    // A 5 MB file is a ~7 MB base64 body: Fix 11 caps the upload parser
+    // at 4.4 MB (below the platform's 4.5 MB cap), so the refusal is now
+    // the API's own 413 before decoding. The storage-level 5 MB rule
+    // itself is unit-tested in settings-integrity.test.ts.
+    const res = await as(request(app).post('/api/v1/admin/menu/upload').send({ filename: 'huge.png', contentType: 'image/png', dataBase64: pngOf(5 * 1024 * 1024 + 1) }), 'token-admin');
+    expect(res.status).toBe(413);
+    expect(res.body.error).toMatch(/too large/);
   });
 
   it('oversized bodies on normal routes get 413 JSON, not a bare 500', async () => {

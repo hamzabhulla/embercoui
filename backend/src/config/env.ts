@@ -11,6 +11,7 @@ export interface Env {
   geminiApiKey: string | null;
   geminiConfigured: boolean;
   geminiModel: string | null;
+  trustProxy: number | undefined;
 }
 
 function parsePort(raw: string | undefined): number {
@@ -20,6 +21,22 @@ function parsePort(raw: string | undefined): number {
     throw new Error(`Invalid PORT "${raw}" — must be an integer between 1 and 65535`);
   }
   return port;
+}
+
+// TRUST_PROXY is the number of proxy hops in front of the app whose
+// X-Forwarded-For entries Express should trust (on Vercel: 1 — the
+// platform edge is the one hop). It must stay a hop COUNT, never `true`:
+// a permissive trust-proxy makes req.ip attacker-controlled and
+// express-rate-limit refuses it (ERR_ERL_PERMISSIVE_TRUST_PROXY).
+// Unset or unparseable → undefined, and createApp leaves Express's
+// default (false) untouched, so direct/local deployments are unchanged.
+function parseTrustProxy(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
+  const trimmed = raw.trim();
+  if (trimmed === '') return undefined;
+  const hops = Number(trimmed);
+  if (!Number.isInteger(hops) || hops < 0) return undefined;
+  return hops;
 }
 
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
@@ -49,5 +66,6 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
     geminiApiKey,
     geminiConfigured: Boolean(geminiApiKey),
     geminiModel: source.GEMINI_MODEL?.trim() || null,
+    trustProxy: parseTrustProxy(source.TRUST_PROXY),
   };
 }

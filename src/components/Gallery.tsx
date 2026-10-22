@@ -36,7 +36,7 @@ const photos = [
 
 export default function Gallery() {
   const { ref: headingRef, isInView: headingInView } = useInView();
-  const photoRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const photoRefs = useRef<(HTMLElement | null)[]>([]);
   const [photoVisible, setPhotoVisible] = useState<boolean[]>(new Array(photos.length).fill(false));
 
   useEffect(() => {
@@ -81,11 +81,11 @@ export default function Gallery() {
 
         <div className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-4">
           {photos.map((photo, i) => (
-            <div
+            <figure
               key={photo.id}
               ref={el => { photoRefs.current[i] = el; }}
-              className={`relative overflow-hidden aspect-square cursor-pointer reveal ${photoVisible[i] ? 'visible' : ''}`}
-              style={{ transitionDelay: `${[0, 0.1, 0.15, 0.2, 0.25, 0.3][i] || i * 0.1}s` }}
+              className={`relative overflow-hidden aspect-square reveal ${photoVisible[i] ? 'visible' : ''}`}
+              style={{ transitionDelay: `${[0, 0.1, 0.15, 0.2, 0.25, 0.3][i] || i * 0.1}s`, margin: 0 }}
             >
               <img
                 src={photo.src}
@@ -93,10 +93,9 @@ export default function Gallery() {
                 loading="lazy"
                 width="800"
                 height="800"
-                className="w-full h-full object-cover transition-transform duration-500 hover:scale-110"
+                className="w-full h-full object-cover"
               />
-              <div className="absolute inset-0 bg-forest/0 hover:bg-forest/20 transition-colors duration-300" />
-            </div>
+            </figure>
           ))}
         </div>
       </div>

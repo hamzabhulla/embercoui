@@ -12,8 +12,13 @@ export type TokenVerifier = (token: string) => Promise<AuthedUser | null>;
 
 /** Production verifier: asks the Supabase Auth server to validate the JWT. */
 export function createSupabaseTokenVerifier(url: string, serviceRoleKey: string): TokenVerifier {
+  // One client per verifier instance, created lazily on the first verify.
+  // The verifier itself is built once at startup (api/index.ts,
+  // backend/src/index.ts) and then called on every authenticated request —
+  // constructing a fresh Supabase client per call was pure overhead.
+  let client: ReturnType<typeof createClient> | null = null;
   return async (token: string) => {
-    const client = createClient(url, serviceRoleKey, {
+    client ??= createClient(url, serviceRoleKey, {
       auth: { persistSession: false, autoRefreshToken: false },
     });
     const { data, error } = await client.auth.getUser(token);
@@ -72,22 +77,32 @@ export function requireRole(...roles: ProfileDTO['role'][]) {
   };
 }
 
-/** Optional auth: attaches req.user when a valid token is present, never rejects. */
+/**
+ * Optional auth: attaches req.user when a valid token is present. An
+ * absent or invalid token simply means "guest" — but if a token WAS
+ * presented and the verifier itself failed (Supabase unreachable / 5xx,
+ * the only case in which it throws), surface the same 503 requireAuth
+ * gives instead of silently downgrading a signed-in visitor to guest.
+ */
 export function optionalAuth(deps: { repo: Repository | null; verifyToken: TokenVerifier }) {
   return async (req: AuthedRequest, _res: Response, next: NextFunction) => {
+    const header = req.header('authorization') ?? '';
+    const token = header.toLowerCase().startsWith('bearer ') ? header.slice(7).trim() : '';
+    if (!token || !deps.repo) return next();
+    let verified: AuthedUser | null;
     try {
-      const header = req.header('authorization') ?? '';
-      const token = header.toLowerCase().startsWith('bearer ') ? header.slice(7).trim() : '';
-      if (token && deps.repo) {
-        const verified = await deps.verifyToken(token);
-        if (verified) {
-          const profile = await deps.repo.getProfile(verified.id);
-          if (profile) req.user = { ...verified, role: profile.role, profile };
-        }
-      }
-      next();
+      verified = await deps.verifyToken(token);
     } catch {
-      next();
+      return next(new ApiError(503, 'Authentication service unavailable — please try again shortly'));
     }
+    if (verified) {
+      try {
+        const profile = await deps.repo.getProfile(verified.id);
+        if (profile) req.user = { ...verified, role: profile.role, profile };
+      } catch {
+        // Attaching the profile stays best-effort on optional routes.
+      }
+    }
+    return next();
   };
 }

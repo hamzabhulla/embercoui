@@ -10,15 +10,12 @@ import FavoriteButton from '../components/FavoriteButton.tsx';
 const filters = ['All', 'Vegan', 'Spicy', 'Gluten Free'];
 
 // ─── Dietary tag helper (pure, defined outside component) ────────────────────
+// TRUTH ONLY: a dish matches a dietary filter solely because the API says
+// so (audit fix 15). The old version also guessed from hardcoded item IDs
+// and description keywords, which labelled dishes vegan/spicy/gluten-free
+// that the kitchen never tagged — a butter-pastry tart showed as "Vegan".
 function getDietaryTags(item: MenuItem): string[] {
-  // Prefer the API's real tags; heuristics only cover the built-in items.
-  if (item.tags && item.tags.length > 0) return item.tags;
-  const tags: string[] = [];
-  const desc = item.description.toLowerCase();
-  if (desc.includes('plant-based') || desc.includes('vegan') || item.id === 3 || item.id === 11) tags.push('Vegan');
-  if (desc.includes('pepper') || item.id === 8) tags.push('Spicy');
-  if (item.id === 12 || item.id === 15) tags.push('Gluten Free');
-  return tags;
+  return item.tags ?? [];
 }
 
 /* ─── Fly-to-cart animation (approved motion mockup) ───────────────────────
@@ -229,7 +226,7 @@ export default function MenuPage() {
   const effectiveCategory = categories.includes(activeCategory) ? activeCategory : 'All';
 
   const handleAdd = useCallback((item: MenuItem, img?: HTMLImageElement | null) => {
-    addItem({ id: item.id, name: item.name, price: item.price, image: item.image });
+    addItem({ id: item.id, name: item.name, price: item.price, image: item.image, description: item.description });
     flyToCart(img ?? null);
     setAdded(item.id);
     setTimeout(() => setAdded(null), 1500);
@@ -253,8 +250,8 @@ export default function MenuPage() {
       }
 
       if (activeFilter !== 'All') {
-        const tags = getDietaryTags(item);
-        if (!tags.includes(activeFilter)) return false;
+        const wanted = activeFilter.toLowerCase();
+        if (!getDietaryTags(item).some((t) => t.toLowerCase() === wanted)) return false;
       }
 
       return true;

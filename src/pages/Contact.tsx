@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { sendContactMessage } from '../services/api.ts';
 import {
   MapPin, Phone, Mail, Clock, Car,
-  Instagram, Facebook, Twitter, Send, CheckCircle,
+  Send, CheckCircle,
 } from 'lucide-react';
 
 /* ─── Scroll reveal ──────────────────────────────────────────────────────── */
@@ -205,9 +205,10 @@ function FloatSelect({
 
 /* ─── Floating label textarea ────────────────────────────────────────────── */
 function FloatTextarea({
-  id, label, value, onChange,
+  id, label, required = false, error, value, onChange,
 }: {
-  id: string; label: string; value: string;
+  id: string; label: string; required?: boolean; error?: string | null;
+  value: string;
   onChange: (v: string) => void;
 }) {
   const [focused, setFocused] = useState(false);
@@ -234,6 +235,7 @@ function FloatTextarea({
       <textarea
         id={id}
         rows={5}
+        required={required}
         value={value}
         onChange={e => onChange(e.target.value)}
         onFocus={() => setFocused(true)}
@@ -242,7 +244,7 @@ function FloatTextarea({
           width: '100%',
           background: 'transparent',
           border: 'none',
-          borderBottom: `1px solid ${focused ? '#C17A3A' : 'rgba(28,43,30,0.18)'}`,
+          borderBottom: `1px solid ${error ? '#ef4444' : focused ? '#C17A3A' : 'rgba(28,43,30,0.18)'}`,
           outline: 'none',
           color: '#1C2B1E',
           fontFamily: 'Jost, sans-serif',
@@ -255,6 +257,9 @@ function FloatTextarea({
           lineHeight: 1.7,
         }}
       />
+      {error && (
+        <p className="text-[#ef4444]" style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', marginTop: '8px' }}>{error}</p>
+      )}
     </div>
   );
 }
@@ -273,13 +278,21 @@ export default function Contact() {
   const [message, setMessage] = useState('');
   const [sent, setSent] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  const [messageError, setMessageError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
 
   useEffect(() => { window.scrollTo(0, 0); }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name || !email || !message) return;
+    // Name/email are guarded by their native `required` attributes, so
+    // the browser stops an empty submit before it reaches this handler.
+    // The message field used to fail silently here — say so visibly.
+    if (!message.trim()) {
+      setMessageError('Please write a message so we know how to help.');
+      return;
+    }
+    setMessageError(null);
     setSendError(null);
     setSending(true);
     const res = await sendContactMessage({ name, email, phone: phone || undefined, subject: subject || undefined, message });
@@ -301,8 +314,6 @@ export default function Contact() {
                       transform 0.8s cubic-bezier(0.22,1,0.36,1);
         }
         .c-visible { opacity: 1 !important; transform: none !important; }
-        .soc-btn { transition: background 0.25s ease, border-color 0.25s ease; }
-        .soc-btn:hover { background: #C17A3A !important; border-color: #C17A3A !important; color: #fff !important; }
       `}</style>
 
       <div style={{ minHeight: '100vh', background: '#0D1A0E' }}>
@@ -437,38 +448,6 @@ export default function Contact() {
                 </div>
               ))}
             </div>
-
-            {/* Social icons */}
-            <div>
-              <p style={{
-                fontFamily: 'Jost, sans-serif', fontSize: '0.65rem',
-                letterSpacing: '0.22em', textTransform: 'uppercase',
-                color: 'rgba(28,43,30,0.45)', marginBottom: 14,
-              }}>
-                Follow Us
-              </p>
-              <div style={{ display: 'flex', gap: 12 }}>
-                {[
-                  { Icon: Instagram, href: '#' },
-                  { Icon: Facebook, href: '#' },
-                  { Icon: Twitter, href: '#' },
-                ].map(({ Icon, href }, i) => (
-                  <a
-                    key={i}
-                    href={href}
-                    className="soc-btn"
-                    style={{
-                      width: 38, height: 38, borderRadius: '50%',
-                      border: '1px solid rgba(28,43,30,0.25)',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      color: '#1C2B1E', textDecoration: 'none',
-                    }}
-                  >
-                    <Icon size={16} strokeWidth={1.5} />
-                  </a>
-                ))}
-              </div>
-            </div>
           </div>
 
           {/* ── RIGHT: Contact form ── */}
@@ -505,7 +484,7 @@ export default function Contact() {
                   Thank you for reaching out. A member of our team will be in touch within 24 hours.
                 </p>
                 <button
-                  onClick={() => { setSent(false); setName(''); setEmail(''); setPhone(''); setSubject(''); setMessage(''); }}
+                  onClick={() => { setSent(false); setName(''); setEmail(''); setPhone(''); setSubject(''); setMessage(''); setMessageError(null); }}
                   style={{
                     marginTop: 8,
                     background: 'transparent',
@@ -573,8 +552,10 @@ export default function Contact() {
                     />
                   </div>
                   <FloatTextarea
-                    id="cf-message" label="Your Message"
-                    value={message} onChange={setMessage}
+                    id="cf-message" label="Your Message" required
+                    error={messageError}
+                    value={message}
+                    onChange={(v) => { setMessage(v); if (v.trim()) setMessageError(null); }}
                   />
 
                   {sendError && (

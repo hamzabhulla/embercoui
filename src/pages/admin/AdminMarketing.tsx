@@ -19,6 +19,10 @@ export default function AdminMarketing() {
   useEffect(load, []);
   const create = async (e: React.FormEvent) => {
     e.preventDefault(); setError(''); setNotice('');
+    // Percent means a share of the bill — over 100% is meaningless and
+    // the server rejects it; catch it here with a clear message instead
+    // of a failed round-trip (audit fix 15).
+    if (form.type === 'percent' && form.value > 100) { setError('Percent coupons can be at most 100%.'); return; }
     try {
       await adminSend('POST', '/api/v1/admin/coupons', {
         code: form.code, type: form.type, value: form.value, isActive: true,
@@ -48,7 +52,7 @@ export default function AdminMarketing() {
             <select id="c-type" className={inputCls} value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value as 'percent' | 'fixed' })}>
               <option value="percent">Percent off</option><option value="fixed">Fixed amount</option>
             </select></div>
-          <div><label className={labelCls} htmlFor="c-value">Value{form.type === 'fixed' ? ` (${currency})` : ''}</label><input id="c-value" type="number" min="0" step="0.01" className={inputCls} value={form.value} onChange={(e) => setForm({ ...form, value: Number(e.target.value) })} required /></div>
+          <div><label className={labelCls} htmlFor="c-value">Value{form.type === 'fixed' ? ` (${currency})` : ''}</label><input id="c-value" type="number" min="0" max={form.type === 'percent' ? 100 : undefined} step="0.01" className={inputCls} value={form.value} onChange={(e) => setForm({ ...form, value: Number(e.target.value) })} required /></div>
           <div><label className={labelCls} htmlFor="c-exp">Expires (optional)</label><input id="c-exp" type="date" className={inputCls} value={form.expiresAt} onChange={(e) => setForm({ ...form, expiresAt: e.target.value })} /></div>
           <button type="submit" className={primaryBtn}>Create coupon</button>
         </form>

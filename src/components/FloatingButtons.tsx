@@ -35,7 +35,7 @@ export default function FloatingButtons() {
     for (const a of actions) {
       const m = byId.get(a.menuItemId);
       if (!m) continue;
-      addItem({ id: m.id, name: m.name, price: m.price, image: m.image });
+      addItem({ id: m.id, name: m.name, price: m.price, image: m.image, description: m.description });
       const target = (running.get(m.id) ?? 0) + a.quantity;
       updateQuantity(m.id, target);
       running.set(m.id, target);
@@ -60,7 +60,7 @@ export default function FloatingButtons() {
     const res = await apiRequest<{ reply: string; actions?: CartAction[] }>('/api/v1/chat', {
       method: 'POST',
       body: JSON.stringify({ messages: payload }),
-    });
+    }, { timeoutMs: 20_000 }); // AI replies legitimately take longer than a normal API call
     setSending(false);
     if (res.ok && res.data?.reply) {
       setChatMessages((prev) => [...prev, { role: 'assistant', content: res.data!.reply }]);

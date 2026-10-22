@@ -1,8 +1,10 @@
 import { useRef, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useGoToReservations } from '../lib/nav.ts';
 
 export default function Footer() {
   const navigate = useNavigate();
+  const goToReservations = useGoToReservations();
   const colRefs = useRef<(HTMLDivElement | null)[]>([]);
   const [colVisible, setColVisible] = useState<boolean[]>(new Array(3).fill(false));
 
@@ -99,10 +101,8 @@ export default function Footer() {
               style={{ color: 'rgba(255,255,255,0.65)', fontFamily: 'Jost, sans-serif', fontWeight: 300 }}
             >
               <a href="/menu" onClick={(e) => { e.preventDefault(); navigate('/menu'); }} className="hover:text-ember transition-colors">Menu</a>
-              <a href="#reservations" className="hover:text-ember transition-colors">Reserve</a>
+              <a href="/#reservations" onClick={goToReservations} className="hover:text-ember transition-colors">Reserve</a>
               <a href="/our-story" onClick={(e) => { e.preventDefault(); navigate('/our-story'); }} className="hover:text-ember transition-colors">Our Story</a>
-              <a href="#" className="hover:text-ember transition-colors">Private Events</a>
-              <a href="#" className="hover:text-ember transition-colors">Gift Cards</a>
             </nav>
           </div>
         </div>

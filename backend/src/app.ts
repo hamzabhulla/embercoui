@@ -24,10 +24,21 @@ export interface AppDeps {
   stripe?: StripeService | null;
   storage?: StorageService | null;
   chat?: ChatService | null;
+  // Test-only override for the global limiter budget (same pattern as the
+  // chat/orders routers' rateLimitMax). Production always uses 600.
+  globalRateLimitMax?: number;
 }
 
 export function createApp(deps: AppDeps): Express {
   const app = express();
+
+  // Behind a proxy (Vercel), req.ip is the proxy's address unless Express
+  // is told how many hops to trust — without this every visitor shares
+  // one rate-limit bucket. Applied only when TRUST_PROXY is configured
+  // (env.ts guarantees a non-negative integer hop count, never `true`).
+  if (deps.env.trustProxy !== undefined) {
+    app.set('trust proxy', deps.env.trustProxy);
+  }
 
   app.use(helmet());
   app.use(
@@ -41,21 +52,36 @@ export function createApp(deps: AppDeps): Express {
       credentials: true,
     })
   );
-  // Stripe webhook must see the RAW body for signature verification.
-  app.post('/api/v1/payments/webhook', express.raw({ type: 'application/json' }), createWebhookHandler({ repo: deps.repo, stripe: deps.stripe ?? null }));
-  // Menu image uploads travel as base64 JSON (5 MB file -> ~6.8 MB body), so
-  // that one route gets a larger parser before the global 1 MB limit applies.
-  app.use('/api/v1/admin/menu/upload', express.json({ limit: '8mb' }));
-  app.use(express.json({ limit: '1mb' }));
+  // Stripe webhook must see the RAW body for signature verification. The
+  // 1 MB limit is explicit: the implicit body-parser default (100 KB)
+  // could 413 a legitimately large Stripe event; real events are far
+  // smaller than 1 MB.
+  app.post('/api/v1/payments/webhook', express.raw({ type: 'application/json', limit: '1mb' }), createWebhookHandler({ repo: deps.repo, stripe: deps.stripe ?? null }));
+  // The global limiter runs BEFORE the body parsers: it only reads
+  // headers, so an unauthenticated garbage body is counted (and, past
+  // the budget, refused with 429) without ever being parsed. It stays
+  // after the webhook route above, which must keep seeing the raw body
+  // untouched and is not limiter-counted, exactly as before.
   app.use(
     rateLimit({
       windowMs: 15 * 60 * 1000,
-      limit: 600,
+      limit: deps.globalRateLimitMax ?? 600,
       standardHeaders: 'draft-7',
       legacyHeaders: false,
       message: { error: 'Too many requests — please try again in a few minutes' },
     })
   );
+  // Menu image uploads travel as base64 JSON. The client caps the base64
+  // payload at 4.2M chars (AdminMenu MAX_ENCODED_CHARS), so a legitimate
+  // body is at most ~4.21 MB. This limit sits above that and below the
+  // serverless platform's 4.5 MB request-body cap, so an oversized upload
+  // fails with OUR 413 (errorHandler maps entity.too.large) instead of
+  // the platform's opaque rejection. (Bytes, not '4.4mb' — the string
+  // form is binary-based and would exceed the platform cap.) It stays
+  // mounted ahead of the global 1 MB parser, which is a no-op for a body
+  // this parser already consumed.
+  app.use('/api/v1/admin/menu/upload', express.json({ limit: 4_400_000 }));
+  app.use(express.json({ limit: '1mb' }));
 
   app.get('/api/v1/health', (_req, res) => {
     res.json({

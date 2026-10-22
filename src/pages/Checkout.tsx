@@ -83,7 +83,7 @@ function CardPaymentForm({ orderId, onPaid }: { orderId: string; onPaid: (id: st
 export default function Checkout() {
   const { format, currency } = useCurrency();
   const navigate = useNavigate();
-  const { items, clearCart } = useCart();
+  const { items, clearCart, coupon: cartCoupon } = useCart();
   const { profile } = useAuth();
 
   const [name, setName] = useState('');
@@ -100,9 +100,15 @@ export default function Checkout() {
   // at the payment step. When Stripe IS configured, card stays the
   // default exactly as before.
   const [method, setMethod] = useState<'card' | 'cod'>(() => (stripePromise ? 'card' : 'cod'));
-  const [couponInput, setCouponInput] = useState('');
-  const [coupon, setCoupon] = useState<AppliedCoupon | null>(null);
-  const [couponMsg, setCouponMsg] = useState<string | null>(null);
+  // A coupon applied in the cart drawer was already validated against
+  // the same endpoint, so it carries over: the field starts pre-filled
+  // AND the coupon starts applied, with the usual validate/apply flow
+  // (type a code, Apply, server re-checks at order time) unchanged.
+  const [couponInput, setCouponInput] = useState(() => cartCoupon?.code ?? '');
+  const [coupon, setCoupon] = useState<AppliedCoupon | null>(() => cartCoupon);
+  const [couponMsg, setCouponMsg] = useState<string | null>(() => (cartCoupon
+    ? `Coupon applied — ${cartCoupon.type === 'percent' ? `${cartCoupon.value}% off` : `${format(cartCoupon.value)} off`}.`
+    : null));
   const [placing, setPlacing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [paymentStep, setPaymentStep] = useState<{ orderId: string; clientSecret: string; total: number; currency: string } | null>(null);
@@ -121,7 +127,11 @@ export default function Checkout() {
     setName((v) => v || profile.fullName || '');
     setEmail((v) => v || profile.email || '');
     setPhone((v) => v || profile.phone || '');
-    const first = (profile.addresses as { line1?: string; city?: string; postalCode?: string }[])[0];
+    // Pre-fill from the address the customer marked as their default —
+    // not blindly the first one saved; fall back to the first only when
+    // none is flagged.
+    const saved = profile.addresses as { line1?: string; city?: string; postalCode?: string; isDefault?: boolean }[];
+    const first = saved.find((a) => a.isDefault) ?? saved[0];
     if (first) {
       setLine1((v) => v || first.line1 || '');
       setCity((v) => v || first.city || '');
@@ -135,7 +145,7 @@ export default function Checkout() {
     // Mirror the server's integer minor-unit math (in the active
     // currency) so the preview never differs from the charged amount.
     const discountMinor = coupon.type === 'percent'
-      ? Math.round(toMinorUnits(subtotal, currency) * (coupon.value / 100))
+      ? Math.round((toMinorUnits(subtotal, currency) * coupon.value) / 100)
       : Math.min(toMinorUnits(coupon.value, currency), toMinorUnits(subtotal, currency));
     return fromMinorUnits(discountMinor, currency);
   }, [coupon, subtotal, currency]);

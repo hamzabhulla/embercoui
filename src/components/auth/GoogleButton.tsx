@@ -4,6 +4,8 @@ import { signInWithGoogle } from '../../services/auth.ts';
 interface Props {
   /** Surface an OAuth failure (e.g. provider not enabled yet) in the form's error area. */
   onError?: (message: string) => void;
+  /** App path to land on after the OAuth round-trip (defaults to home). */
+  returnTo?: string;
 }
 
 export function GoogleIcon() {
@@ -22,12 +24,12 @@ export function GoogleIcon() {
  * Requires the Google provider to be enabled in Supabase (dashboard step);
  * until then the error is surfaced to the form instead of failing silently.
  */
-export default function GoogleButton({ onError }: Props) {
+export default function GoogleButton({ onError, returnTo }: Props) {
   const [busy, setBusy] = useState(false);
 
   const handleClick = async () => {
     setBusy(true);
-    const { error } = await signInWithGoogle();
+    const { error } = await signInWithGoogle(returnTo);
     // On success the browser is already navigating to Google; only an
     // immediate failure (e.g. provider disabled) ever returns here.
     if (error) {

@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.tsx';
 import { ShoppingBag, User, X, Menu } from 'lucide-react';
 import { useCart } from '../context/CartContext.tsx';
+import { useGoToReservations } from '../lib/nav.ts';
 
 const links = ['Menu', 'Our Story', 'Reservations', 'Contact'];
 
@@ -12,10 +13,15 @@ export default function Navbar({ forceDark = false }: { forceDark?: boolean }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { totalCount, setIsOpen } = useCart();
   const navigate = useNavigate();
+  const location = useLocation();
   const { user } = useAuth();
+  const goToReservations = useGoToReservations();
 
   const handleLoginClick = () => {
-    navigate(user ? '/account' : '/login');
+    // Record where the visitor is now so a successful sign-in returns
+    // here instead of always landing on the home page.
+    if (user) navigate('/account');
+    else navigate('/login', { state: { from: location.pathname } });
   };
 
   useEffect(() => {
@@ -66,6 +72,10 @@ export default function Navbar({ forceDark = false }: { forceDark?: boolean }) {
     } else if (link === 'Contact') {
       e.preventDefault();
       navigate('/contact');
+    } else if (link === 'Reservations') {
+      // The section lives on the home page — a plain '/#reservations'
+      // anchor would reload the site and drop the scroll (audit M-11).
+      goToReservations(e);
     }
   };
 
@@ -142,7 +152,8 @@ export default function Navbar({ forceDark = false }: { forceDark?: boolean }) {
               )}
             </button>
             <a
-              href="#reservations"
+              href="/#reservations"
+              onClick={goToReservations}
               className={`border ${buttonClass} text-xs font-medium tracking-widest uppercase px-5 py-2.5 transition-all duration-200`}
               style={{ letterSpacing: '0.12em', fontSize: '0.7rem', fontFamily: 'Jost, sans-serif' }}
             >
@@ -253,8 +264,8 @@ export default function Navbar({ forceDark = false }: { forceDark?: boolean }) {
         <div className="mt-auto w-full flex flex-col">
           <div style={{ width: '100%', height: '1px', background: 'rgba(193,122,58,0.2)', marginBottom: '24px' }} />
           <a
-            href="#reservations"
-            onClick={() => setSidebarOpen(false)}
+            href="/#reservations"
+            onClick={(e) => { goToReservations(e); setSidebarOpen(false); }}
             className="flex items-center justify-center transition-all duration-300 hover:bg-[#A66932] hover:-translate-y-[1px] hover:shadow-[0_8px_24px_rgba(193,122,58,0.4)]"
             style={{ 
               background: '#C17A3A',

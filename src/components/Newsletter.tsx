@@ -6,13 +6,17 @@ import { subscribeNewsletter } from '../services/api.ts';
 export default function Newsletter() {
   const [email, setEmail] = useState('');
   const [submitted, setSubmitted] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const { ref, isInView } = useInView<HTMLDivElement>(0.1);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting) return; // ignore repeat taps while a subscribe is in flight
     setSubmitError(null);
+    setSubmitting(true);
     const res = await subscribeNewsletter(email.trim());
+    setSubmitting(false);
     if (!res.ok) {
       setSubmitError(res.error ?? 'We could not subscribe you — please try again.');
       return;
@@ -82,12 +86,13 @@ export default function Newsletter() {
             />
             <button
               type="submit"
-              className="text-white px-8 py-3 text-xs tracking-widest uppercase transition-all duration-200"
+              disabled={submitting}
+              className="text-white px-8 py-3 text-xs tracking-widest uppercase transition-all duration-200 disabled:opacity-60"
               style={{ fontFamily: 'Jost, sans-serif', letterSpacing: '0.12em', fontSize: '0.7rem', background: '#C17A3A' }}
               onMouseEnter={e => (e.currentTarget.style.background = '#A66932')}
               onMouseLeave={e => (e.currentTarget.style.background = '#C17A3A')}
             >
-              Subscribe
+              {submitting ? 'Subscribing…' : 'Subscribe'}
             </button>
           </form>
           {submitError && (

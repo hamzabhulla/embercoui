@@ -87,7 +87,7 @@ describe('admin menu + upload', () => {
     expect(deleted.status).toBe(200);
   });
   it('uploads images via storage and validates type/size', async () => {
-    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString('base64');
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).toString('base64');
     const ok = await as(request(app).post('/api/v1/admin/menu/upload').send({ filename: 'dish.png', contentType: 'image/png', dataBase64: png }), 'token-admin');
     expect(ok.status).toBe(201);
     expect(ok.body.url).toContain('storage.example');

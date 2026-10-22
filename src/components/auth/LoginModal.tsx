@@ -8,11 +8,13 @@ import AuthShell from './AuthShell.tsx';
 interface Props {
   onClose: () => void;
   onNavigate: (path: string) => void;
+  /** App path the visitor came from — sign-in returns there, not home. */
+  returnTo?: string;
 }
 
 const SUBMIT_GRADIENT = 'linear-gradient(135deg, #C98A44 0%, #C17A3A 45%, #A66932 100%)';
 
-export default function LoginModal({ onClose, onNavigate }: Props) {
+export default function LoginModal({ onClose, onNavigate, returnTo }: Props) {
   const [mounted, setMounted] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -68,9 +70,11 @@ export default function LoginModal({ onClose, onNavigate }: Props) {
       return;
     }
     setIsSuccess(true);
-    // Wait for success animation then navigate
+    // Wait for the success animation, then close the auth UI — which
+    // returns the visitor to the page they came from (App's onClose),
+    // instead of always dumping them on the home page.
     setTimeout(() => {
-      onNavigate('/');
+      onClose();
     }, 1200);
   };
 
@@ -92,7 +96,7 @@ export default function LoginModal({ onClose, onNavigate }: Props) {
         </p>
       </div>
 
-      <GoogleButton onError={setFormError} />
+      <GoogleButton onError={setFormError} returnTo={returnTo} />
 
       <div className="flex items-center gap-4 my-7">
         <div className="flex-1 h-[1px] bg-[rgba(255,255,255,0.08)]" />

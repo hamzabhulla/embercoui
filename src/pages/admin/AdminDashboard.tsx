@@ -31,9 +31,14 @@ export default function AdminDashboard() {
             <StatCard label="Pending orders" value={data.stats.pendingOrders} foot="Waiting to be confirmed" />
             <StatCard label="Customers" value={data.stats.customers} />
             <StatCard label="Pending reservations" value={data.stats.pendingReservations} foot="Bookings to confirm" />
-            {Object.entries(data.stats.ordersByStatus).map(([status, count]) => (
-              <StatCard key={status} label={status.replace(/_/g, ' ')} value={count} />
-            ))}
+            {/* 'pending' is skipped here: it already has the dedicated
+                "Pending orders" card above, and showing the same number
+                twice made the grid look padded (audit fix 15). */}
+            {Object.entries(data.stats.ordersByStatus)
+              .filter(([status]) => status !== 'pending')
+              .map(([status, count]) => (
+                <StatCard key={status} label={status.replace(/_/g, ' ')} value={count} />
+              ))}
           </div>
           <Card>
             <CardHead title="Recent orders" />

@@ -29,8 +29,12 @@ export default function AdminReviews() {
     try { await adminSend('DELETE', `/api/v1/admin/reviews/${id}`); load(); }
     catch (e) { setError((e as Error).message); }
   };
-  const avg = rows.length ? rows.reduce((s, r) => s + r.rating, 0) / rows.length : 0;
-  const dist = [5, 4, 3, 2, 1].map((star) => ({ star, count: rows.filter((r) => r.rating === star).length }));
+  // Headline stats describe what visitors actually see on the website, so
+  // they are computed from APPROVED reviews only — pending reviews awaiting
+  // moderation must not drag the public average around (audit fix 15).
+  const approved = rows.filter((r) => r.isApproved);
+  const avg = approved.length ? approved.reduce((s, r) => s + r.rating, 0) / approved.length : 0;
+  const dist = [5, 4, 3, 2, 1].map((star) => ({ star, count: approved.filter((r) => r.rating === star).length }));
   return (
     <div>
       <PageTitle sub="Only approved reviews appear on the website">Reviews</PageTitle>
@@ -43,14 +47,14 @@ export default function AdminReviews() {
             <Card className="px-5 py-6 text-center">
               <div className="font-display text-[52px] leading-none font-semibold text-[#16241A]">{avg.toFixed(1)}</div>
               <div className="my-2.5"><Stars rating={Math.round(avg)} /></div>
-              <p className="font-bodytext text-[12px] text-[#98A096]">{rows.length} reviews · {rows.filter((r) => !r.isApproved).length} awaiting approval</p>
+              <p className="font-bodytext text-[12px] text-[#98A096]">{approved.length} approved reviews · {rows.length - approved.length} awaiting approval</p>
             </Card>
             <Card className="px-5 py-4">
               {dist.map(({ star, count }) => (
                 <div key={star} className="flex items-center gap-2.5 py-[5px]">
                   <b className="font-bodytext text-[12.5px] w-3">{star}</b>
                   <div className="flex-1 h-[7px] rounded-full bg-[#EFE9DB] overflow-hidden">
-                    <div className="h-full rounded-full bg-[#C17A3A]" style={{ width: `${rows.length ? (count / rows.length) * 100 : 0}%` }} />
+                    <div className="h-full rounded-full bg-[#C17A3A]" style={{ width: `${approved.length ? (count / approved.length) * 100 : 0}%` }} />
                   </div>
                   <span className="font-bodytext text-[12px] text-[#98A096] w-6 text-right">{count}</span>
                 </div>

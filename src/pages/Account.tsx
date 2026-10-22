@@ -68,7 +68,9 @@ export default function Account() {
   const { addItem, updateQuantity, setIsOpen, items: cartItems } = useCart();
   const [tab, setTab] = useState<Tab>('Orders');
   const [orders, setOrders] = useState<Order[]>([]);
+  const [ordersError, setOrdersError] = useState<string | null>(null);
   const [favorites, setFavorites] = useState<MenuItem[]>([]);
+  const [favoritesError, setFavoritesError] = useState<string | null>(null);
   const [settings, setSettings] = useState<PublicSettings | null>(null);
   const [dataLoading, setDataLoading] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -90,26 +92,40 @@ export default function Account() {
   const [addr, setAddr] = useState<Address>({ label: '', line1: '', city: '', postalCode: '', phone: '' });
   const [addrFormOpen, setAddrFormOpen] = useState(false);
   const [editIndex, setEditIndex] = useState<number | null>(null);
+  // Inline two-step delete: the first tap arms the confirmation on that
+  // card only; nothing is deleted until "Confirm Delete" is tapped.
+  const [confirmDeleteIndex, setConfirmDeleteIndex] = useState<number | null>(null);
   const addresses = (profile?.addresses ?? []) as Address[];
 
   // review form
   const [rating, setRating] = useState(5);
   const [comment, setComment] = useState('');
+  const [reviewError, setReviewError] = useState<string | null>(null);
   const [country, setCountry] = useState('');
 
+  // A failed load is NOT the same as an empty list: failures land in a
+  // dedicated error state (with Retry) so "we couldn't load your orders"
+  // is never dressed up as "No orders yet".
   const loadOrders = useCallback(async () => {
     setDataLoading(true);
+    setOrdersError(null);
     const res = await apiRequest<{ orders: Order[] }>('/api/v1/account/orders');
     if (res.ok && res.data) setOrders(res.data.orders);
+    else setOrdersError(res.error ?? 'We could not load your orders.');
     setDataLoading(false);
   }, []);
 
   const loadFavorites = useCallback(async () => {
+    setFavoritesError(null);
     const res = await apiRequest<{ items: MenuItem[] }>('/api/v1/account/favorites');
     if (res.ok && res.data) setFavorites(res.data.items);
+    else setFavoritesError(res.error ?? 'We could not load your saved dishes.');
   }, []);
 
   useEffect(() => { window.scrollTo(0, 0); }, []);
+  // An armed delete confirmation belongs to the card that armed it —
+  // never let it survive a tab switch onto a different list.
+  useEffect(() => { setConfirmDeleteIndex(null); }, [tab]);
   useEffect(() => {
     if (!user) return;
     void loadOrders();
@@ -138,7 +154,7 @@ export default function Account() {
     for (const it of order.items) {
       const m = it.menuItemId != null ? byId.get(it.menuItemId) : undefined;
       if (!m) { missing += 1; continue; }
-      addItem({ id: m.id, name: m.name, price: m.price, image: m.image });
+      addItem({ id: m.id, name: m.name, price: m.price, image: m.image, description: m.description });
       const target = (running.get(m.id) ?? 0) + it.quantity;
       updateQuantity(m.id, target);
       running.set(m.id, target);
@@ -191,12 +207,14 @@ export default function Account() {
   };
 
   const startEditAddress = (i: number) => {
+    setConfirmDeleteIndex(null);
     setAddr({ ...addresses[i] });
     setEditIndex(i);
     setAddrFormOpen(true);
   };
 
   const deleteAddress = async (i: number) => {
+    setConfirmDeleteIndex(null);
     const wasDefault = addresses[i]?.isDefault;
     let next = addresses.filter((_, x) => x !== i);
     if (wasDefault && next.length > 0 && !next.some((a) => a.isDefault)) {
@@ -218,6 +236,13 @@ export default function Account() {
 
   const submitReview = async (e: React.FormEvent) => {
     e.preventDefault();
+    // A star rating with no words is not a review — require the comment
+    // here, with the error shown at the field, not after a server round-trip.
+    if (!comment.trim()) {
+      setReviewError('Please tell us a little about your experience — a sentence or two is plenty.');
+      return;
+    }
+    setReviewError(null);
     const res = await apiRequest('/api/v1/reviews', {
       method: 'POST',
       body: JSON.stringify({ rating, comment, country: country || undefined }),
@@ -248,7 +273,7 @@ export default function Account() {
           <p className="mb-8" style={{ fontFamily: JOST, fontSize: '13px', color: 'rgba(245,240,232,0.55)', lineHeight: 1.7 }}>
             Your orders, saved dishes and addresses live here once you are signed in.
           </p>
-          <button onClick={() => navigate('/login')} style={emberButton} className="transition-all duration-300 hover:brightness-110">
+          <button onClick={() => navigate('/login', { state: { from: '/account' } })} style={emberButton} className="transition-all duration-300 hover:brightness-110">
             Sign In
           </button>
         </div>
@@ -328,11 +353,20 @@ export default function Account() {
 
             {tab === 'Orders' && (
               <div style={{ paddingTop: '30px' }}>
-                {dataLoading && orders.length === 0 && <p style={{ fontFamily: JOST, fontSize: '13px', color: 'rgba(245,240,232,0.4)' }}>Loading your orders…</p>}
-                {!dataLoading && orders.length === 0 && (
-                  <p style={{ fontFamily: JOST, fontSize: '13px', color: 'rgba(245,240,232,0.4)' }}>
-                    No orders yet — your order history will appear here.
-                  </p>
+                {ordersError && orders.length === 0 ? (
+                  <div className="flex flex-wrap items-center" style={{ gap: '18px' }}>
+                    <p style={{ fontFamily: JOST, fontSize: '13px', color: '#D9907E' }}>{ordersError}</p>
+                    <button onClick={() => void loadOrders()} style={{ ...ghostButton, padding: '10px 18px', fontSize: '10.5px' }} className="transition-colors">Retry</button>
+                  </div>
+                ) : (
+                  <>
+                    {dataLoading && orders.length === 0 && <p style={{ fontFamily: JOST, fontSize: '13px', color: 'rgba(245,240,232,0.4)' }}>Loading your orders…</p>}
+                    {!dataLoading && orders.length === 0 && (
+                      <p style={{ fontFamily: JOST, fontSize: '13px', color: 'rgba(245,240,232,0.4)' }}>
+                        No orders yet — your order history will appear here.
+                      </p>
+                    )}
+                  </>
                 )}
 
                 {featured && (
@@ -433,7 +467,12 @@ export default function Account() {
             {tab === 'Favorites' && (
               <div style={{ paddingTop: '30px' }}>
                 <p style={{ fontFamily: JOST, fontSize: '10.5px', letterSpacing: '0.3em', color: 'rgba(245,240,232,0.38)', marginBottom: '14px' }}>SAVED DISHES</p>
-                {favorites.length === 0 && (
+                {favoritesError ? (
+                  <div className="flex flex-wrap items-center" style={{ gap: '18px' }}>
+                    <p style={{ fontFamily: JOST, fontSize: '13px', color: '#D9907E' }}>{favoritesError}</p>
+                    <button onClick={() => void loadFavorites()} style={{ ...ghostButton, padding: '10px 18px', fontSize: '10.5px' }} className="transition-colors">Retry</button>
+                  </div>
+                ) : favorites.length === 0 && (
                   <p style={{ fontFamily: JOST, fontSize: '13px', color: 'rgba(245,240,232,0.4)' }}>
                     No saved dishes yet. Tap the heart on any dish while signed in and it will wait for you here.
                   </p>
@@ -455,7 +494,7 @@ export default function Account() {
                         <div className="flex items-center justify-between" style={{ marginTop: item.description ? 0 : '14px' }}>
                           <span style={{ fontFamily: SERIF, fontSize: '21px', fontWeight: 600, color: '#D9A45B' }}>{format(item.price)}</span>
                           <button
-                            onClick={() => { addItem({ id: item.id, name: item.name, price: item.price, image: item.image }); flash(`${item.name} added to your cart.`); setIsOpen(true); }}
+                            onClick={() => { addItem({ id: item.id, name: item.name, price: item.price, image: item.image, description: item.description }); flash(`${item.name} added to your cart.`); setIsOpen(true); }}
                             style={{ ...emberButton, padding: '10px 18px', fontSize: '10.5px' }}
                             className="transition-all hover:brightness-110"
                           >
@@ -485,10 +524,18 @@ export default function Account() {
                       <p style={{ fontFamily: JOST, fontSize: '14px', color: 'rgba(245,240,232,0.58)', lineHeight: 1.65, margin: '12px 0 16px' }}>
                         {a.line1}<br />{a.city}{a.postalCode ? ` · ${a.postalCode}` : ''}{a.phone ? <><br />{a.phone}</> : null}
                       </p>
-                      <div className="flex flex-wrap" style={{ gap: '20px' }}>
+                      <div className="flex flex-wrap items-center" style={{ gap: '20px' }}>
                         <button onClick={() => startEditAddress(i)} className="uppercase inline-flex items-center gap-1.5" style={{ fontFamily: JOST, fontSize: '10.5px', letterSpacing: '0.2em', color: '#C17A3A', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}><Pencil size={11} /> Edit</button>
                         {!a.isDefault && <button onClick={() => void makeDefault(i)} className="uppercase" style={{ fontFamily: JOST, fontSize: '10.5px', letterSpacing: '0.2em', color: '#C17A3A', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>Make Default</button>}
-                        <button onClick={() => void deleteAddress(i)} className="uppercase inline-flex items-center gap-1.5" style={{ fontFamily: JOST, fontSize: '10.5px', letterSpacing: '0.2em', color: 'rgba(245,240,232,0.38)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}><Trash2 size={11} /> Delete</button>
+                        {confirmDeleteIndex === i ? (
+                          <>
+                            <span className="uppercase" style={{ fontFamily: JOST, fontSize: '10.5px', letterSpacing: '0.2em', color: '#D9907E' }}>Delete this address?</span>
+                            <button onClick={() => void deleteAddress(i)} className="uppercase" style={{ fontFamily: JOST, fontSize: '10.5px', letterSpacing: '0.2em', color: '#D9907E', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>Confirm Delete</button>
+                            <button onClick={() => setConfirmDeleteIndex(null)} className="uppercase" style={{ fontFamily: JOST, fontSize: '10.5px', letterSpacing: '0.2em', color: 'rgba(245,240,232,0.58)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>Cancel</button>
+                          </>
+                        ) : (
+                          <button onClick={() => setConfirmDeleteIndex(i)} className="uppercase inline-flex items-center gap-1.5" style={{ fontFamily: JOST, fontSize: '10.5px', letterSpacing: '0.2em', color: 'rgba(245,240,232,0.38)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}><Trash2 size={11} /> Delete</button>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -560,7 +607,8 @@ export default function Account() {
                     </div>
                   </div>
                   <div style={{ marginBottom: '18px' }}><label style={labelStyle}>Tell us more</label>
-                    <textarea value={comment} onChange={(e) => setComment(e.target.value)} rows={4} style={inputStyle} placeholder="The food, the delivery, the little things…" /></div>
+                    <textarea value={comment} onChange={(e) => { setComment(e.target.value); if (e.target.value.trim()) setReviewError(null); }} rows={4} style={inputStyle} placeholder="The food, the delivery, the little things…" />
+                    {reviewError && <p style={{ fontFamily: JOST, fontSize: '12.5px', color: '#D9907E', marginTop: '8px' }}>{reviewError}</p>}</div>
                   <div><label style={labelStyle}>Country (optional)</label><input value={country} onChange={(e) => setCountry(e.target.value)} style={inputStyle} /></div>
                   <div style={{ marginTop: '22px' }}><button type="submit" style={emberButton} className="transition-all hover:brightness-110">Submit Review</button></div>
                 </form>

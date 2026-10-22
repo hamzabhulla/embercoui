@@ -1,23 +1,24 @@
 import { useEffect, useState } from 'react';
-import { fetchPublicSettings } from '../services/api.ts';
+import { fetchPublicSettings, type PublicSettings } from '../services/api.ts';
 
 export default function LiveStatus() {
-  // Defaults match the restaurant's long-standing display; the API
-  // (admin-controlled settings) overrides them when reachable.
-  const [kitchenOpen, setKitchenOpen] = useState(true);
-  const [waitMin, setWaitMin] = useState(20);
-  const [waitMax, setWaitMax] = useState(30);
+  // The bar states facts about the kitchen, so it renders ONLY with
+  // real settings from the API. While the fetch is in flight — and if
+  // it fails — the component renders nothing rather than falling back
+  // to invented defaults ("Kitchen Open · 20–30 min") presented as live.
+  const [settings, setSettings] = useState<PublicSettings | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    fetchPublicSettings().then((settings) => {
-      if (cancelled || !settings) return;
-      setKitchenOpen(settings.kitchenOpen);
-      setWaitMin(settings.waitMin);
-      setWaitMax(settings.waitMax);
+    fetchPublicSettings().then((loaded) => {
+      if (cancelled || !loaded) return;
+      setSettings(loaded);
     });
     return () => { cancelled = true; };
   }, []);
+
+  if (!settings) return null;
+  const { kitchenOpen, waitMin, waitMax } = settings;
 
   return (
     <section
