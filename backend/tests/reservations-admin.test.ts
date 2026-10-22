@@ -1,14 +1,16 @@
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 import { createApp } from '../src/app';
-import { FakeRepository, fakeVerifyToken, testEnv } from './fakeRepository';
+import { FakeRepository, dateFromToday, fakeVerifyToken, testEnv } from './fakeRepository';
 
 const repo = new FakeRepository();
 const app = createApp({ env: testEnv(), repo, verifyToken: fakeVerifyToken });
 const ADMIN_TOKEN = ['Bearer', 'token-admin'].join(' ');
 const postReservation = (body: Record<string, unknown>) =>
   request(app).post('/api/v1/admin/reservations').set('Authorization', ADMIN_TOKEN).send(body);
-const walkIn = { name: 'Walk-in Guest', phone: '+1 555 111 2222', date: '2026-11-02', time: '19:00', guests: 4 };
+// A relative future date: a fixed calendar date here would rot into
+// the past and fail every happy-path test below (audit-2 B-M4).
+const walkIn = { name: 'Walk-in Guest', phone: '+1 555 111 2222', date: dateFromToday(30), time: '19:00', guests: 4 };
 
 describe('Admin-created (walk-in / phone) reservations', () => {
   it('creates a confirmed booking without an email', async () => {
@@ -16,7 +18,7 @@ describe('Admin-created (walk-in / phone) reservations', () => {
     expect(res.status).toBe(201);
     expect(res.body.reservation).toMatchObject({
       name: 'Walk-in Guest', email: null, phone: '+1 555 111 2222',
-      date: '2026-11-02', time: '19:00', guests: 4,
+      date: walkIn.date, time: '19:00', guests: 4,
       status: 'confirmed', source: 'admin', notes: null, userId: null,
     });
   });
@@ -96,7 +98,7 @@ describe('Reservation slot capacity in settings', () => {
 describe('Public reservations stay website-sourced', () => {
   it('public POST still works and yields source website', async () => {
     const res = await request(app).post('/api/v1/reservations').send({
-      name: 'Jane Guest', email: 'jane@example.com', phone: '+1 555 000 1234', date: '2026-11-01', time: '19:00', guests: 2,
+      name: 'Jane Guest', email: 'jane@example.com', phone: '+1 555 000 1234', date: dateFromToday(30), time: '19:00', guests: 2,
     });
     expect(res.status).toBe(201);
     expect(res.body.reservation.source).toBe('website');

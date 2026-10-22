@@ -409,6 +409,15 @@ export const fakeVerifyToken = async (token: string) => {
   return null;
 };
 
+// A YYYY-MM-DD date `days` from today (UTC) — for fixtures that must
+// stay in the future (or the past) no matter when the suite runs.
+// Fixed calendar dates rot into the past and silently arm a time bomb
+// in happy-path tests (audit-2 B-M4); a weeks-scale margin like +30
+// cannot flake at a midnight boundary.
+export function dateFromToday(days: number): string {
+  return new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
+}
+
 export function testEnv(overrides: Partial<import('../src/config/env').Env> = {}): import('../src/config/env').Env {
   return {
     nodeEnv: 'test', port: 0, corsOrigins: ['http://localhost:5173'],

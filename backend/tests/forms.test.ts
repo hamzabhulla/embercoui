@@ -1,11 +1,13 @@
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 import { createApp } from '../src/app';
-import { FakeRepository, fakeVerifyToken, testEnv } from './fakeRepository';
+import { FakeRepository, dateFromToday, fakeVerifyToken, testEnv } from './fakeRepository';
 
 const repo = new FakeRepository();
 const app = createApp({ env: testEnv(), repo, verifyToken: fakeVerifyToken });
-const reservation = { name: 'Jane Guest', email: 'jane@example.com', phone: '+1 555 000 1234', date: '2026-11-01', time: '19:00', guests: 2 };
+// A relative future date: a fixed calendar date here would rot into
+// the past and fail every happy-path test below (audit-2 B-M4).
+const reservation = { name: 'Jane Guest', email: 'jane@example.com', phone: '+1 555 000 1234', date: dateFromToday(30), time: '19:00', guests: 2 };
 
 describe('POST /reservations', () => {
   it('creates a guest reservation as pending', async () => {

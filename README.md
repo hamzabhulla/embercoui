@@ -12,7 +12,7 @@ A complete single-restaurant food ordering platform: customer website, online or
 
 **Customer website**
 - Home, Menu, Our Story, Contact pages (React Router), cart with localStorage persistence
-- Menu, live kitchen status and testimonials served from the backend API (graceful fallback to bundled data)
+- Menu, live kitchen status and testimonials served from the backend API
 - Accounts: Supabase Auth (sign up / login / password reset), profile, saved addresses, favourite dishes, order history, leave-a-review
 - Reservations, newsletter signup and contact form — validated and stored via the API
 - Checkout: server-recalculated totals (client prices are never trusted), coupon codes, cash-on-delivery or Stripe card payment (Elements)
@@ -30,7 +30,7 @@ A complete single-restaurant food ordering platform: customer website, online or
 - Supabase Postgres with Row Level Security; the API uses the service-role key server-side only
 - Supabase JWT verification + role-based guards; zod validation; rate limiting; helmet; CORS whitelist
 - Stripe PaymentIntents + signature-verified webhook — an order is marked paid **only** by the webhook
-- 136 automated tests (Vitest + Supertest, data layer mocked) — money integrity, privacy and admin authorization are covered
+- 300+ automated tests (Vitest + Supertest, data layer mocked) — money integrity, privacy and admin authorization are covered
 
 ## 🗺️ Roadmap (not built yet)
 - PayPal checkout option
@@ -47,11 +47,11 @@ A complete single-restaurant food ordering platform: customer website, online or
 | Database | Supabase Postgres (+ Auth, Realtime, Storage) |
 | Payments | Stripe (PaymentIntents + webhooks) |
 | Hosting  | Vercel — frontend + serverless API in one project (Railway optional: always-on backend, Option B) |
-| CI       | GitHub Actions — lint/typecheck/build (frontend) + lint/typecheck/test/build (backend) |
+| CI       | GitHub Actions — lint/typecheck/build (frontend) + lint/typecheck/test/build (backend) + the vercel-entry gate |
 
 ## 🚀 Getting started
 
-1. **Database:** follow [SUPABASE_SETUP.md](SUPABASE_SETUP.md) — run the SQL in `supabase/migrations/`, then `supabase/seed.sql`, create the storage bucket and your first admin.
+1. **Database:** follow [SUPABASE_SETUP.md](SUPABASE_SETUP.md) — run the SQL in `supabase/migrations/`, then `supabase/seed.sql`, upload the hero media and create your first admin.
 2. **Backend:** `cd backend && npm install && cp .env.example .env` (fill in your keys) `&& npm run dev` → API on `http://localhost:4000`, health at `/api/v1/health`.
 3. **Frontend:** `cp .env.example .env` (fill in `VITE_*` values) `&& npm install && npm run dev`.
 4. **Deploy:** see [DEPLOYMENT.md](DEPLOYMENT.md).

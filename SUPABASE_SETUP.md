@@ -21,7 +21,8 @@ Supabase Dashboard → **SQL Editor** → paste and run, in this order:
 8. `supabase/migrations/0008_api_only_writes.sql` — drops the permissive client INSERT policies from 0001 (reservations, newsletter, contact, reviews): all writes flow through the backend API, which validates and rate-limits; the service-role backend is unaffected
 9. `supabase/migrations/0009_hero_bucket.sql` — creates the public `hero-portfolio-video` storage bucket + policies (same model as `menu-images` in 0002)
 10. `supabase/migrations/0010_site_locations.sql` — per-location website contacts: a `site_locations` JSON on the settings (footer / contact page / reservation section overrides of the global profile fields); settings saves degrade gracefully until it runs
-11. `supabase/seed.sql` — starter content: restaurant settings, the current menu (15 items), and 3 testimonials as approved reviews
+11. `supabase/migrations/0011_money_precision.sql` — money storage precision: widens every money column (menu prices, order totals, coupon values) to `numeric(12, 3)` so 3-decimal currencies (KWD, BHD…) store their smallest unit exactly instead of rounding to 2 places
+12. `supabase/seed.sql` — starter content: restaurant settings and the current menu (15 items)
 
 ## 2. Hero media files (manual, one minute)
 The `hero-portfolio-video` bucket itself is created by migration **0009** above — no manual bucket setup. Only the media files are uploaded by hand:
@@ -47,7 +48,9 @@ Vercel → your project → **Settings → Environment Variables** (Production):
   `SUPABASE_SERVICE_ROLE_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`,
   `GEMINI_API_KEY` (Ember AI chat — free key from Google AI Studio; without it
   `/api/v1/chat` returns 503), `CORS_ORIGIN` (your own site origin, e.g.
-  `https://embercoui.vercel.app`), `NODE_ENV=production`
+  `https://embercoui.vercel.app`), `TRUST_PROXY=1` (one proxy hop in front of
+  the API — Vercel's edge in Option A, Railway's in Option B; the
+  per-visitor rate limits key off it), `NODE_ENV=production`
 Then **Deployments → Redeploy** so the new vars apply.
 
 **Option B (Railway backend instead):** the server set goes to

@@ -29,8 +29,16 @@ No Railway, no second domain, no CORS juggling, $0 on the Hobby plan.
   - Server (function): `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
     `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `GEMINI_API_KEY` (Ember AI
     chat — without it `/api/v1/chat` returns 503), `CORS_ORIGIN` (the site's
-    own https origin), `NODE_ENV=production`.
+    own https origin), `TRUST_PROXY=1` (Vercel's edge is the one proxy hop in
+    front of the function — the per-visitor rate limits key off it),
+    `NODE_ENV=production`.
 - Stripe webhook URL becomes `https://<site-domain>/api/v1/payments/webhook`.
+- A note on card payments: checkout supports Stripe cards and
+  cash-on-delivery. Stripe only onboards businesses in its supported
+  countries (Pakistan is not one of them), so a restaurant there runs this
+  same deployment with the Stripe vars left unset — checkout then offers
+  cash-on-delivery and reports card payments as not configured instead of
+  faking them.
 - Limits to remember: 4.5 MB request body (admin image uploads are resized
   in the browser before upload for exactly this reason); functions are
   stateless — the app is built for that (Supabase holds all state).
@@ -41,7 +49,7 @@ Use when a paying client needs an always-on server. Steps below.
 
 ## One-time setup
 
-Follow `SUPABASE_SETUP.md` first (all five migrations, seed, storage buckets, first admin, Stripe webhook).
+Follow `SUPABASE_SETUP.md` first (all eleven migrations, seed, storage buckets, first admin, Stripe webhook).
 
 ### Frontend (Vercel)
 - Import the repo, root directory = project root (not `backend/`).
@@ -52,7 +60,7 @@ Follow `SUPABASE_SETUP.md` first (all five migrations, seed, storage buckets, fi
 ### Backend (Railway)
 - New service from the same repo, root directory = `backend/`.
 - Build `npm run build`, start `npm start` (runs `node dist/index.js`).
-- Env vars: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (server-side only — never as a `VITE_` var or anywhere in the browser bundle; in Option A the same key lives as a server-side env var on the Vercel project, where only the function can read it), `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `GEMINI_API_KEY` (Ember AI chat), `CORS_ORIGIN` (the exact Vercel domain), `NODE_ENV=production`. `PORT` is provided by Railway.
+- Env vars: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (server-side only — never as a `VITE_` var or anywhere in the browser bundle; in Option A the same key lives as a server-side env var on the Vercel project, where only the function can read it), `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `GEMINI_API_KEY` (Ember AI chat), `CORS_ORIGIN` (the exact Vercel domain), `TRUST_PROXY=1` (one proxy hop in front of the backend — the per-visitor rate limits key off it), `NODE_ENV=production`. `PORT` is provided by Railway.
 - Health check: `GET /api/v1/health`.
 
 ## Rollback
@@ -65,7 +73,7 @@ Follow `SUPABASE_SETUP.md` first (all five migrations, seed, storage buckets, fi
 - The `menu-images` storage bucket is public-read; its contents are reproducible from the admin panel but should be included in any manual export routine. The `hero-portfolio-video` bucket holds the owner's hero video + mobile hero photo and is NOT reproducible from the admin panel — include it in manual exports too.
 
 ## Smoke checklist after every deploy
-1. `GET /api/v1/health` → `{ status: 'ok', supabaseConfigured: true }`.
+1. `GET /api/v1/health` → `{ status: 'ok', supabaseConfigured: true, ... }`.
 2. Homepage loads; LiveStatus reflects the admin Settings toggle.
 3. Menu page shows dishes from the API (edit one price in admin, confirm it changes).
 4. Place a test order (cash on delivery) → track it → change its status in admin → tracking page updates.
