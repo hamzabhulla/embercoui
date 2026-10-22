@@ -4,7 +4,7 @@ import { ApiError } from '../lib/errors';
 import type {
   AdminReservationInput, CouponDTO, CreateOrderData, CustomerDTO, MenuItemDTO, NewsletterSubscriberDTO,
   OrderDTO, Page, PageParams, ProfileDTO, PublicSettingsDTO, ReservationDTO, ReservationInput,
-  Repository, ReviewDTO, SettingsPatch, SiteLocations,
+  Repository, ReservationListFilter, ReviewDTO, SettingsPatch, SiteLocations,
 } from './types';
 
 type Row = Record<string, unknown>;
@@ -251,10 +251,10 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
   }
 
   async function adminListReservations(): Promise<ReservationDTO[]>;
-  async function adminListReservations(page: PageParams): Promise<Page<ReservationDTO>>;
-  async function adminListReservations(page?: PageParams): Promise<ReservationDTO[] | Page<ReservationDTO>> {
-    if (!page) return fetchAllPages((p) => adminListReservations(p));
-    const { data, error, count } = await db
+  async function adminListReservations(filter: ReservationListFilter, page: PageParams): Promise<Page<ReservationDTO>>;
+  async function adminListReservations(filter?: ReservationListFilter, page?: PageParams): Promise<ReservationDTO[] | Page<ReservationDTO>> {
+    if (!page) return fetchAllPages((p) => adminListReservations(filter ?? {}, p));
+    let query = db
       .from('reservations')
       .select('*', { count: 'exact' })
       // Deterministic order for paging: newest date first; within a date,
@@ -262,8 +262,12 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
       // the remaining ties so pages never overlap or skip a row.
       .order('reservation_date', { ascending: false })
       .order('reservation_time', { ascending: true })
-      .order('created_at', { ascending: false })
-      .range(page.offset, page.offset + page.limit - 1);
+      .order('created_at', { ascending: false });
+    // Filters apply BEFORE the range, so `total` is the filtered count
+    // and pages tile the filtered set (audit-2 fix 3).
+    if (filter?.date) query = query.eq('reservation_date', filter.date);
+    if (filter?.status) query = query.eq('status', filter.status);
+    const { data, error, count } = await query.range(page.offset, page.offset + page.limit - 1);
     if (error) throw new Error(`reservations query failed: ${error.message}`);
     return { items: ((data ?? []) as Row[]).map(reservationDTO), total: count ?? 0 };
   }

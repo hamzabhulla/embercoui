@@ -153,6 +153,18 @@ export interface ReservationDTO extends Omit<ReservationInput, 'email'> {
   createdAt: string;
 }
 
+/**
+ * Optional filters for the paged admin reservations list (audit-2 fix 3):
+ * `date` pins the list to one calendar day (YYYY-MM-DD) so the day board
+ * can page through that date's COMPLETE set instead of deriving board
+ * numbers from the newest-100 window; `status` lets stat chips read an
+ * exact filtered total from a limit=1 request.
+ */
+export interface ReservationListFilter {
+  date?: string;
+  status?: ReservationDTO['status'];
+}
+
 export interface OrderItemInput {
   menuItemId: number;
   quantity: number;
@@ -281,7 +293,7 @@ export interface Repository {
   updateMenuItem(id: number, patch: Partial<MenuItemDTO> & { isAvailable?: boolean; sortOrder?: number }): Promise<(MenuItemDTO & { isAvailable: boolean; sortOrder: number }) | null>;
   deleteMenuItem(id: number): Promise<boolean>;
   adminListReservations(): Promise<ReservationDTO[]>;
-  adminListReservations(page: PageParams): Promise<Page<ReservationDTO>>;
+  adminListReservations(filter: ReservationListFilter, page: PageParams): Promise<Page<ReservationDTO>>;
   getReservation(id: string): Promise<ReservationDTO | null>;
   adminCreateReservation(input: AdminReservationInput): Promise<ReservationDTO>;
   updateReservationStatus(id: string, status: ReservationDTO['status']): Promise<ReservationDTO | null>;

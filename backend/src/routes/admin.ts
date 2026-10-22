@@ -7,7 +7,7 @@ import { validateBody } from '../middleware/validate';
 import { assertImageUpload, type StorageService } from '../lib/storage';
 import { isValidCurrencyCode, roundMajorUnits } from '../lib/currency';
 import { isLegalOrderTransition, isLegalReservationTransition } from '../lib/statusTransitions';
-import type { OrderStatus, PageParams, Repository, ReservationDTO } from '../repositories/types';
+import type { OrderStatus, PageParams, Repository, ReservationDTO, ReservationListFilter } from '../repositories/types';
 
 // Paged admin lists (audit Fix 9): the screens page with limit/offset
 // and report the exact total, so nothing silently truncates at
@@ -288,7 +288,38 @@ export function adminRouter(deps: AdminDeps) {
   router.get('/reservations', async (req, res, next) => {
     try {
       const page = parsePage(req);
-      const { items, total } = await repo().adminListReservations(page);
+      // Optional filters (audit-2 fix 3): `date` (YYYY-MM-DD) pins the
+      // list to one day so the day board can page that date's complete
+      // set; `status` gives stat chips an exact total via limit=1.
+      // Same validation posture as the orders status filter: a malformed
+      // value is a client error (400), never silently ignored.
+      const filter: ReservationListFilter = {};
+      if (typeof req.query.date === 'string') {
+        // Shape AND calendar validity: the regex alone accepts
+        // nonexistent dates (2026-02-30) that PostgREST would reject
+        // as a date literal — round-trip the components through a
+        // real Date so the route and the database agree (400 here).
+        const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(req.query.date);
+        const parts = m ? { y: +m[1], mo: +m[2], d: +m[3] } : null;
+        const dt = parts ? new Date(Date.UTC(parts.y, parts.mo - 1, parts.d)) : null;
+        // Date.UTC maps years 0–99 onto 1900–1999, which would fail the
+        // round-trip for REAL early dates (0099-06-15) that PostgREST
+        // accepts. Pin all three components with setUTCFullYear so the
+        // check is exact for every year (and 0000-02-29 — year 0 is a
+        // leap year — still resolves to itself, not to March 1).
+        if (dt && parts) dt.setUTCFullYear(parts.y, parts.mo - 1, parts.d);
+        if (!parts || !dt || dt.getUTCFullYear() !== parts.y || dt.getUTCMonth() !== parts.mo - 1 || dt.getUTCDate() !== parts.d) {
+          throw new ApiError(400, 'Invalid date — use YYYY-MM-DD');
+        }
+        filter.date = req.query.date;
+      }
+      if (typeof req.query.status === 'string' && req.query.status) {
+        if (!(RESERVATION_STATUSES as readonly string[]).includes(req.query.status)) {
+          throw new ApiError(400, 'Unknown reservation status');
+        }
+        filter.status = req.query.status as ReservationDTO['status'];
+      }
+      const { items, total } = await repo().adminListReservations(filter, page);
       res.json({ reservations: items, total, limit: page.limit, offset: page.offset });
     } catch (err) { next(err); }
   });

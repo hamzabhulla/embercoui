@@ -3,7 +3,7 @@ import { DEFAULT_SETTINGS } from '../src/repositories/supabaseRepository';
 import type {
   AdminReservationInput, CouponDTO, CreateOrderData, CustomerDTO, MenuItemDTO, NewsletterSubscriberDTO,
   OrderDTO, Page, PageParams, ProfileDTO, PublicSettingsDTO,
-  Repository, ReservationDTO, ReservationInput, ReviewDTO,
+  Repository, ReservationDTO, ReservationInput, ReservationListFilter, ReviewDTO,
 } from '../src/repositories/types';
 
 type FullMenuItem = MenuItemDTO & { isAvailable: boolean; sortOrder: number };
@@ -195,11 +195,16 @@ export class FakeRepository implements Repository {
     return this.menu.length < before;
   }
   async adminListReservations(): Promise<ReservationDTO[]>;
-  async adminListReservations(page: PageParams): Promise<Page<ReservationDTO>>;
-  async adminListReservations(page?: PageParams): Promise<ReservationDTO[] | Page<ReservationDTO>> {
+  async adminListReservations(filter: ReservationListFilter, page: PageParams): Promise<Page<ReservationDTO>>;
+  async adminListReservations(filter?: ReservationListFilter, page?: PageParams): Promise<ReservationDTO[] | Page<ReservationDTO>> {
+    // Filters apply before ordering/paging, exactly like the real
+    // repository: `total` is the FILTERED count and pages tile the
+    // filtered set (audit-2 fix 3).
+    const filtered = this.reservations.filter((r) =>
+      (!filter?.date || r.date === filter.date) && (!filter?.status || r.status === filter.status));
     // Same deterministic order as the real repository: date desc,
     // time asc, created_at desc — so paged slices tile without overlap.
-    const sorted = [...this.reservations].sort((a, b) =>
+    const sorted = [...filtered].sort((a, b) =>
       (a.date < b.date ? 1 : a.date > b.date ? -1 : 0) ||
       (a.time < b.time ? -1 : a.time > b.time ? 1 : 0) ||
       (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));

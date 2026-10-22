@@ -152,6 +152,107 @@ describe('reservations paging + deterministic order', () => {
   });
 });
 
+describe('reservations date/status filters (audit-2 fix 3)', () => {
+  const { repo, app } = setup();
+  const DAY = '2026-12-20';
+  // 120 newer bookings on OTHER dates — the newest-100 window the old
+  // day board derived from would not contain a single row of DAY.
+  for (let i = 0; i < 120; i++) {
+    repo.reservations.push(makeReservation({ date: '2026-12-25', status: 'confirmed', createdAt: at(1000 + i) }));
+  }
+  // DAY itself: 30 bookings — 12 parties in the 19:00 slot (2 guests
+  // each), 18 across other slots; 5 of the 30 are cancelled.
+  for (let i = 0; i < 12; i++) {
+    repo.reservations.push(makeReservation({ date: DAY, time: '19:00', guests: 2, status: 'confirmed', createdAt: at(2000 + i) }));
+  }
+  for (let i = 0; i < 13; i++) {
+    repo.reservations.push(makeReservation({ date: DAY, time: '18:00', guests: 3, status: 'pending', createdAt: at(2100 + i) }));
+  }
+  for (let i = 0; i < 5; i++) {
+    repo.reservations.push(makeReservation({ date: DAY, time: '20:00', guests: 4, status: 'cancelled', createdAt: at(2200 + i) }));
+  }
+  // Older dates too, so an unfiltered count differs from every filter.
+  for (let i = 0; i < 10; i++) {
+    repo.reservations.push(makeReservation({ date: '2026-12-10', status: 'pending', createdAt: at(500 + i) }));
+  }
+
+  it('date filter returns that date\'s complete set across pages, with the filtered total', async () => {
+    const seen: ReservationDTO[] = [];
+    for (const offset of [0, 10, 20]) {
+      const res = await as(request(app).get(`/api/v1/admin/reservations?date=${DAY}&limit=10&offset=${offset}`), ADMIN);
+      expect(res.status).toBe(200);
+      expect(res.body.total).toBe(30);
+      seen.push(...res.body.reservations);
+    }
+    expect(seen).toHaveLength(30);
+    expect(new Set(seen.map((r) => r.id)).size).toBe(30);
+    expect(seen.every((r) => r.date === DAY)).toBe(true);
+    // The board's arithmetic over the fetched set: the 19:00 slot holds
+    // all 12 parties / 24 guests even though 120 newer rows exist.
+    const slot = seen.filter((r) => r.time === '19:00' && (r.status === 'pending' || r.status === 'confirmed'));
+    expect(slot).toHaveLength(12);
+    expect(slot.reduce((s, r) => s + r.guests, 0)).toBe(24);
+  });
+
+  it('status filter reports the exact filtered total (the stat-chip contract)', async () => {
+    const pending = await as(request(app).get('/api/v1/admin/reservations?status=pending&limit=1'), ADMIN);
+    expect(pending.status).toBe(200);
+    expect(pending.body.total).toBe(23); // 13 on DAY + 10 on 2026-12-10
+    expect(pending.body.reservations).toHaveLength(1);
+    const confirmed = await as(request(app).get('/api/v1/admin/reservations?status=confirmed&limit=1'), ADMIN);
+    expect(confirmed.body.total).toBe(132); // 120 on 2026-12-25 + 12 in DAY's 19:00 slot
+  });
+
+  it('date + status filters combine', async () => {
+    const res = await as(request(app).get(`/api/v1/admin/reservations?date=${DAY}&status=cancelled&limit=100`), ADMIN);
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(5);
+    expect(res.body.reservations.every((r: ReservationDTO) => r.date === DAY && r.status === 'cancelled')).toBe(true);
+  });
+
+  it('a date with no bookings is an honest empty page, not an error', async () => {
+    const res = await as(request(app).get('/api/v1/admin/reservations?date=2027-01-01'), ADMIN);
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(0);
+    expect(res.body.reservations).toEqual([]);
+  });
+
+  it('rejects malformed date and unknown status with 400', async () => {
+    for (const q of ['date=2026-1-1', 'date=20-12-2026', 'date=garbage', 'status=bogus']) {
+      const res = await as(request(app).get(`/api/v1/admin/reservations?${q}`), ADMIN);
+      expect(res.status, q).toBe(400);
+    }
+  });
+
+  it('rejects nonexistent calendar dates with 400 but accepts a real leap date', async () => {
+    // Shape-valid but impossible dates: PostgREST would reject these
+    // literals, so the route must too — fake and real stay in agreement.
+    for (const q of ['date=2026-02-30', 'date=2026-04-31', 'date=2027-02-29']) {
+      const res = await as(request(app).get(`/api/v1/admin/reservations?${q}`), ADMIN);
+      expect(res.status, q).toBe(400);
+    }
+    const leap = await as(request(app).get('/api/v1/admin/reservations?date=2028-02-29'), ADMIN);
+    expect(leap.status).toBe(200);
+    expect(leap.body.total).toBe(0);
+    expect(leap.body.reservations).toEqual([]);
+    // Years 0–99 are real dates too: Date.UTC maps them onto
+    // 1900–1999, but the route pins the exact year before comparing,
+    // so 0099-06-15 is an honest empty page — not a 400.
+    const early = await as(request(app).get('/api/v1/admin/reservations?date=0099-06-15'), ADMIN);
+    expect(early.status).toBe(200);
+    expect(early.body.total).toBe(0);
+    expect(early.body.reservations).toEqual([]);
+  });
+
+  it('unpaged repository call with no filter still returns everything', async () => {
+    const all = await repo.adminListReservations();
+    expect(all).toHaveLength(160);
+    const dayPage = await repo.adminListReservations({ date: DAY }, { limit: 500, offset: 0 });
+    expect(dayPage.total).toBe(30);
+    expect(dayPage.items).toHaveLength(30);
+  });
+});
+
 describe('reservation status PATCH reaches rows beyond the first page', () => {
   const { repo, app } = setup();
   for (let i = 0; i < 149; i++) {
