@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Check, Heart, LogOut, Pencil, Plus, Star, Trash2 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
@@ -101,6 +101,8 @@ export default function Account() {
   const [rating, setRating] = useState(5);
   const [comment, setComment] = useState('');
   const [reviewError, setReviewError] = useState<string | null>(null);
+  const [reviewSubmitting, setReviewSubmitting] = useState(false);
+  const reviewInFlight = useRef(false);
   const [country, setCountry] = useState('');
 
   // A failed load is NOT the same as an empty list: failures land in a
@@ -236,19 +238,33 @@ export default function Account() {
 
   const submitReview = async (e: React.FormEvent) => {
     e.preventDefault();
+    // The POST is not idempotent (unlike this page's full-replace
+    // PATCHes): a double-click or an Enter + click would create
+    // duplicate pending reviews. The ref closes the in-flight window
+    // the busy state alone cannot — a second submit fired before the
+    // disabled button re-renders — so exactly one POST fires per
+    // submission intent (audit-2, review double-submit).
+    if (reviewInFlight.current) return;
     // A star rating with no words is not a review — require the comment
     // here, with the error shown at the field, not after a server round-trip.
     if (!comment.trim()) {
       setReviewError('Please tell us a little about your experience — a sentence or two is plenty.');
       return;
     }
+    reviewInFlight.current = true;
+    setReviewSubmitting(true);
     setReviewError(null);
-    const res = await apiRequest('/api/v1/reviews', {
-      method: 'POST',
-      body: JSON.stringify({ rating, comment, country: country || undefined }),
-    });
-    if (res.ok) { setComment(''); flash('Thank you — your review was submitted for moderation.'); }
-    else fail(res.error);
+    try {
+      const res = await apiRequest('/api/v1/reviews', {
+        method: 'POST',
+        body: JSON.stringify({ rating, comment, country: country || undefined }),
+      });
+      if (res.ok) { setComment(''); flash('Thank you — your review was submitted for moderation.'); }
+      else fail(res.error);
+    } finally {
+      reviewInFlight.current = false;
+      setReviewSubmitting(false);
+    }
   };
 
   const handleSignOut = async () => { await signOut(); navigate('/'); };
@@ -634,7 +650,7 @@ export default function Account() {
                     <textarea value={comment} onChange={(e) => { setComment(e.target.value); if (e.target.value.trim()) setReviewError(null); }} rows={4} style={inputStyle} placeholder="The food, the delivery, the little things…" />
                     {reviewError && <p style={{ fontFamily: JOST, fontSize: '12.5px', color: '#D9907E', marginTop: '8px' }}>{reviewError}</p>}</div>
                   <div><label style={labelStyle}>Country (optional)</label><input value={country} onChange={(e) => setCountry(e.target.value)} style={inputStyle} /></div>
-                  <div style={{ marginTop: '22px' }}><button type="submit" style={emberButton} className="transition-all hover:brightness-110">Submit Review</button></div>
+                  <div style={{ marginTop: '22px' }}><button type="submit" disabled={reviewSubmitting} style={emberButton} className="transition-all hover:brightness-110 disabled:opacity-60 disabled:cursor-not-allowed">{reviewSubmitting ? 'Submitting…' : 'Submit Review'}</button></div>
                 </form>
               </div>
             )}

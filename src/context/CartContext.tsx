@@ -1,5 +1,6 @@
 /* eslint-disable react-refresh/only-export-components */
-import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useState, ReactNode } from 'react';
+import { fetchMenuItems } from '../services/api.ts';
 
 export interface CartItem {
   id: number;
@@ -24,6 +25,9 @@ export interface AppliedCoupon {
   value: number;
 }
 
+/** Outcome of the latest drawer-open price check against the live menu. */
+export type CartPriceStatus = 'idle' | 'verified' | 'unverified';
+
 interface CartContextType {
   items: CartItem[];
   addItem: (item: Omit<CartItem, 'quantity'>) => void;
@@ -36,6 +40,9 @@ interface CartContextType {
   coupon: AppliedCoupon | null;
   applyCoupon: (coupon: AppliedCoupon) => void;
   removeCoupon: () => void;
+  priceStatus: CartPriceStatus;
+  /** What the last price check changed (dishes removed, prices updated), or null when nothing changed / no check has run. */
+  cartNotice: string | null;
 }
 
 const CartContext = createContext<CartContextType | null>(null);
@@ -114,6 +121,14 @@ export function CartProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<CartItem[]>(loadStoredCart);
   const [coupon, setCoupon] = useState<AppliedCoupon | null>(loadStoredCoupon);
   const [isOpen, setIsOpen] = useState(false);
+  const [priceStatus, setPriceStatus] = useState<CartPriceStatus>('idle');
+  const [cartNotice, setCartNotice] = useState<string | null>(null);
+  // Mirror of the latest items for the async revalidation, so a fetch
+  // that resolves late merges into the cart as it is THEN, not as it
+  // was when the drawer opened (same pattern as AuthContext's profile).
+  const itemsRef = useRef<CartItem[]>(items);
+  useEffect(() => { itemsRef.current = items; }, [items]);
+  const revalidatingRef = useRef(false);
 
   useEffect(() => {
     try {
@@ -149,9 +164,82 @@ export function CartProvider({ children }: { children: ReactNode }) {
     });
   };
 
+  /**
+   * Re-check the cart against the live menu (audit-2, cart price
+   * revalidation). Lines persist across sessions carrying add-time
+   * price/name snapshots while the menu can change underneath them,
+   * so an open drawer stating the stale total as fact would disagree
+   * with Checkout's server-side re-pricing. A check refreshes each
+   * surviving line's price and name, drops lines the live menu no
+   * longer offers (the public menu lists available dishes only, so
+   * "not on it" means it cannot be ordered), and reports what it did
+   * through cartNotice — nothing is dropped or repriced silently.
+   * A failed fetch changes nothing and flips priceStatus to
+   * 'unverified': the cart stays usable, but its totals are never
+   * presented as confirmed. Checkout remains the pricing authority;
+   * this only stops the drawer from stating stale numbers as fact.
+   */
+  const revalidateCart = useCallback(async () => {
+    if (revalidatingRef.current) return;
+    if (itemsRef.current.length === 0) return;
+    revalidatingRef.current = true;
+    try {
+      const menu = await fetchMenuItems();
+      const current = itemsRef.current;
+      if (current.length === 0) return; // emptied while the fetch was in flight
+      if (menu === null) {
+        setPriceStatus('unverified');
+        // A notice left over from an earlier successful check ("prices
+        // have changed — your cart now shows the current menu prices")
+        // would be false now: the latest prices could NOT be confirmed.
+        // Clear it — the unverified footer note carries the truth alone.
+        setCartNotice(null);
+        return;
+      }
+      const live = new Map(menu.map((m) => [m.id, m]));
+      const removedNames: string[] = [];
+      let priceChanged = false;
+      let changed = false;
+      const next: CartItem[] = [];
+      for (const line of current) {
+        const liveItem = live.get(line.id);
+        if (!liveItem) {
+          removedNames.push(line.name);
+          changed = true;
+          continue;
+        }
+        if (liveItem.price !== line.price) priceChanged = true;
+        if (liveItem.price !== line.price || liveItem.name !== line.name) changed = true;
+        next.push({ ...line, name: liveItem.name, price: liveItem.price });
+      }
+      if (changed) setItems(next);
+      setPriceStatus('verified');
+      const notes: string[] = [];
+      if (removedNames.length === 1) {
+        notes.push(`${removedNames[0]} is no longer available and has been removed from your cart.`);
+      } else if (removedNames.length > 1) {
+        const listed = removedNames.slice(0, 2).join(', ');
+        const rest = removedNames.length - 2;
+        notes.push(`${listed}${rest > 0 ? ` and ${rest} more` : ''} are no longer available and have been removed from your cart.`);
+      }
+      if (priceChanged) notes.push('Some prices have changed — your cart now shows the current menu prices.');
+      setCartNotice(notes.length > 0 ? notes.join(' ') : null);
+    } finally {
+      revalidatingRef.current = false;
+    }
+  }, []);
+
+  // The drawer is where cart totals are stated as fact, so opening it
+  // is the moment the snapshots get re-checked against the live menu.
+  useEffect(() => {
+    if (isOpen) void revalidateCart();
+  }, [isOpen, revalidateCart]);
+
   const clearCart = () => {
     setItems([]);
     setCoupon(null);
+    setPriceStatus('idle');
+    setCartNotice(null);
   };
 
   const applyCoupon = (next: AppliedCoupon) => setCoupon(next);
@@ -171,7 +259,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
   const totalCount = items.reduce((sum, i) => sum + i.quantity, 0);
 
   return (
-    <CartContext.Provider value={{ items, addItem, removeItem, clearCart, updateQuantity, totalCount, isOpen, setIsOpen, coupon, applyCoupon, removeCoupon }}>
+    <CartContext.Provider value={{ items, addItem, removeItem, clearCart, updateQuantity, totalCount, isOpen, setIsOpen, coupon, applyCoupon, removeCoupon, priceStatus, cartNotice }}>
       {children}
     </CartContext.Provider>
   );

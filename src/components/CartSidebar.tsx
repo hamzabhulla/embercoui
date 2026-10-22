@@ -2,14 +2,18 @@ import { useState } from 'react';
 import { X } from 'lucide-react';
 import { useCart, type AppliedCoupon } from '../context/CartContext.tsx';
 import { useCurrency } from '../context/CurrencyContext.tsx';
+import { usePublicSettings } from '../hooks/usePublicSettings.ts';
 import { useNavigate } from 'react-router-dom';
 import { apiRequest } from '../services/api.ts';
 import { fromMinorUnits, toMinorUnits } from '../lib/currency.ts';
 
 export default function CartSidebar() {
   const navigate = useNavigate();
-  const { items, isOpen, setIsOpen, updateQuantity, coupon, applyCoupon, removeCoupon } = useCart();
+  const { items, isOpen, setIsOpen, updateQuantity, coupon, applyCoupon, removeCoupon, priceStatus, cartNotice } = useCart();
   const { format, currency } = useCurrency();
+  // Same settings-driven brand name (and same fallback) as Navbar/Footer.
+  const settings = usePublicSettings();
+  const brandName = settings?.restaurantName ?? 'Ember & Co.';
 
   const [couponInput, setCouponInput] = useState('');
   const [couponBusy, setCouponBusy] = useState(false);
@@ -118,7 +122,7 @@ export default function CartSidebar() {
               color: '#F5F0E8'
             }}
           >
-            Ember & Co.
+            {brandName}
           </h2>
           
           <div 
@@ -129,6 +133,19 @@ export default function CartSidebar() {
 
         {/* Items */}
         <div className="flex-1 overflow-y-auto" style={{ padding: '0 28px' }}>
+          {cartNotice && (
+            <p
+              style={{
+                fontFamily: 'Jost, sans-serif',
+                fontSize: '11.5px',
+                lineHeight: 1.6,
+                color: '#D9A45B',
+                paddingTop: '18px'
+              }}
+            >
+              {cartNotice}
+            </p>
+          )}
           {items.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center space-y-4">
               <span style={{ color: '#C17A3A', fontSize: '24px' }}>✦</span>
@@ -358,6 +375,19 @@ export default function CartSidebar() {
             >
               Delivery is calculated at checkout
             </p>
+            {priceStatus === 'unverified' && (
+              <p
+                className="-mt-4 mb-6"
+                style={{
+                  fontFamily: 'Jost, sans-serif',
+                  fontSize: '10px',
+                  lineHeight: 1.6,
+                  color: 'rgba(245,240,232,0.35)'
+                }}
+              >
+                We couldn't confirm current prices just now — checkout always charges the live menu prices.
+              </p>
+            )}
 
             {coupon ? (
               <div className="mb-6">

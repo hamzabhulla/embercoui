@@ -36,18 +36,52 @@ export default function TrackOrder() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [order, setOrder] = useState<Order | null>(null);
-  const [state, setState] = useState<'loading' | 'found' | 'missing'>('loading');
+  const [state, setState] = useState<'loading' | 'found' | 'missing' | 'error'>('loading');
   const channelRef = useRef<ReturnType<NonNullable<typeof supabase>['channel']> | null>(null);
+  // Once an order has been on screen, background refreshes may update
+  // it but must never demote the page to missing/error on a blip.
+  const foundRef = useRef(false);
+  // Generation stamp for loads (the AdminReservations counter pattern):
+  // every load takes the next number and its response is applied only
+  // while that number is still the latest — a slow response for a
+  // superseded lookup is dropped entirely, never rendered.
+  const loadGenRef = useRef(0);
 
   const load = useCallback(async (silent = false) => {
     if (!id) return;
+    const gen = ++loadGenRef.current;
     const res = await apiRequest<{ order: Order }>(`/api/v1/orders/${id}`);
+    if (gen !== loadGenRef.current) return; // superseded mid-flight — drop it
     if (res.ok && res.data) {
+      foundRef.current = true;
       setOrder(res.data.order);
       setState('found');
-    } else if (!silent) {
-      setState('missing');
+      return;
     }
+    // The endpoint answers a real 404 both for an unknown id and for
+    // an order that belongs to another account — that is the ONLY
+    // failure allowed to say "not found". Everything else (offline,
+    // timeout, 5xx) means "we couldn't check", never a claim that the
+    // order does not exist (audit-2, TrackOrder failure honesty).
+    if (res.status === 404) {
+      if (!foundRef.current) setState('missing');
+    } else if (!silent) {
+      setState('error');
+    }
+  }, [id]);
+
+  // The route reuses this component instance when :id changes (App.tsx
+  // sets no key), so a new id starts from a clean slate BEFORE its own
+  // load runs: the previous order never stays rendered under the new
+  // URL, its 'found' latch cannot shield the new lookup from its own
+  // 404, and its terminal status cannot suppress the new order's
+  // polling (status derives from `order`). The generation bump also
+  // invalidates any response still in flight for the old id.
+  useEffect(() => {
+    loadGenRef.current += 1;
+    foundRef.current = false;
+    setOrder(null);
+    setState('loading');
   }, [id]);
 
   useEffect(() => {
@@ -88,6 +122,38 @@ export default function TrackOrder() {
         <div className="max-w-3xl mx-auto animate-pulse">
           <div className="h-9 w-72 mb-8" style={{ background: 'rgba(245,240,232,0.08)' }} />
           <div className="h-52" style={{ background: 'rgba(245,240,232,0.05)' }} />
+        </div>
+      </div>
+    );
+  }
+
+  if (state === 'error') {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-6 py-24" style={{ background: '#0D1A0E' }}>
+        <div className="text-center max-w-md">
+          <p className="uppercase mb-3" style={{ fontFamily: 'Jost, sans-serif', fontSize: '10px', letterSpacing: '0.25em', color: '#C17A3A' }}>✦ &nbsp; Order Tracking</p>
+          <h1 className="mb-4" style={{ fontFamily: 'Cormorant Garamond, serif', fontWeight: 300, fontSize: '36px', color: '#F5F0E8' }}>
+            We couldn't check your order
+          </h1>
+          <p className="mb-8" style={{ fontFamily: 'Jost, sans-serif', fontSize: '13px', color: 'rgba(245,240,232,0.55)', lineHeight: 1.7 }}>
+            Something went wrong while looking up your order just now — a connection problem, not a missing order. Your order is safe; please try again in a moment, or call us and we will track it down for you.
+          </p>
+          <div className="flex flex-col sm:flex-row gap-3 justify-center">
+            <button
+              onClick={() => { setState('loading'); void load(); }}
+              className="transition-all duration-300 hover:brightness-110"
+              style={{ background: '#C17A3A', color: 'white', textTransform: 'uppercase', letterSpacing: '0.18em', fontFamily: 'Jost, sans-serif', fontSize: '11px', padding: '16px 36px' }}
+            >
+              Try Again
+            </button>
+            <button
+              onClick={() => navigate('/')}
+              className="transition-all duration-300 hover:bg-[rgba(193,122,58,0.1)]"
+              style={{ background: 'transparent', border: '1px solid rgba(245,240,232,0.25)', color: '#F5F0E8', textTransform: 'uppercase', letterSpacing: '0.18em', fontFamily: 'Jost, sans-serif', fontSize: '11px', padding: '16px 36px' }}
+            >
+              Back to Home
+            </button>
+          </div>
         </div>
       </div>
     );
