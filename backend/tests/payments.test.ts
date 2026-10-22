@@ -96,7 +96,7 @@ describe('webhook payment state machine', () => {
 describe('create-intent hardening', () => {
   it('refuses payment for a cancelled order', async () => {
     const order = await createOrder();
-    await repo.updateOrderStatus(order.id, 'cancelled');
+    await repo.updateOrderStatus(order.id, 'pending', 'cancelled');
     const intentsBefore = stripe.intents.size;
     const res = await createIntent(order.id);
     expect(res.status).toBe(400);
@@ -254,7 +254,7 @@ describe('setOrderPaymentIntent conditional write (data layer)', () => {
 
   it('does not touch a cancelled order', async () => {
     const order = await createOrder();
-    await repo.updateOrderStatus(order.id, 'cancelled');
+    await repo.updateOrderStatus(order.id, 'pending', 'cancelled');
     await expect(repo.setOrderPaymentIntent(order.id, 'pi_intruder')).resolves.toBe(false);
     const after = await repo.getOrder(order.id);
     expect(after?.paymentIntentId).toBeNull();
@@ -311,7 +311,7 @@ describe('create-intent when the intent store is refused (state moved mid-reques
     const { app: racing } = racingApp((r) => {
       const real = r.setOrderPaymentIntent.bind(r);
       r.setOrderPaymentIntent = async (orderId: string, paymentIntentId: string) => {
-        await r.updateOrderStatus(orderId, 'cancelled');
+        await r.updateOrderStatus(orderId, 'pending', 'cancelled');
         return real(orderId, paymentIntentId);
       };
     });

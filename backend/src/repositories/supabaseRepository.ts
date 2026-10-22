@@ -29,6 +29,47 @@ async function fetchAllPages<T>(fetchPage: (page: PageParams) => Promise<Page<T>
 const num = (v: unknown): number => (typeof v === 'number' ? v : Number(v ?? 0));
 const str = (v: unknown): string => (typeof v === 'string' ? v : v == null ? '' : String(v));
 const strOrNull = (v: unknown): string | null => (typeof v === 'string' && v.length > 0 ? v : null);
+// Malformed-id policy (audit-2 fix 8): a non-UUID value compared
+// against a uuid column makes Postgres answer 22P02. That is a client
+// addressing mistake — the addressed row simply does not exist — so
+// every by-id read/write below translates this one error to its
+// not-found result (null / false) instead of letting it surface as a
+// 500. Valid-but-absent ids already take the same paths.
+export function isInvalidUuidError(error: { code?: string } | null | undefined): boolean {
+  return !!error && error.code === '22P02';
+}
+// Opening hours are stored as free-form JSONB, but every consumer
+// (site display, chat grounding) only understands string entries —
+// the admin editor writes `weekdays` / `weekends` strings. Normalize
+// defensively, the way sanitizeSiteLocations does: a non-record value
+// becomes {}, and only non-empty string entries survive (trimmed,
+// length-capped), so garbage planted directly in the column can never
+// leak into a DTO.
+export function sanitizeOpeningHours(raw: unknown): Record<string, unknown> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof value !== 'string') continue;
+    const trimmed = value.trim();
+    if (trimmed) out[key.slice(0, 80)] = trimmed.slice(0, 300);
+  }
+  return out;
+}
+// getSettings must never hand out a shared settings object by
+// reference: callers receive a fresh copy (nested groups included),
+// so a mutation of a returned DTO can never corrupt the defaults or
+// another caller's view.
+export function cloneSettings(s: PublicSettingsDTO): PublicSettingsDTO {
+  return {
+    ...s,
+    openingHours: { ...s.openingHours },
+    siteLocations: {
+      footer: { ...s.siteLocations.footer },
+      contact: { ...s.siteLocations.contact },
+      reservation: { ...s.siteLocations.reservation },
+    },
+  };
+}
 
 function menuDTO(r: Row): MenuItemDTO {
   return {
@@ -110,7 +151,7 @@ function settingsDTO(r: Row): PublicSettingsDTO {
     address: strOrNull(r.address),
     whatsappNumber: strOrNull(r.whatsapp_number),
     reservationSlotCapacity: num(r.reservation_slot_capacity) || 40,
-    openingHours: (r.opening_hours as Record<string, unknown>) ?? {},
+    openingHours: sanitizeOpeningHours(r.opening_hours),
     siteLocations: sanitizeSiteLocations(r.site_locations),
   };
 }
@@ -443,10 +484,29 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
       if (error) throw new Error(`menu query failed: ${error.message}`);
       return data ? menuDTO(data as Row) : null;
     },
+    async getMenuItemsByIds(ids) {
+      if (ids.length === 0) return [];
+      // One batched lookup for the whole id list (the favorites read
+      // used to resolve ids one by one — an unbounded sequential
+      // N+1). Availability matches getMenuItem; the caller's id order
+      // (and any duplicate ids) are preserved by mapping the rows
+      // back onto the input list.
+      const { data, error } = await db.from('menu_items').select('*').in('id', ids).eq('is_available', true);
+      if (error) throw new Error(`menu query failed: ${error.message}`);
+      const byId = new Map(((data ?? []) as Row[]).map((r) => [num(r.id), menuDTO(r)]));
+      const out: MenuItemDTO[] = [];
+      for (const id of ids) {
+        const item = byId.get(id);
+        if (item) out.push(item);
+      }
+      return out;
+    },
     async getSettings() {
       const { data, error } = await db.from('restaurant_settings').select('*').eq('id', 1).maybeSingle();
       if (error) throw new Error(`settings query failed: ${error.message}`);
-      return data ? settingsDTO(data as Row) : DEFAULT_SETTINGS;
+      // A fresh copy on every read — never the shared DEFAULT_SETTINGS
+      // object (or its nested groups) by reference.
+      return cloneSettings(data ? settingsDTO(data as Row) : DEFAULT_SETTINGS);
     },
     async listApprovedReviews() {
       // Complete set, paged internally like every other fetch-all
@@ -468,7 +528,10 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
 
     async getProfile(userId) {
       const { data, error } = await db.from('profiles').select('*').eq('id', userId).maybeSingle();
-      if (error) throw new Error(`profile query failed: ${error.message}`);
+      if (error) {
+        if (isInvalidUuidError(error)) return null;
+        throw new Error(`profile query failed: ${error.message}`);
+      }
       return data ? profileDTO(data as Row) : null;
     },
     async upsertProfile(userId, data) {
@@ -544,6 +607,24 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
       return attachItems((data ?? []) as Row[]);
     },
 
+    async getOrderByIdempotencyKey(key) {
+      // limit(1) rather than maybeSingle: the key is unique by index,
+      // but a first-row read can never wedge on PGRST116 if duplicate
+      // rows ever exist. A missing-column error means migration 0006
+      // has not run — there is no stored order to replay, exactly the
+      // degradation createOrder already applies.
+      const { data, error } = await db
+        .from('orders')
+        .select('id')
+        .eq('idempotency_key', key)
+        .limit(1);
+      if (error) {
+        if (error.code === '42703' || error.code === 'PGRST204') return null;
+        throw new Error(`order idempotency lookup failed: ${error.message}`);
+      }
+      if (!data || data.length === 0) return null;
+      return repo.getOrder(str((data[0] as Row).id));
+    },
     async createOrder(data: CreateOrderData) {
       const key = data.idempotencyKey ?? null;
       // Whether the idempotency_key column is usable. It only becomes false
@@ -631,7 +712,10 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
     },
     async getOrder(id) {
       const { data, error } = await db.from('orders').select('*').eq('id', id).maybeSingle();
-      if (error) throw new Error(`order query failed: ${error.message}`);
+      if (error) {
+        if (isInvalidUuidError(error)) return null;
+        throw new Error(`order query failed: ${error.message}`);
+      }
       if (!data) return null;
       const [withItems] = await attachItems([data as Row]);
       return withItems;
@@ -653,7 +737,10 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
         .in('payment_status', ['unpaid', 'pending', 'failed'])
         .neq('status', 'cancelled')
         .select('id');
-      if (error) throw new Error(`order payment update failed: ${error.message}`);
+      if (error) {
+        if (isInvalidUuidError(error)) return false;
+        throw new Error(`order payment update failed: ${error.message}`);
+      }
       // Zero matched rows: the order is gone, or its state moved on
       // (paid/cancelled) since the caller read it. Report "not stored"
       // rather than throwing or passing silently — the caller re-reads
@@ -663,10 +750,21 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
       return !!data && data.length > 0;
     },
     async markOrderPaidByPaymentIntent(paymentIntentId) {
-      const { data, error } = await db.from('orders').select('id').eq('payment_intent_id', paymentIntentId).maybeSingle();
+      // payment_intent_id is NOT unique, so maybeSingle() would throw
+      // PGRST116 and wedge the webhook if duplicate rows ever share an
+      // intent. Take the first matching row (oldest first) with
+      // limit(1) semantics instead; the guarded update below is
+      // unchanged.
+      const { data, error } = await db
+        .from('orders')
+        .select('id')
+        .eq('payment_intent_id', paymentIntentId)
+        .order('created_at', { ascending: true })
+        .order('id', { ascending: true })
+        .limit(1);
       if (error) throw new Error(`order lookup failed: ${error.message}`);
-      if (!data) return null;
-      const orderId = str((data as Row).id);
+      if (!data || data.length === 0) return null;
+      const orderId = str((data[0] as Row).id);
       // Guarded transition: 'paid' may be set from unpaid/pending/failed
       // (a succeeded event after a failed attempt is a legitimate card
       // retry). 'paid' itself is terminal — re-deliveries and later events
@@ -680,10 +778,18 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
       return repo.getOrder(orderId);
     },
     async markOrderPaymentFailedByPaymentIntent(paymentIntentId) {
-      const { data, error } = await db.from('orders').select('id').eq('payment_intent_id', paymentIntentId).maybeSingle();
+      // Same first-row lookup as the paid path (see above): duplicates
+      // must never wedge the webhook on PGRST116.
+      const { data, error } = await db
+        .from('orders')
+        .select('id')
+        .eq('payment_intent_id', paymentIntentId)
+        .order('created_at', { ascending: true })
+        .order('id', { ascending: true })
+        .limit(1);
       if (error) throw new Error(`order lookup failed: ${error.message}`);
-      if (!data) return null;
-      const orderId = str((data as Row).id);
+      if (!data || data.length === 0) return null;
+      const orderId = str((data[0] as Row).id);
       // Guarded transition: 'failed' may be set from unpaid/pending ONLY.
       // Stripe does not guarantee webhook ordering — a payment_failed event
       // delivered after payment_succeeded must never un-pay an order, and a
@@ -703,9 +809,27 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
     },
 
     adminListOrders,
-    async updateOrderStatus(orderId, status) {
-      const { error } = await db.from('orders').update({ status }).eq('id', orderId);
-      if (error) throw new Error(`order status update failed: ${error.message}`);
+    async updateOrderStatus(orderId, expectedStatus, status) {
+      // Conditional write (audit-2 fix 8): the UPDATE carries the
+      // status the route read as a predicate, so a state that moved
+      // on since the read matches zero rows instead of being silently
+      // overwritten. A cancellation additionally requires the order
+      // to still be unpaid at write time — the route's paid guard is
+      // judged on its read, and a webhook landing in the read→write
+      // window must not let a paid order be cancelled with no refund
+      // path. Zero rows → null; the route re-reads and answers 409.
+      let query = db
+        .from('orders')
+        .update({ status })
+        .eq('id', orderId)
+        .eq('status', expectedStatus);
+      if (status === 'cancelled') query = query.neq('payment_status', 'paid');
+      const { data, error } = await query.select('id');
+      if (error) {
+        if (isInvalidUuidError(error)) return null;
+        throw new Error(`order status update failed: ${error.message}`);
+      }
+      if (!data || data.length === 0) return null;
       return repo.getOrder(orderId);
     },
     async createMenuItem(data) {
@@ -742,12 +866,26 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
     adminListReservations,
     async getReservation(id) {
       const { data, error } = await db.from('reservations').select('*').eq('id', id).maybeSingle();
-      if (error) throw new Error(`reservation query failed: ${error.message}`);
+      if (error) {
+        if (isInvalidUuidError(error)) return null;
+        throw new Error(`reservation query failed: ${error.message}`);
+      }
       return data ? reservationDTO(data as Row) : null;
     },
-    async updateReservationStatus(id, status) {
-      const { data, error } = await db.from('reservations').update({ status }).eq('id', id).select('*').maybeSingle();
-      if (error) throw new Error(`reservation update failed: ${error.message}`);
+    async updateReservationStatus(id, expectedStatus, status) {
+      // Conditional twin of updateOrderStatus: zero matched rows
+      // (gone, or the status moved on since the caller's read) → null.
+      const { data, error } = await db
+        .from('reservations')
+        .update({ status })
+        .eq('id', id)
+        .eq('status', expectedStatus)
+        .select('*')
+        .maybeSingle();
+      if (error) {
+        if (isInvalidUuidError(error)) return null;
+        throw new Error(`reservation update failed: ${error.message}`);
+      }
       return data ? reservationDTO(data as Row) : null;
     },
     async adminCreateReservation(input: AdminReservationInput) {
@@ -767,12 +905,18 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
     adminListReviews,
     async setReviewApproved(id, approved) {
       const { data, error } = await db.from('reviews').update({ is_approved: approved }).eq('id', id).select('id');
-      if (error) throw new Error(`review update failed: ${error.message}`);
+      if (error) {
+        if (isInvalidUuidError(error)) return false;
+        throw new Error(`review update failed: ${error.message}`);
+      }
       return (data ?? []).length > 0;
     },
     async deleteReview(id) {
       const { data, error } = await db.from('reviews').delete().eq('id', id).select('id');
-      if (error) throw new Error(`review delete failed: ${error.message}`);
+      if (error) {
+        if (isInvalidUuidError(error)) return false;
+        throw new Error(`review delete failed: ${error.message}`);
+      }
       return (data ?? []).length > 0;
     },
     adminListNewsletter,
@@ -806,19 +950,26 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
         if ((error as { code?: string }).code === '23505') {
           throw new ApiError(409, 'A coupon with this code already exists');
         }
+        if (isInvalidUuidError(error)) return null;
         throw new Error(`coupon update failed: ${error.message}`);
       }
       return data ? couponDTO(data as Row) : null;
     },
     async deleteCoupon(id) {
       const { data, error } = await db.from('coupons').delete().eq('id', id).select('id');
-      if (error) throw new Error(`coupon delete failed: ${error.message}`);
+      if (error) {
+        if (isInvalidUuidError(error)) return false;
+        throw new Error(`coupon delete failed: ${error.message}`);
+      }
       return (data ?? []).length > 0;
     },
     adminListStaff,
     async updateProfileRole(userId, role) {
       const { data, error } = await db.from('profiles').update({ role }).eq('id', userId).select('*').maybeSingle();
-      if (error) throw new Error(`role update failed: ${error.message}`);
+      if (error) {
+        if (isInvalidUuidError(error)) return null;
+        throw new Error(`role update failed: ${error.message}`);
+      }
       return data ? profileDTO(data as Row) : null;
     },
     async updateSettings(patch) {
@@ -833,7 +984,7 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
       if (patch.address !== undefined) update.address = patch.address;
       if (patch.whatsappNumber !== undefined) update.whatsapp_number = patch.whatsappNumber;
       if (patch.reservationSlotCapacity !== undefined) update.reservation_slot_capacity = patch.reservationSlotCapacity;
-      if (patch.openingHours !== undefined) update.opening_hours = patch.openingHours;
+      if (patch.openingHours !== undefined) update.opening_hours = sanitizeOpeningHours(patch.openingHours);
       // siteLocations merges per group over the CURRENT settings: a
       // PATCH carrying only the footer group must not wipe the contact /
       // reservation groups it never mentioned.

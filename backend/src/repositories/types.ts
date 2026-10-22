@@ -247,6 +247,10 @@ export interface Repository {
   listMenuItems(): Promise<MenuItemDTO[]>;
   listAllMenuItems(): Promise<(MenuItemDTO & { isAvailable: boolean; sortOrder: number })[]>;
   getMenuItem(id: number): Promise<MenuItemDTO | null>;
+  /** Batch form of getMenuItem for id lists (account favorites): one
+   * lookup for the whole list, available dishes only, returned in the
+   * caller's id order (duplicates in the input are preserved). */
+  getMenuItemsByIds(ids: number[]): Promise<MenuItemDTO[]>;
   getSettings(): Promise<PublicSettingsDTO>;
   listApprovedReviews(): Promise<ReviewDTO[]>;
 
@@ -263,6 +267,11 @@ export interface Repository {
   // Orders & payments (Phase 3)
   createOrder(data: CreateOrderData): Promise<OrderDTO>;
   getOrder(id: string): Promise<OrderDTO | null>;
+  /** The stored order for a checkout idempotency key, or null when the
+   * key has not created one (or the key column is unavailable). Routes
+   * consult this BEFORE the kitchen-open gate so a legitimate retry is
+   * answered from the stored order even after closing time. */
+  getOrderByIdempotencyKey(key: string): Promise<OrderDTO | null>;
   /**
    * Store the order's live payment intent. CONDITIONAL in every
    * implementation: it applies only while payment_status is
@@ -288,7 +297,17 @@ export interface Repository {
   // Admin (Phase 4)
   adminListOrders(status?: string): Promise<OrderDTO[]>;
   adminListOrders(status: string | undefined, page: PageParams): Promise<Page<OrderDTO>>;
-  updateOrderStatus(orderId: string, status: OrderStatus): Promise<OrderDTO | null>;
+  /**
+   * CONDITIONAL status transition: the write applies only while the
+   * order's status is still `expectedStatus` (the status the caller
+   * read and validated the transition against). A cancellation
+   * additionally refuses a paid order at the data layer, closing the
+   * read→webhook race in the route's refund guard. Resolves the
+   * updated order, or null when no row matched — the order is gone or
+   * its state moved on, and the caller must re-read and answer for the
+   * current state (the admin routes answer 409).
+   */
+  updateOrderStatus(orderId: string, expectedStatus: OrderStatus, status: OrderStatus): Promise<OrderDTO | null>;
   createMenuItem(data: Omit<MenuItemDTO, 'id'> & { isAvailable: boolean; sortOrder: number }): Promise<MenuItemDTO & { isAvailable: boolean; sortOrder: number }>;
   updateMenuItem(id: number, patch: Partial<MenuItemDTO> & { isAvailable?: boolean; sortOrder?: number }): Promise<(MenuItemDTO & { isAvailable: boolean; sortOrder: number }) | null>;
   deleteMenuItem(id: number): Promise<boolean>;
@@ -296,7 +315,9 @@ export interface Repository {
   adminListReservations(filter: ReservationListFilter, page: PageParams): Promise<Page<ReservationDTO>>;
   getReservation(id: string): Promise<ReservationDTO | null>;
   adminCreateReservation(input: AdminReservationInput): Promise<ReservationDTO>;
-  updateReservationStatus(id: string, status: ReservationDTO['status']): Promise<ReservationDTO | null>;
+  /** Conditional twin of updateOrderStatus: applies only while the
+   * reservation's status is still `expectedStatus`; null on no match. */
+  updateReservationStatus(id: string, expectedStatus: ReservationDTO['status'], status: ReservationDTO['status']): Promise<ReservationDTO | null>;
   adminListCustomers(): Promise<CustomerDTO[]>;
   adminListCustomers(page: PageParams): Promise<Page<CustomerDTO>>;
   adminListReviews(): Promise<(ReviewDTO & { isApproved: boolean })[]>;

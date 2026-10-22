@@ -54,7 +54,7 @@ describe('order status transitions (Fix 8)', () => {
 
   it('rejects delivered → pending and leaves state unchanged', async () => {
     const order = await makeOrder();
-    await repo.updateOrderStatus(order.id, 'delivered');
+    await repo.updateOrderStatus(order.id, 'pending', 'delivered');
     const res = await patchOrder(order.id, 'pending');
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('Cannot move an order');
@@ -71,7 +71,7 @@ describe('order status transitions (Fix 8)', () => {
 
   it('rejects out_for_delivery → cancelled (already with the courier)', async () => {
     const order = await makeOrder();
-    await repo.updateOrderStatus(order.id, 'out_for_delivery');
+    await repo.updateOrderStatus(order.id, 'pending', 'out_for_delivery');
     const res = await patchOrder(order.id, 'cancelled');
     expect(res.status).toBe(400);
     expect((await repo.getOrder(order.id))?.status).toBe('out_for_delivery');
@@ -86,7 +86,7 @@ describe('order status transitions (Fix 8)', () => {
 
   it('allows a same-status no-op mid-chain', async () => {
     const order = await makeOrder();
-    await repo.updateOrderStatus(order.id, 'confirmed');
+    await repo.updateOrderStatus(order.id, 'pending', 'confirmed');
     const res = await patchOrder(order.id, 'confirmed');
     expect(res.status).toBe(200);
     expect(res.body.order.status).toBe('confirmed');

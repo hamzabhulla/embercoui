@@ -106,6 +106,19 @@ const siteLocationsSchema = z
       .optional(),
   })
   .optional();
+// Global contact fields follow the SAME clear-field rule as the
+// per-location fields above (audit-2 fix 8): a blank value CLEARS the
+// field to null; a non-empty value is validated. Before, the same
+// "clear this field" gesture behaved inconsistently — phone '' was
+// stored verbatim while email '' failed validation with a 400.
+const clearableWhatsapp = z
+  .string()
+  .trim()
+  .max(25)
+  .transform((s) => (s === '' ? null : s))
+  .refine((v) => v === null || (() => { const d = v.replace(/\D/g, ''); return d.length >= 7 && d.length <= 15; })(), 'WhatsApp number must contain 7–15 digits (with country code)')
+  .nullable()
+  .optional();
 const settingsSchema = z.object({
   kitchenOpen: z.boolean().optional(),
   waitMin: z.number().int().min(0).max(240).optional(),
@@ -117,16 +130,10 @@ const settingsSchema = z.object({
     .refine((s) => isValidCurrencyCode(s), 'Unsupported currency code — use an ISO 4217 code like USD, EUR or PKR')
     .optional(),
   restaurantName: z.string().trim().min(1).max(120).optional(),
-  phone: z.string().trim().max(30).nullable().optional(),
-  email: z.string().trim().email('Invalid email format').nullable().optional(),
-  address: z.string().trim().max(300).nullable().optional(),
-  whatsappNumber: z
-    .string()
-    .trim()
-    .max(25)
-    .refine((v) => { const d = v.replace(/\D/g, ''); return d.length >= 7 && d.length <= 15; }, 'WhatsApp number must contain 7–15 digits (with country code)')
-    .nullable()
-    .optional(),
+  phone: locationField(30),
+  email: locationEmailField,
+  address: locationField(300),
+  whatsappNumber: clearableWhatsapp,
   reservationSlotCapacity: z.number().int().min(1).max(500).optional(),
   openingHours: z.record(z.unknown()).optional(),
   siteLocations: siteLocationsSchema,
@@ -223,8 +230,11 @@ export function adminRouter(deps: AdminDeps) {
       const r = repo();
       const target = req.body.status as OrderStatus;
       // Transition rules (audit Fix 8): judge the move against the
-      // order's CURRENT state, not just the enum. The repository write
-      // itself stays unconditional — this route is its only caller.
+      // order's CURRENT state, not just the enum. The write is
+      // CONDITIONAL on that state (audit-2 fix 8): the repository
+      // applies it only while the order is still in the status read
+      // here, so a concurrent transition (another admin, a
+      // double-submit) can no longer be silently overwritten.
       const current = await r.getOrder(req.params.id);
       if (!current) throw new ApiError(404, 'Order not found');
       if (target !== current.status) {
@@ -237,8 +247,16 @@ export function adminRouter(deps: AdminDeps) {
           throw new ApiError(400, 'Cannot cancel a paid order — refund the payment first, or contact support for help');
         }
       }
-      const updated = await r.updateOrderStatus(req.params.id, target);
-      if (!updated) throw new ApiError(404, 'Order not found');
+      const updated = await r.updateOrderStatus(req.params.id, current.status, target);
+      if (!updated) {
+        // No row matched the condition: either the order vanished
+        // (404) or its state moved on since the read — answer with
+        // the CURRENT state and an honest 409, never a fake success.
+        const latest = await r.getOrder(req.params.id);
+        if (!latest) throw new ApiError(404, 'Order not found');
+        res.status(409).json({ error: 'Order changed — refresh and try again', order: latest });
+        return;
+      }
       res.json({ order: updated });
     } catch (err) { next(err); }
   });
@@ -348,14 +366,20 @@ export function adminRouter(deps: AdminDeps) {
       // Same enforcement as orders (audit Fix 8): current state first,
       // then the transition table. The current row is fetched by id
       // (audit Fix 9) — scanning the admin list silently lost rows once
-      // the list outgrew a single page.
+      // the list outgrew a single page. The write is CONDITIONAL on
+      // the status read here (audit-2 fix 8), exactly like orders.
       const current = await r.getReservation(req.params.id);
       if (!current) throw new ApiError(404, 'Reservation not found');
       if (target !== current.status && !isLegalReservationTransition(current.status, target)) {
         throw new ApiError(400, `Cannot move a reservation from '${current.status}' to '${target}'`);
       }
-      const updated = await r.updateReservationStatus(req.params.id, target);
-      if (!updated) throw new ApiError(404, 'Reservation not found');
+      const updated = await r.updateReservationStatus(req.params.id, current.status, target);
+      if (!updated) {
+        const latest = await r.getReservation(req.params.id);
+        if (!latest) throw new ApiError(404, 'Reservation not found');
+        res.status(409).json({ error: 'Reservation changed — refresh and try again', reservation: latest });
+        return;
+      }
       res.json({ reservation: updated });
     } catch (err) { next(err); }
   });

@@ -24,23 +24,38 @@ const stub = vi.hoisted(() => {
   const querySeq = new Map<string, number>();
   const CAP = 1000;
 
+  type StubError = { code: string; message: string };
+  type StubResult = { data: unknown; error: StubError | null; count: number | null };
+
   class StubQuery {
     private filters: ((r: Row) => boolean)[] = [];
+    private eqValues: unknown[] = [];
     private orders: { col: string; asc: boolean }[] = [];
     private rangeSlice: [number, number] | null = null;
     private limitN: number | null = null;
     private singleMode = false;
     private cols: string | null = null;
     private wantCount = false;
+    private op: 'select' | 'update' | 'delete' = 'select';
+    private patch: Row = {};
+    private returnCols: string | null = null;
 
     constructor(private table: string) {}
 
     select(cols: string, opts?: { count?: string }) {
-      this.cols = cols;
-      this.wantCount = opts?.count === 'exact';
+      // After update()/delete(), .select() names the RETURNING columns.
+      if (this.op === 'select') {
+        this.cols = cols;
+        this.wantCount = opts?.count === 'exact';
+      } else {
+        this.returnCols = cols;
+      }
       return this;
     }
-    eq(col: string, v: unknown) { this.filters.push((r) => r[col] === v); return this; }
+    update(patch: Row) { this.op = 'update'; this.patch = patch; return this; }
+    delete() { this.op = 'delete'; return this; }
+    eq(col: string, v: unknown) { this.filters.push((r) => r[col] === v); this.eqValues.push(v); return this; }
+    neq(col: string, v: unknown) { this.filters.push((r) => r[col] !== v); return this; }
     in(col: string, vs: unknown[]) { const s = new Set(vs); this.filters.push((r) => s.has(r[col])); return this; }
     order(col: string, opts?: { ascending?: boolean }) { this.orders.push({ col, asc: opts?.ascending !== false }); return this; }
     range(from: number, to: number) { this.rangeSlice = [from, to]; return this; }
@@ -48,17 +63,38 @@ const stub = vi.hoisted(() => {
     maybeSingle() { this.singleMode = true; return this; }
     single() { this.singleMode = true; return this; }
 
-    then<TResult1 = { data: unknown; error: null; count: number | null }, TResult2 = never>(
-      onfulfilled?: ((value: { data: unknown; error: null; count: number | null }) => TResult1 | PromiseLike<TResult1>) | null,
+    then<TResult1 = StubResult, TResult2 = never>(
+      onfulfilled?: ((value: StubResult) => TResult1 | PromiseLike<TResult1>) | null,
       onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
     ): Promise<TResult1 | TResult2> {
       return Promise.resolve(this.execute()).then(onfulfilled, onrejected);
     }
 
-    private execute(): { data: unknown; error: null; count: number | null } {
+    private execute(): StubResult {
       const seq = (querySeq.get(this.table) ?? 0) + 1;
       querySeq.set(this.table, seq);
-      let rows = (tables.get(this.table) ?? []).filter((r) => this.filters.every((f) => f(r)));
+      // Postgres rejects a non-UUID literal compared against a uuid
+      // column with 22P02 — BEFORE any row logic. The repository's
+      // malformed-id translation (fix 8) keys on exactly this code;
+      // without it, the calls below would throw like the old code.
+      if (this.eqValues.some((v) => v === 'not-a-uuid')) {
+        return { data: null, error: { code: '22P02', message: 'invalid input syntax for type uuid: "not-a-uuid"' }, count: null };
+      }
+      const tableRows = tables.get(this.table) ?? [];
+      const matched = tableRows.filter((r) => this.filters.every((f) => f(r)));
+      if (this.op === 'update') {
+        for (const r of matched) Object.assign(r, this.patch);
+        const out = matched.map((r) => this.projectWith(this.returnCols, r));
+        if (this.singleMode) return { data: out[0] ?? null, error: null, count: null };
+        return { data: this.returnCols ? out : null, error: null, count: null };
+      }
+      if (this.op === 'delete') {
+        tables.set(this.table, tableRows.filter((r) => !matched.includes(r)));
+        const out = matched.map((r) => this.projectWith(this.returnCols, r));
+        if (this.singleMode) return { data: out[0] ?? null, error: null, count: null };
+        return { data: this.returnCols ? out : null, error: null, count: null };
+      }
+      let rows = matched;
       const total = rows.length;
       rows = this.applyOrder(rows, seq);
       if (this.singleMode) {
@@ -108,8 +144,12 @@ const stub = vi.hoisted(() => {
     }
 
     private project(r: Row): Row {
-      if (!this.cols || this.cols === '*') return { ...r };
-      const keep = this.cols.split(',').map((c) => c.trim());
+      return this.projectWith(this.cols, r);
+    }
+
+    private projectWith(cols: string | null, r: Row): Row {
+      if (!cols || cols === '*') return { ...r };
+      const keep = cols.split(',').map((c) => c.trim());
       const out: Row = {};
       for (const k of keep) out[k] = r[k];
       return out;
@@ -313,5 +353,157 @@ describe('fake repository mirrors the paged contracts', () => {
     expect(new Set(allCoupons.map((c) => c.id)).size).toBe(5);
     // Newest first, mirroring the real repository's created_at desc.
     expect(allCoupons[0].id).toBe('cpn-5');
+  });
+});
+
+// ─── Fix 8 (audit-2): conditional writes, malformed ids, webhook
+// lookups, settings hygiene, batched reads — against the REAL
+// repository over the stubbed client. The stub gained update/delete/
+// neq support and answers 22P02 for the sentinel id 'not-a-uuid',
+// exactly like Postgres comparing a non-UUID literal to a uuid column.
+
+function reservationRow(id: string, patch: Row = {}): Row {
+  return {
+    id, user_id: null, name: 'Seed Guest', email: 'seed@example.com', phone: '555', date: '2026-12-01',
+    time: '19:00', guests: 2, status: 'pending', source: 'website', notes: null,
+    created_at: ts(0), ...patch,
+  };
+}
+
+function menuRow(id: number, patch: Row = {}): Row {
+  return {
+    id, name: `Dish ${id}`, description: 'seeded', price: 10, image_url: `img${id}`, category: 'Mains',
+    dietary_tags: [], is_available: true, sort_order: id, ...patch,
+  };
+}
+
+describe('conditional status transitions (fix 8, B-M1)', () => {
+  it('an order status write applies only from the expected status', async () => {
+    stub.seed('orders', [orderRow('ord-cond', { status: 'pending', payment_status: 'unpaid' })]);
+    stub.seed('order_items', []);
+    const updated = await repo.updateOrderStatus('ord-cond', 'pending', 'confirmed');
+    expect(updated?.status).toBe('confirmed');
+    // A stale writer still expecting 'pending' matches zero rows…
+    await expect(repo.updateOrderStatus('ord-cond', 'pending', 'cancelled')).resolves.toBeNull();
+    // …and the first writer's state survives untouched.
+    expect((await repo.getOrder('ord-cond'))?.status).toBe('confirmed');
+  });
+
+  it('a cancellation never applies to a paid order at the data layer', async () => {
+    stub.seed('orders', [orderRow('ord-paid', { status: 'pending', payment_status: 'paid' })]);
+    stub.seed('order_items', []);
+    // The webhook landed between the route's read and this write.
+    await expect(repo.updateOrderStatus('ord-paid', 'pending', 'cancelled')).resolves.toBeNull();
+    expect((await repo.getOrder('ord-paid'))?.status).toBe('pending');
+  });
+
+  it('a reservation status write applies only from the expected status', async () => {
+    stub.seed('reservations', [reservationRow('res-cond')]);
+    const updated = await repo.updateReservationStatus('res-cond', 'pending', 'confirmed');
+    expect(updated?.status).toBe('confirmed');
+    await expect(repo.updateReservationStatus('res-cond', 'pending', 'cancelled')).resolves.toBeNull();
+    expect((await repo.getReservation('res-cond'))?.status).toBe('confirmed');
+  });
+});
+
+describe('webhook intent lookups survive duplicate rows (fix 8, D-L7)', () => {
+  it('marks the FIRST matching order paid and leaves the duplicate untouched', async () => {
+    stub.seed('orders', [
+      orderRow('ord-newer', { payment_intent_id: 'pi_dup', payment_status: 'pending', created_at: ts(50) }),
+      orderRow('ord-older', { payment_intent_id: 'pi_dup', payment_status: 'pending', created_at: ts(5) }),
+    ]);
+    stub.seed('order_items', []);
+    const marked = await repo.markOrderPaidByPaymentIntent('pi_dup');
+    expect(marked?.id).toBe('ord-older');
+    expect(marked?.paymentStatus).toBe('paid');
+    expect((await repo.getOrder('ord-newer'))?.paymentStatus).toBe('pending');
+  });
+
+  it('marks the FIRST matching order failed and leaves the duplicate untouched', async () => {
+    stub.seed('orders', [
+      orderRow('ord-f-newer', { payment_intent_id: 'pi_dup_f', payment_status: 'pending', created_at: ts(60) }),
+      orderRow('ord-f-older', { payment_intent_id: 'pi_dup_f', payment_status: 'pending', created_at: ts(6) }),
+    ]);
+    stub.seed('order_items', []);
+    const marked = await repo.markOrderPaymentFailedByPaymentIntent('pi_dup_f');
+    expect(marked?.id).toBe('ord-f-older');
+    expect(marked?.paymentStatus).toBe('failed');
+    expect((await repo.getOrder('ord-f-newer'))?.paymentStatus).toBe('pending');
+  });
+});
+
+describe('malformed ids resolve to not-found, never throw (fix 8, B-M2)', () => {
+  it('translates 22P02 to null/false on every by-uuid-id method', async () => {
+    stub.seed('orders', []);
+    stub.seed('reservations', []);
+    stub.seed('reviews', []);
+    stub.seed('coupons', []);
+    stub.seed('profiles', []);
+    await expect(repo.getOrder('not-a-uuid')).resolves.toBeNull();
+    await expect(repo.getReservation('not-a-uuid')).resolves.toBeNull();
+    await expect(repo.getProfile('not-a-uuid')).resolves.toBeNull();
+    await expect(repo.updateOrderStatus('not-a-uuid', 'pending', 'confirmed')).resolves.toBeNull();
+    await expect(repo.updateReservationStatus('not-a-uuid', 'pending', 'confirmed')).resolves.toBeNull();
+    await expect(repo.setOrderPaymentIntent('not-a-uuid', 'pi_x')).resolves.toBe(false);
+    await expect(repo.setReviewApproved('not-a-uuid', true)).resolves.toBe(false);
+    await expect(repo.deleteReview('not-a-uuid')).resolves.toBe(false);
+    await expect(repo.updateCoupon('not-a-uuid', { isActive: false })).resolves.toBeNull();
+    await expect(repo.deleteCoupon('not-a-uuid')).resolves.toBe(false);
+    await expect(repo.updateProfileRole('not-a-uuid', 'admin')).resolves.toBeNull();
+  });
+});
+
+describe('settings hygiene (fix 8)', () => {
+  it('getSettings never hands out the shared defaults object', async () => {
+    stub.seed('restaurant_settings', []);
+    const first = await repo.getSettings();
+    first.restaurantName = 'Mutated';
+    first.openingHours.weekdays = 'mutated';
+    first.siteLocations.footer.phone = 'mutated';
+    const second = await repo.getSettings();
+    expect(second).not.toBe(first);
+    expect(second.restaurantName).toBe('Ember & Co.');
+    expect(second.openingHours).toEqual({});
+    expect(second.siteLocations.footer.phone).toBeNull();
+  });
+
+  it('sanitizes a stored opening_hours blob down to string entries', async () => {
+    stub.seed('restaurant_settings', [{
+      id: 1, kitchen_open: true, wait_min: 20, wait_max: 30, currency: 'USD', restaurant_name: 'Ember & Co.',
+      phone: null, email: null, address: null, whatsapp_number: null, reservation_slot_capacity: 40,
+      opening_hours: { weekdays: '  11:00 – 22:00 ', weekends: 42, holiday: { nested: true }, blank: '   ' },
+      site_locations: null,
+    }]);
+    const settings = await repo.getSettings();
+    expect(settings.openingHours).toEqual({ weekdays: '11:00 – 22:00' });
+  });
+
+  it('normalizes openingHours on write as well', async () => {
+    stub.seed('restaurant_settings', [{
+      id: 1, kitchen_open: true, wait_min: 20, wait_max: 30, currency: 'USD', restaurant_name: 'Ember & Co.',
+      phone: null, email: null, address: null, whatsapp_number: null, reservation_slot_capacity: 40,
+      opening_hours: {}, site_locations: null,
+    }]);
+    const saved = await repo.updateSettings({ openingHours: { weekdays: ' 9 – 5 ', bogus: 7 } });
+    expect(saved.openingHours).toEqual({ weekdays: '9 – 5' });
+  });
+});
+
+describe('idempotency lookup + batched menu reads (fix 8)', () => {
+  it('getOrderByIdempotencyKey returns the stored order with items, or null', async () => {
+    stub.seed('orders', [orderRow('ord-keyed', { idempotency_key: 'checkout-key-1' })]);
+    stub.seed('order_items', [
+      { id: 'oi-1', order_id: 'ord-keyed', menu_item_id: 1, name: 'Dish', unit_price: 10, quantity: 1 },
+    ]);
+    const found = await repo.getOrderByIdempotencyKey('checkout-key-1');
+    expect(found?.id).toBe('ord-keyed');
+    expect(found?.items).toHaveLength(1);
+    await expect(repo.getOrderByIdempotencyKey('no-such-key')).resolves.toBeNull();
+  });
+
+  it('getMenuItemsByIds batches, preserves caller order, skips missing/unavailable', async () => {
+    stub.seed('menu_items', [menuRow(1), menuRow(2), menuRow(3, { is_available: false })]);
+    const items = await repo.getMenuItemsByIds([2, 999, 1, 3]);
+    expect(items.map((i) => i.id)).toEqual([2, 1]);
   });
 });

@@ -1,6 +1,6 @@
 import { currencyExponent } from '../src/lib/currency';
 import { ApiError } from '../src/lib/errors';
-import { DEFAULT_SETTINGS } from '../src/repositories/supabaseRepository';
+import { DEFAULT_SETTINGS, cloneSettings, sanitizeOpeningHours } from '../src/repositories/supabaseRepository';
 import type {
   AdminReservationInput, CouponDTO, CreateOrderData, CustomerDTO, MenuItemDTO, NewsletterSubscriberDTO,
   OrderDTO, Page, PageParams, ProfileDTO, PublicSettingsDTO,
@@ -70,7 +70,23 @@ export class FakeRepository implements Repository {
     const found = this.menu.find((m) => m.id === id && m.isAvailable);
     return found ? (({ isAvailable: _a, sortOrder: _s, ...dto }) => dto)(found) : null;
   }
-  async getSettings() { return { ...(this.settings ?? DEFAULT_SETTINGS) }; }
+  async getMenuItemsByIds(ids: number[]) {
+    // Mirrors the real batch lookup as ONE pass over the menu (the
+    // real repository issues a single .in() query): the caller's id
+    // order (duplicates included); missing/unavailable ids drop out.
+    const byId = new Map(this.menu.filter((m) => m.isAvailable).map((m) =>
+      (({ isAvailable: _a, sortOrder: _s, ...dto }) => [m.id, dto] as const)(m)));
+    const out: MenuItemDTO[] = [];
+    for (const id of ids) {
+      const item = byId.get(id);
+      if (item) out.push(item);
+    }
+    return out;
+  }
+  async getSettings() {
+    // Same isolation as the real repository: a fresh deep copy.
+    return cloneSettings(this.settings ?? DEFAULT_SETTINGS);
+  }
   async listApprovedReviews() {
     // Same order as the real repository: created_at desc, id desc.
     return this.reviews.filter((r) => r.isApproved)
@@ -145,6 +161,9 @@ export class FakeRepository implements Repository {
     if (data.idempotencyKey) this.orderIdempotencyKeys.set(order.id, data.idempotencyKey);
     return order;
   }
+  async getOrderByIdempotencyKey(key: string) {
+    return this.orders.find((o) => this.orderIdempotencyKeys.get(o.id) === key) ?? null;
+  }
   async getOrder(id: string) { return this.orders.find((o) => o.id === id) ?? null; }
   async setOrderPaymentIntent(orderId: string, paymentIntentId: string) {
     const order = this.orders.find((o) => o.id === orderId);
@@ -191,9 +210,13 @@ export class FakeRepository implements Repository {
     if (!page) return filtered;
     return { items: filtered.slice(page.offset, page.offset + page.limit), total: filtered.length };
   }
-  async updateOrderStatus(orderId: string, status: OrderDTO['status']) {
+  async updateOrderStatus(orderId: string, expectedStatus: OrderDTO['status'], status: OrderDTO['status']) {
     const order = this.orders.find((o) => o.id === orderId);
-    if (!order) return null;
+    // Mirror the real conditional write: the predicate (still in the
+    // expected status — and, for a cancel, still unpaid) must hold at
+    // write time, else no row matches and the result is null.
+    if (!order || order.status !== expectedStatus) return null;
+    if (status === 'cancelled' && order.paymentStatus === 'paid') return null;
     order.status = status;
     order.updatedAt = new Date().toISOString();
     return order;
@@ -234,9 +257,9 @@ export class FakeRepository implements Repository {
     return { items: sorted.slice(page.offset, page.offset + page.limit), total: sorted.length };
   }
   async getReservation(id: string) { return this.reservations.find((r) => r.id === id) ?? null; }
-  async updateReservationStatus(id: string, status: ReservationDTO['status']) {
+  async updateReservationStatus(id: string, expectedStatus: ReservationDTO['status'], status: ReservationDTO['status']) {
     const r = this.reservations.find((x) => x.id === id);
-    if (!r) return null;
+    if (!r || r.status !== expectedStatus) return null;
     r.status = status;
     return r;
   }
@@ -364,12 +387,17 @@ export class FakeRepository implements Repository {
   async updateSettings(patch: Partial<PublicSettingsDTO>) {
     // Mirror the real repository: patching while the row is missing
     // creates the singleton (defaults + patch) — the save must persist,
-    // never silently evaporate. One deliberate simplification: the
-    // patch spread replaces siteLocations wholesale, where the real
-    // repository merges it per group over the stored value (route tests
-    // exercise the schema/route contract, not that merge).
-    this.settings = { ...(this.settings ?? DEFAULT_SETTINGS), ...patch };
-    return { ...this.settings };
+    // never silently evaporate; the opening-hours patch is normalized
+    // the same way; and callers receive a fresh copy, never a
+    // reference into the stored object. One deliberate simplification:
+    // the patch spread replaces siteLocations wholesale, where the
+    // real repository merges it per group over the stored value (route
+    // tests exercise the schema/route contract, not that merge).
+    const normalized = patch.openingHours !== undefined
+      ? { ...patch, openingHours: sanitizeOpeningHours(patch.openingHours) }
+      : patch;
+    this.settings = cloneSettings({ ...(this.settings ?? DEFAULT_SETTINGS), ...normalized });
+    return cloneSettings(this.settings);
   }
 }
 

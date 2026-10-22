@@ -204,7 +204,13 @@ export default function AdminReservations() {
   const setStatus = async (id: string, status: string) => {
     setBusyId(id); setError('');
     try { await adminSend('PATCH', `/api/v1/admin/reservations/${id}/status`, { status }); reloadAll(); }
-    catch (e) { setError((e as Error).message); }
+    catch (e) {
+      setError((e as Error).message);
+      // A 409 means the reservation changed under us: reload the
+      // list and the day board so the true state is on screen next
+      // to the conflict message.
+      if ((e as { status?: number }).status === 409) reloadAll();
+    }
     finally { setBusyId(''); }
   };
 

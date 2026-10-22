@@ -198,7 +198,7 @@ export default function Checkout() {
     }
     setError(null);
     setPlacing(true);
-    const res = await apiRequest<{ order: CreatedOrder }>('/api/v1/orders', {
+    const res = await apiRequest<{ order: CreatedOrder; alreadyCreated?: boolean }>('/api/v1/orders', {
       method: 'POST',
       body: JSON.stringify({
         customerName: name.trim(),
@@ -217,6 +217,17 @@ export default function Checkout() {
       return;
     }
     const order = res.data.order;
+    // Minimal replay (audit-2 fix 8): this attempt's key already
+    // created an order, but the stored order isn't ours to display
+    // in full (e.g. the session changed between attempts) — the API
+    // returns only its id. The order EXISTS, so the honest outcome
+    // is the tracking page, not a totals review over missing data.
+    if (res.data.alreadyCreated) {
+      setOrderPlaced(true);
+      clearCart();
+      navigate(`/track-order/${order.id}`);
+      return;
+    }
     setOrderPlaced(true);
     clearCart();
     // ── Total reconciliation ────────────────────────────────────────────

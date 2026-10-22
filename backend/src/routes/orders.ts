@@ -43,7 +43,7 @@ const orderSchema = z.object({
 
 const couponSchema = z.object({ code: z.string().trim().min(1, 'Coupon code is required').max(40) });
 
-export function ordersRouter(deps: { repo: Repository | null; verifyToken: TokenVerifier; rateLimitMax?: number }) {
+export function ordersRouter(deps: { repo: Repository | null; verifyToken: TokenVerifier; rateLimitMax?: number; couponRateLimitMax?: number }) {
   const router = Router();
   const repo = () => {
     if (!deps.repo) throw notConfigured();
@@ -53,7 +53,7 @@ export function ordersRouter(deps: { repo: Repository | null; verifyToken: Token
   // Dedicated order-creation budget (same factory pattern as the chat
   // limiter): generous for a household behind one NAT address, hostile to
   // scripted order spam. Only order creation is metered — tracking reads
-  // and coupon checks stay on the global limiter.
+  // stay on the global limiter.
   const orderLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     limit: deps.rateLimitMax ?? 30,
@@ -62,10 +62,57 @@ export function ordersRouter(deps: { repo: Repository | null; verifyToken: Token
     message: { error: 'Too many orders — please try again in a few minutes' },
   });
 
+  // Coupon validation is a public, unauthenticated code-guessing
+  // surface, so it gets its own per-IP budget (audit-2 fix 8). 60 per
+  // 15 minutes is far beyond honest checkout use — a shopper re-checks
+  // a handful of codes, and a failed check invites one retry — while
+  // making bulk enumeration of valid codes impractical.
+  const couponLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: deps.couponRateLimitMax ?? 60,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    message: { error: 'Too many coupon checks — please try again in a few minutes' },
+  });
+
   router.post('/orders', orderLimiter, optionalAuth(deps), validateBody(orderSchema), async (req: AuthedRequest, res, next) => {
     try {
       const body = req.body as z.infer<typeof orderSchema>;
       const r = repo();
+
+      // Idempotency replay (audit-2 fix 8). A retry carrying a key
+      // that already created an order is answered from the STORED
+      // order — BEFORE the kitchen-open gate and before any
+      // re-pricing: the order exists, and a legitimate retry must not
+      // be rejected because the kitchen closed (or an item sold out)
+      // after it was placed. The full order is returned only to the
+      // principal that created it: the same account for account
+      // orders, or the same checkout email for guest orders (the one
+      // stable identity the guest flow has — the key itself is a
+      // bearer token minted in the browser and is not proof of
+      // identity). Anyone else presenting the key learns only that
+      // the order was already created, plus its id — never the PII
+      // payload. An items-empty hit is a create still in flight
+      // across the repository's two writes; it falls through to
+      // createOrder, whose key handling resolves the race.
+      const isReplayPrincipal = (order: OrderDTO) =>
+        order.userId
+          ? req.user?.id === order.userId
+          : order.customerEmail.toLowerCase() === body.customerEmail.toLowerCase();
+      const answerReplay = (order: OrderDTO) => {
+        if (isReplayPrincipal(order)) {
+          res.status(201).json({ order });
+        } else {
+          res.status(201).json({ order: { id: order.id }, alreadyCreated: true });
+        }
+      };
+      if (body.idempotencyKey) {
+        const stored = await r.getOrderByIdempotencyKey(body.idempotencyKey);
+        if (stored && stored.items.length > 0) {
+          answerReplay(stored);
+          return;
+        }
+      }
 
       const settings = await r.getSettings();
       // A closed kitchen takes no orders. The storefront hides ordering
@@ -131,6 +178,15 @@ export function ordersRouter(deps: { repo: Repository | null; verifyToken: Token
         discount: fromMinorUnits(effectiveDiscountMinor, currency),
         total: fromMinorUnits(totalMinor, currency),
       });
+      // A keyed create that raced a concurrent twin returns the
+      // WINNER's order from the repository — the same
+      // principal-scoping applies before it leaves (a fresh create
+      // passes the check by construction: it stored this caller's own
+      // user id / checkout email).
+      if (body.idempotencyKey) {
+        answerReplay(order);
+        return;
+      }
       res.status(201).json({ order });
     } catch (err) { next(err); }
   });
@@ -150,7 +206,7 @@ export function ordersRouter(deps: { repo: Repository | null; verifyToken: Token
     } catch (err) { next(err); }
   });
 
-  router.post('/coupons/validate', validateBody(couponSchema), async (req, res, next) => {
+  router.post('/coupons/validate', couponLimiter, validateBody(couponSchema), async (req, res, next) => {
     try {
       const { code } = req.body as z.infer<typeof couponSchema>;
       const coupon = await repo().getCouponByCode(code);

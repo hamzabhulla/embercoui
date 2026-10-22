@@ -53,7 +53,13 @@ export default function AdminOrders() {
     try {
       await adminSend('PATCH', `/api/v1/admin/orders/${id}/status`, { status });
       load();
-    } catch (e) { setError((e as Error).message); }
+    } catch (e) {
+      setError((e as Error).message);
+      // A 409 means the order changed under us (another admin, a
+      // double-submit): reload so the list shows the TRUE current
+      // state next to the conflict message, not our stale copy.
+      if ((e as { status?: number }).status === 409) load();
+    }
     finally { setBusyId(''); }
   };
 

@@ -53,11 +53,11 @@ export function accountRouter(deps: { repo: Repository | null; verifyToken: Toke
 
   router.get('/favorites', async (req: AuthedRequest, res, next) => {
     try {
-      const items = [];
-      for (const id of req.user!.profile.favorites) {
-        const item = await repo().getMenuItem(id);
-        if (item) items.push(item);
-      }
+      // One batched lookup for the whole list (audit-2 fix 8) — the
+      // per-id loop was an unbounded sequential N+1. The repository
+      // preserves the favorites order and skips missing/unavailable
+      // dishes, exactly as the loop did.
+      const items = await repo().getMenuItemsByIds(req.user!.profile.favorites);
       res.json({ items });
     } catch (err) { next(err); }
   });

@@ -27,6 +27,10 @@ export interface AppDeps {
   // Test-only override for the global limiter budget (same pattern as the
   // chat/orders routers' rateLimitMax). Production always uses 600.
   globalRateLimitMax?: number;
+  // Test-only override for the coupon-validate limiter budget, so the
+  // throttle can be pinned without firing 60 requests. Production
+  // always uses the router default (60 / 15 min).
+  couponRateLimitMax?: number;
 }
 
 export function createApp(deps: AppDeps): Express {
@@ -104,6 +108,7 @@ export function createApp(deps: AppDeps): Express {
     // production budget (30 / 15 min) itself is verified by the
     // orders-hardening suite, which builds a production-mode app.
     rateLimitMax: deps.env.nodeEnv === 'test' ? 1000 : undefined,
+    couponRateLimitMax: deps.couponRateLimitMax,
   }));
   app.use('/api/v1', chatRouter({ repo: deps.repo, chat: deps.chat ?? null }));
   app.use('/api/v1', paymentsRouter({ repo: deps.repo, stripe: deps.stripe ?? null, verifyToken: deps.verifyToken }));
