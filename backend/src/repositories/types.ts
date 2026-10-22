@@ -251,7 +251,18 @@ export interface Repository {
   // Orders & payments (Phase 3)
   createOrder(data: CreateOrderData): Promise<OrderDTO>;
   getOrder(id: string): Promise<OrderDTO | null>;
-  setOrderPaymentIntent(orderId: string, paymentIntentId: string): Promise<void>;
+  /**
+   * Store the order's live payment intent. CONDITIONAL in every
+   * implementation: it applies only while payment_status is
+   * unpaid/pending/failed and the order is not cancelled, so it can
+   * never regress a paid order back to 'pending', move a paid (or
+   * refunded) order's intent pointer, or arm a cancelled order. Resolves true when the intent was stored; false when the
+   * write matched nothing (order gone, or its state moved on since
+   * the caller read it) — the caller must then re-read the order and
+   * answer for its current state, never hand out a client secret for
+   * an intent that was never stored.
+   */
+  setOrderPaymentIntent(orderId: string, paymentIntentId: string): Promise<boolean>;
   /**
    * Payment-state transitions are GUARDED in every implementation:
    * 'paid' is terminal; 'paid' may be set from unpaid/pending/failed;

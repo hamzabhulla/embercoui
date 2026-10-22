@@ -17,8 +17,10 @@ const intentSchema = z.object({ orderId: z.string().min(1, 'Order id is required
 
 /**
  * Stripe intent states in which the customer can still complete payment.
- * Anything else ('succeeded', 'canceled') is terminal: a stored intent in
- * one of those states can never be paid and must be replaced, not reused.
+ * Of the terminal states, 'canceled' means the intent is dead and gets
+ * exactly one replacement below. 'succeeded' is NOT dead — the customer
+ * has paid and only the webhook is outstanding — so it is handled
+ * explicitly in the stored-intent block and never replaced.
  */
 const PAYABLE_INTENT_STATUSES = new Set(['requires_payment_method', 'requires_confirmation', 'requires_action', 'processing']);
 
@@ -29,8 +31,9 @@ export function paymentsRouter(deps: PaymentDeps) {
     try {
       if (!deps.repo) throw notConfigured();
       if (!deps.stripe) throw stripeNotConfigured();
+      const repo = deps.repo;
       const { orderId } = req.body as z.infer<typeof intentSchema>;
-      const order = await deps.repo.getOrder(orderId);
+      const order = await repo.getOrder(orderId);
       if (!order) throw new ApiError(404, 'Order not found');
       // Account orders may only be paid by their owner (or staff/admin) —
       // the same privacy pattern as GET /orders/:id: strangers get a 404,
@@ -53,6 +56,24 @@ export function paymentsRouter(deps: PaymentDeps) {
         throw new ApiError(400, 'This order total is below the card payment minimum — please pay on delivery instead');
       }
 
+      // Storing an intent is conditional at the data layer: the write
+      // applies only while the order is still unpaid-or-in-flight and
+      // not cancelled. If it reports "not stored", the order's state
+      // moved on after the read above (a webhook landing mid-request
+      // is the realistic race) — never hand out a client secret for an
+      // intent that was never stored; re-read and answer for the
+      // order's CURRENT state instead.
+      const storeIntent = async (paymentIntentId: string): Promise<void> => {
+        if (await repo.setOrderPaymentIntent(order.id, paymentIntentId)) return;
+        const current = await repo.getOrder(order.id);
+        if (!current) throw new ApiError(404, 'Order not found');
+        if (current.paymentStatus === 'paid') throw new ApiError(400, 'This order has already been paid');
+        if (current.status === 'cancelled') {
+          throw new ApiError(400, 'This order has been cancelled and can no longer be paid');
+        }
+        throw new ApiError(409, 'This order changed while payment was being set up — please retry');
+      };
+
       // Idempotency: an order keeps ONE live intent. If the stored intent
       // is still payable, hand back its client secret — minting a second
       // intent would orphan the first (a payment completed against it
@@ -74,6 +95,16 @@ export function paymentsRouter(deps: PaymentDeps) {
           res.json({ clientSecret: existing.clientSecret, paymentIntentId: existing.id });
           return;
         }
+        if (existing && existing.status === 'succeeded') {
+          // The customer HAS paid — only the webhook is outstanding, so
+          // the DB flag above has not flipped yet. Never replace a
+          // succeeded intent and never move the pointer: the pending
+          // webhook reconciles by intent id, so pointing the order at a
+          // fresh intent would leave the webhook lookup empty-handed
+          // and strand a paid order at 'unpaid' forever. Answer exactly
+          // like the already-paid guard above; the webhook settles it.
+          throw new ApiError(400, 'This order has already been paid');
+        }
         // The stored intent is dead (e.g. canceled): mint ONE replacement
         // and move the pointer. The idempotency key names the dead intent,
         // so a retried request reuses this same replacement.
@@ -83,7 +114,7 @@ export function paymentsRouter(deps: PaymentDeps) {
           currency: currency.toLowerCase(),
           idempotencyKey: `order-${order.id}-${order.paymentIntentId}`,
         });
-        await deps.repo.setOrderPaymentIntent(order.id, replacement.id);
+        await storeIntent(replacement.id);
         res.json({ clientSecret: replacement.clientSecret, paymentIntentId: replacement.id });
         return;
       }
@@ -94,7 +125,7 @@ export function paymentsRouter(deps: PaymentDeps) {
         currency: currency.toLowerCase(),
         idempotencyKey: `order-${order.id}`,
       });
-      await deps.repo.setOrderPaymentIntent(order.id, intent.id);
+      await storeIntent(intent.id);
       res.json({ clientSecret: intent.clientSecret, paymentIntentId: intent.id });
     } catch (err) { next(err); }
   });

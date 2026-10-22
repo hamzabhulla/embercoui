@@ -128,10 +128,17 @@ export class FakeRepository implements Repository {
   async getOrder(id: string) { return this.orders.find((o) => o.id === id) ?? null; }
   async setOrderPaymentIntent(orderId: string, paymentIntentId: string) {
     const order = this.orders.find((o) => o.id === orderId);
-    // Mirror the real repository: an unknown order is an error, never a
-    // silent no-op.
-    if (!order) throw new ApiError(404, 'Order not found');
+    // Mirror the real repository's conditional write: the intent is
+    // stored only while payment_status is unpaid/pending/failed and
+    // the order is not cancelled, and the result reports whether it
+    // was stored — false for a paid, refunded, cancelled or unknown
+    // order — so the caller re-reads and answers for the order's
+    // current state.
+    const storable = !!order && order.status !== 'cancelled'
+      && (order.paymentStatus === 'unpaid' || order.paymentStatus === 'pending' || order.paymentStatus === 'failed');
+    if (!storable) return false;
     order.paymentIntentId = paymentIntentId; order.paymentStatus = 'pending';
+    return true;
   }
   async markOrderPaidByPaymentIntent(paymentIntentId: string) {
     const order = this.orders.find((o) => o.paymentIntentId === paymentIntentId);

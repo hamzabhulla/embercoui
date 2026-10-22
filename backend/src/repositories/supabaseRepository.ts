@@ -525,16 +525,30 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
       return withItems;
     },
     async setOrderPaymentIntent(orderId, paymentIntentId) {
+      // Conditional write, in the same guarded style as the payment
+      // transitions below: an intent may be stored only while the order
+      // is unpaid-or-in-flight and not cancelled. 'paid' is excluded —
+      // storing must never regress a paid order to 'pending', nor move
+      // its pointer away from the intent the webhook reconciles
+      // against. 'pending' is included: a first store has already moved
+      // the order to 'pending', and replacing that intent after it died
+      // at Stripe is a legitimate store. 'failed' is included so a card
+      // retry can arm a fresh intent.
       const { data, error } = await db
         .from('orders')
         .update({ payment_intent_id: paymentIntentId, payment_status: 'pending' })
         .eq('id', orderId)
+        .in('payment_status', ['unpaid', 'pending', 'failed'])
+        .neq('status', 'cancelled')
         .select('id');
       if (error) throw new Error(`order payment update failed: ${error.message}`);
-      // An UPDATE that matched no row must not pass silently — the route
-      // would otherwise hand the customer a client secret whose order can
-      // never be marked paid.
-      if (!data || data.length === 0) throw new ApiError(404, 'Order not found');
+      // Zero matched rows: the order is gone, or its state moved on
+      // (paid/cancelled) since the caller read it. Report "not stored"
+      // rather than throwing or passing silently — the caller re-reads
+      // and answers for the order's current state, because handing out
+      // a client secret for an intent that was never stored would
+      // strand the payment.
+      return !!data && data.length > 0;
     },
     async markOrderPaidByPaymentIntent(paymentIntentId) {
       const { data, error } = await db.from('orders').select('id').eq('payment_intent_id', paymentIntentId).maybeSingle();
