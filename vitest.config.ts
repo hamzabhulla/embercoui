@@ -1,1 +1,10 @@
-aW1wb3J0IHsgZGVmaW5lQ29uZmlnIH0gZnJvbSAndml0ZXN0L2NvbmZpZyc7CgovLyBGcm9udGVuZCB1bml0IHRlc3RzIChhdWRpdC0yIGZpeCAxMCk6IHB1cmUtbG9naWMgcGlucyBmb3IgdGhlIG1vbmV5Ci8vIGFuZCBzYW5pdGlzZXIgbW9kdWxlcy4gTm9kZSBlbnZpcm9ubWVudCBvbmx5IOKAlCBubyBET00gdGVzdHMgeWV0LCBzbwovLyBubyBqc2RvbSBkZXBlbmRlbmN5OyBjb21wb25lbnRzIHN0YXkgY292ZXJlZCBieSB0aGUgYnVpbGQgKyB0aGUKLy8gYmFja2VuZCBzdWl0ZS4gS2VwdCBzZXBhcmF0ZSBmcm9tIHZpdGUuY29uZmlnLnRzIHNvIHRoZSBSZWFjdAovLyBwbHVnaW4gKGFuZCBpdHMgb3B0aW1pemVEZXBzKSBuZXZlciBsb2FkcyBmb3IgYSB0ZXN0IHJ1bi4KZXhwb3J0IGRlZmF1bHQgZGVmaW5lQ29uZmlnKHsKICB0ZXN0OiB7IGVudmlyb25tZW50OiAnbm9kZScsIGluY2x1ZGU6IFsnc3JjLyoqLyoudGVzdC50cyddIH0sCn0pOwo=
+import { defineConfig } from 'vitest/config';
+
+// Frontend unit tests (audit-2 fix 10): pure-logic pins for the money
+// and sanitiser modules. Node environment only — no DOM tests yet, so
+// no jsdom dependency; components stay covered by the build + the
+// backend suite. Kept separate from vite.config.ts so the React
+// plugin (and its optimizeDeps) never loads for a test run.
+export default defineConfig({
+  test: { environment: 'node', include: ['src/**/*.test.ts'] },
+});
