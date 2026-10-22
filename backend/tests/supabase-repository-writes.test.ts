@@ -130,15 +130,50 @@ describe('settings reads sanitize garbage in storage', () => {
     expect(s.reservationSlotCapacity).toBe(40); // stored 0 is corruption (schema min is 1)
     expect(s.restaurantName).toBe('Ember & Co.');
     expect(s.siteLocations.footer).toEqual({ phone: '  +1 555  ', email: null, address: '12 Oak St' });
-    expect(s.siteLocations.contact).toEqual({ phone: null, email: null, address: null, hours: null, mapLocation: null });
+    expect(s.siteLocations.contact).toEqual({ phone: null, email: null, address: null, hours: null, mapLocation: null, mapLat: null, mapLng: null });
     expect(s.siteLocations.reservation).toEqual({ phone: null, address: null, hours: '17:00 – 22:00', locationLabel: null });
+  });
+
+  it('a valid stored map pin survives the read; garbage pairs read as no pin', async () => {
+    stub.seed('restaurant_settings', [settingsRow({
+      site_locations: {
+        footer: { phone: null, email: null, address: null },
+        contact: { phone: null, email: null, address: null, hours: null, mapLocation: 'Somewhere', mapLat: 24.8608, mapLng: 67.0011 },
+        reservation: { phone: null, address: null, hours: null, locationLabel: null },
+      },
+    })]);
+    const good = await repo.getSettings();
+    expect(good.siteLocations.contact.mapLat).toBe(24.8608);
+    expect(good.siteLocations.contact.mapLng).toBe(67.0011);
+
+    // A string latitude is not a coordinate — the whole pair drops.
+    stub.seed('restaurant_settings', [settingsRow({
+      site_locations: { contact: { mapLat: '24.8608', mapLng: 67.0011 } },
+    })]);
+    const stringLat = await repo.getSettings();
+    expect(stringLat.siteLocations.contact.mapLat).toBeNull();
+    expect(stringLat.siteLocations.contact.mapLng).toBeNull();
+
+    // Out-of-range and lone-half pairs are equally "no pin".
+    stub.seed('restaurant_settings', [settingsRow({
+      site_locations: { contact: { mapLat: 124.8608, mapLng: 67.0011 } },
+    })]);
+    const outOfRange = await repo.getSettings();
+    expect(outOfRange.siteLocations.contact.mapLat).toBeNull();
+    expect(outOfRange.siteLocations.contact.mapLng).toBeNull();
+    stub.seed('restaurant_settings', [settingsRow({
+      site_locations: { contact: { mapLat: 24.8608 } },
+    })]);
+    const loneHalf = await repo.getSettings();
+    expect(loneHalf.siteLocations.contact.mapLat).toBeNull();
+    expect(loneHalf.siteLocations.contact.mapLng).toBeNull();
   });
 });
 
 describe('settings writes — site_locations merge + degradation', () => {
   const seededLocations = {
     footer: { phone: 'F-old', email: null, address: null },
-    contact: { phone: 'C-keep', email: null, address: null, hours: null, mapLocation: null },
+    contact: { phone: 'C-keep', email: null, address: null, hours: null, mapLocation: null, mapLat: 24.8608, mapLng: 67.0011 },
     reservation: { phone: 'R-keep', address: null, hours: null, locationLabel: null },
   };
 
@@ -148,8 +183,24 @@ describe('settings writes — site_locations merge + degradation', () => {
     expect(saved.siteLocations.footer.phone).toBe('F-new');
     expect(saved.siteLocations.contact.phone).toBe('C-keep'); // unmentioned groups survive
     expect(saved.siteLocations.reservation.phone).toBe('R-keep');
+    // The stored map pin survives a patch that never mentions it.
+    expect(saved.siteLocations.contact.mapLat).toBe(24.8608);
+    expect(saved.siteLocations.contact.mapLng).toBe(67.0011);
     // The merged document is what actually lands in the column.
     expect((rows('restaurant_settings')[0].site_locations as Row).contact).toMatchObject({ phone: 'C-keep' });
+  });
+
+  it('a map-pin patch merges inside the contact group and can clear back to null', async () => {
+    stub.seed('restaurant_settings', [settingsRow({ site_locations: seededLocations })]);
+    const moved = await repo.updateSettings({ siteLocations: { contact: { mapLat: 31.5497, mapLng: 74.3436 } } });
+    expect(moved.siteLocations.contact.mapLat).toBe(31.5497);
+    expect(moved.siteLocations.contact.mapLng).toBe(74.3436);
+    expect(moved.siteLocations.contact.phone).toBe('C-keep'); // sibling fields survive
+    expect((rows('restaurant_settings')[0].site_locations as Row).contact).toMatchObject({ mapLat: 31.5497, mapLng: 74.3436 });
+    const cleared = await repo.updateSettings({ siteLocations: { contact: { mapLat: null, mapLng: null } } });
+    expect(cleared.siteLocations.contact.mapLat).toBeNull();
+    expect(cleared.siteLocations.contact.mapLng).toBeNull();
+    expect((rows('restaurant_settings')[0].site_locations as Row).contact).toMatchObject({ mapLat: null, mapLng: null });
   });
 
   it('a scalar-only patch never rewrites site_locations', async () => {

@@ -19,6 +19,9 @@ export interface ContactContacts {
   address: string | null;
   hours: string | null;
   mapLocation: string | null;
+  /** Exact pin from the admin map picker — both set outranks `mapLocation`. */
+  mapLat: number | null;
+  mapLng: number | null;
 }
 
 export interface ReservationContacts {

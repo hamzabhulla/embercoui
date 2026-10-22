@@ -1,0 +1,6 @@
+/* The pin is a styled divIcon (see MapLocationPicker.tsx) — Leaflet's
+   default divIcon chrome (white box, grey border) must not show. */
+.ember-map-pin-wrap {
+  background: transparent;
+  border: none;
+}

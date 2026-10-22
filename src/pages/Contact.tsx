@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { sendContactMessage } from '../services/api.ts';
 import { openingHoursLines, usePublicSettings } from '../hooks/usePublicSettings';
+import { resolveMapTarget } from '../lib/mapTarget.ts';
 import {
   MapPin, Phone, Mail, Clock, Car,
   Send, CheckCircle,
@@ -278,7 +279,9 @@ export default function Contact() {
   const hoursLines = contactContacts?.hours
     ? contactContacts.hours.split('\n').filter((l) => l.trim())
     : openingHoursLines(settings);
-  const mapTarget = contactContacts?.mapLocation ?? infoAddress;
+  // Map priority: the admin's dropped pin, then the Map location text,
+  // then the addresses (see resolveMapTarget).
+  const mapTarget = resolveMapTarget(contactContacts, settings?.address);
   const INFO: InfoItem[] = [
     infoAddress
       ? {

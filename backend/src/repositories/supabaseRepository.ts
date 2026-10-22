@@ -100,11 +100,20 @@ const numOrFallback = (v: unknown, fallback: number): number => {
 function emptySiteLocations(): SiteLocations {
   return {
     footer: { phone: null, email: null, address: null },
-    contact: { phone: null, email: null, address: null, hours: null, mapLocation: null },
+    contact: { phone: null, email: null, address: null, hours: null, mapLocation: null, mapLat: null, mapLng: null },
     reservation: { phone: null, address: null, hours: null, locationLabel: null },
   };
 }
-function sanitizeSiteLocations(raw: unknown): SiteLocations {
+// A stored map coordinate is only real as a pair of finite, in-range
+// numbers. Anything else (a string, NaN, out of range, or a lone half of
+// the pair planted directly in the JSON) is garbage and the whole pair
+// reads as null — the Contact page then falls back to the text fields.
+function coordPair(latRaw: unknown, lngRaw: unknown): { mapLat: number | null; mapLng: number | null } {
+  const lat = typeof latRaw === 'number' && Number.isFinite(latRaw) && latRaw >= -90 && latRaw <= 90 ? latRaw : null;
+  const lng = typeof lngRaw === 'number' && Number.isFinite(lngRaw) && lngRaw >= -180 && lngRaw <= 180 ? lngRaw : null;
+  return lat !== null && lng !== null ? { mapLat: lat, mapLng: lng } : { mapLat: null, mapLng: null };
+}
+export function sanitizeSiteLocations(raw: unknown): SiteLocations {
   const out = emptySiteLocations();
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
   const groups = raw as Record<string, unknown>;
@@ -116,6 +125,7 @@ function sanitizeSiteLocations(raw: unknown): SiteLocations {
   out.contact = {
     phone: strOrNull(contact.phone), email: strOrNull(contact.email), address: strOrNull(contact.address),
     hours: strOrNull(contact.hours), mapLocation: strOrNull(contact.mapLocation),
+    ...coordPair(contact.mapLat, contact.mapLng),
   };
   const reservation = pick(groups.reservation);
   out.reservation = {

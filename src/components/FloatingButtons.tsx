@@ -59,7 +59,13 @@ export default function FloatingButtons() {
     setSendFailed(false);
     const res = await apiRequest<{ reply: string; actions?: CartAction[] }>('/api/v1/chat', {
       method: 'POST',
-      body: JSON.stringify({ messages: payload }),
+      // The cart rides along as ids + quantities only — the server
+      // resolves names, prices and the total against the live menu, so
+      // Ember AI can answer "what's in my cart?" from the real numbers.
+      body: JSON.stringify({
+        messages: payload,
+        cart: cartItems.map((i) => ({ menuItemId: i.id, quantity: i.quantity })),
+      }),
     }, { timeoutMs: 20_000 }); // AI replies legitimately take longer than a normal API call
     setSending(false);
     if (res.ok && res.data?.reply) {

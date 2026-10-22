@@ -94,6 +94,25 @@ const siteLocationsSchema = z
         address: locationField(300),
         hours: locationField(160),
         mapLocation: locationField(300),
+        // The admin map picker's pin. Range-checked per axis; the pair
+        // rule below keeps a half-pin (or a half-clear) from ever being
+        // stored — the Contact page treats anything but a full pair as
+        // "no pin".
+        mapLat: z.number().min(-90).max(90).nullable().optional(),
+        mapLng: z.number().min(-180).max(180).nullable().optional(),
+      })
+      .superRefine((c, ctx) => {
+        const hasLat = c.mapLat !== undefined;
+        const hasLng = c.mapLng !== undefined;
+        if (!hasLat && !hasLng) return; // the patch never mentions the pin
+        const validPair = hasLat && hasLng && ((c.mapLat === null && c.mapLng === null) || (c.mapLat !== null && c.mapLng !== null));
+        if (!validPair) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'Map pin needs both latitude and longitude (or both cleared)',
+            path: ['mapLat'],
+          });
+        }
       })
       .optional(),
     reservation: z

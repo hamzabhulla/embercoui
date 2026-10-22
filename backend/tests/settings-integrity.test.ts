@@ -75,13 +75,16 @@ describe('per-location website contacts (migration 0010)', () => {
 
   it('a valid siteLocations PATCH round-trips through GET (admin + public)', async () => {
     const app = buildApp();
+    // The read shape always carries the map-pin pair (null until set),
+    // even when the PATCH never mentioned it.
+    const expected = { ...locations, contact: { ...locations.contact, mapLat: null, mapLng: null } };
     const patched = await as(request(app).patch('/api/v1/admin/settings').send({ siteLocations: locations }), 'token-admin');
     expect(patched.status).toBe(200);
-    expect(patched.body.settings.siteLocations).toEqual(locations);
+    expect(patched.body.settings.siteLocations).toEqual(expected);
     const admin = await as(request(app).get('/api/v1/admin/settings'), 'token-admin');
-    expect(admin.body.settings.siteLocations).toEqual(locations);
+    expect(admin.body.settings.siteLocations).toEqual(expected);
     const pub = await request(app).get('/api/v1/settings/public');
-    expect(pub.body.settings.siteLocations).toEqual(locations);
+    expect(pub.body.settings.siteLocations).toEqual(expected);
   });
 
   it('settings reads carry the full all-null siteLocations shape by default', async () => {
@@ -89,9 +92,78 @@ describe('per-location website contacts (migration 0010)', () => {
     const pub = await request(app).get('/api/v1/settings/public');
     expect(pub.body.settings.siteLocations).toEqual({
       footer: { phone: null, email: null, address: null },
-      contact: { phone: null, email: null, address: null, hours: null, mapLocation: null },
+      contact: { phone: null, email: null, address: null, hours: null, mapLocation: null, mapLat: null, mapLng: null },
       reservation: { phone: null, address: null, hours: null, locationLabel: null },
     });
+  });
+
+  it('a map pin (mapLat + mapLng) round-trips through PATCH → admin GET → public GET', async () => {
+    const app = buildApp();
+    const patched = await as(
+      request(app).patch('/api/v1/admin/settings').send({ siteLocations: { contact: { mapLat: 24.8608, mapLng: 67.0011 } } }),
+      'token-admin',
+    );
+    expect(patched.status).toBe(200);
+    expect(patched.body.settings.siteLocations.contact.mapLat).toBe(24.8608);
+    expect(patched.body.settings.siteLocations.contact.mapLng).toBe(67.0011);
+    const admin = await as(request(app).get('/api/v1/admin/settings'), 'token-admin');
+    expect(admin.body.settings.siteLocations.contact.mapLat).toBe(24.8608);
+    expect(admin.body.settings.siteLocations.contact.mapLng).toBe(67.0011);
+    const pub = await request(app).get('/api/v1/settings/public');
+    expect(pub.body.settings.siteLocations.contact.mapLat).toBe(24.8608);
+    expect(pub.body.settings.siteLocations.contact.mapLng).toBe(67.0011);
+  });
+
+  it('an out-of-range map coordinate is a 400 (latitude and longitude)', async () => {
+    const app = buildApp();
+    const badLat = await as(
+      request(app).patch('/api/v1/admin/settings').send({ siteLocations: { contact: { mapLat: 90.0001, mapLng: 67 } } }),
+      'token-admin',
+    );
+    expect(badLat.status).toBe(400);
+    const badLng = await as(
+      request(app).patch('/api/v1/admin/settings').send({ siteLocations: { contact: { mapLat: 24, mapLng: -180.5 } } }),
+      'token-admin',
+    );
+    expect(badLng.status).toBe(400);
+  });
+
+  it('a half map pin is a 400 — one coordinate without the other, or one cleared alone', async () => {
+    const app = buildApp();
+    const latOnly = await as(
+      request(app).patch('/api/v1/admin/settings').send({ siteLocations: { contact: { mapLat: 24.8608 } } }),
+      'token-admin',
+    );
+    expect(latOnly.status).toBe(400);
+    const lngOnly = await as(
+      request(app).patch('/api/v1/admin/settings').send({ siteLocations: { contact: { mapLng: 67.0011 } } }),
+      'token-admin',
+    );
+    expect(lngOnly.status).toBe(400);
+    const halfClear = await as(
+      request(app).patch('/api/v1/admin/settings').send({ siteLocations: { contact: { mapLat: 24.8608, mapLng: null } } }),
+      'token-admin',
+    );
+    expect(halfClear.status).toBe(400);
+  });
+
+  it('clearing the pin (both coordinates null) stores nulls — the text fallback speaks again', async () => {
+    const app = buildApp();
+    const set = await as(
+      request(app).patch('/api/v1/admin/settings').send({ siteLocations: { contact: { mapLat: 24.8608, mapLng: 67.0011 } } }),
+      'token-admin',
+    );
+    expect(set.status).toBe(200);
+    const cleared = await as(
+      request(app).patch('/api/v1/admin/settings').send({ siteLocations: { contact: { mapLat: null, mapLng: null } } }),
+      'token-admin',
+    );
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.settings.siteLocations.contact.mapLat).toBeNull();
+    expect(cleared.body.settings.siteLocations.contact.mapLng).toBeNull();
+    const pub = await request(app).get('/api/v1/settings/public');
+    expect(pub.body.settings.siteLocations.contact.mapLat).toBeNull();
+    expect(pub.body.settings.siteLocations.contact.mapLng).toBeNull();
   });
 
   it('an over-cap location field is a 400 (footer address over 300 chars)', async () => {

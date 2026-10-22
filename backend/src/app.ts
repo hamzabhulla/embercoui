@@ -110,7 +110,7 @@ export function createApp(deps: AppDeps): Express {
     rateLimitMax: deps.env.nodeEnv === 'test' ? 1000 : undefined,
     couponRateLimitMax: deps.couponRateLimitMax,
   }));
-  app.use('/api/v1', chatRouter({ repo: deps.repo, chat: deps.chat ?? null }));
+  app.use('/api/v1', chatRouter({ repo: deps.repo, chat: deps.chat ?? null, verifyToken: deps.verifyToken }));
   app.use('/api/v1', paymentsRouter({ repo: deps.repo, stripe: deps.stripe ?? null, verifyToken: deps.verifyToken }));
   app.use('/api/v1/admin', adminRouter({ repo: deps.repo, verifyToken: deps.verifyToken, storage: deps.storage ?? null }));
 

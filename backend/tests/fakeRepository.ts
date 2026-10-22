@@ -1,6 +1,6 @@
 import { currencyExponent } from '../src/lib/currency';
 import { ApiError } from '../src/lib/errors';
-import { DEFAULT_SETTINGS, cloneSettings, sanitizeOpeningHours } from '../src/repositories/supabaseRepository';
+import { DEFAULT_SETTINGS, cloneSettings, sanitizeOpeningHours, sanitizeSiteLocations } from '../src/repositories/supabaseRepository';
 import type {
   AdminReservationInput, CouponDTO, CreateOrderData, CustomerDTO, MenuItemDTO, NewsletterSubscriberDTO,
   OrderDTO, Page, PageParams, ProfileDTO, PublicSettingsDTO,
@@ -35,7 +35,7 @@ export class FakeRepository implements Repository {
     phone: null, email: null, address: null, whatsappNumber: null, reservationSlotCapacity: 40, openingHours: {},
     siteLocations: {
       footer: { phone: null, email: null, address: null },
-      contact: { phone: null, email: null, address: null, hours: null, mapLocation: null },
+      contact: { phone: null, email: null, address: null, hours: null, mapLocation: null, mapLat: null, mapLng: null },
       reservation: { phone: null, address: null, hours: null, locationLabel: null },
     },
   };
@@ -84,8 +84,12 @@ export class FakeRepository implements Repository {
     return out;
   }
   async getSettings() {
-    // Same isolation as the real repository: a fresh deep copy.
-    return cloneSettings(this.settings ?? DEFAULT_SETTINGS);
+    // Same isolation as the real repository: a fresh deep copy, with
+    // site_locations sanitized on read exactly as the real repository
+    // does (missing fields read as null, garbage reads as null).
+    const copy = cloneSettings(this.settings ?? DEFAULT_SETTINGS);
+    copy.siteLocations = sanitizeSiteLocations(copy.siteLocations);
+    return copy;
   }
   async listApprovedReviews() {
     // Same order as the real repository: created_at desc, id desc.
@@ -397,7 +401,8 @@ export class FakeRepository implements Repository {
       ? { ...patch, openingHours: sanitizeOpeningHours(patch.openingHours) }
       : patch;
     this.settings = cloneSettings({ ...(this.settings ?? DEFAULT_SETTINGS), ...normalized });
-    return cloneSettings(this.settings);
+    // The real updateSettings returns a fresh READ (sanitized) — mirror it.
+    return this.getSettings();
   }
 }
 

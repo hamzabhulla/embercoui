@@ -28,6 +28,13 @@ export interface ContactContacts {
   hours: string | null;
   /** Free-text place/address used for the map embed and the directions link. */
   mapLocation: string | null;
+  /**
+   * Exact map pin chosen in the admin map picker. Always both-or-neither:
+   * a set pair outranks `mapLocation` for the Contact page map; both null
+   * means "no pin — fall back to the text fields", exactly as before.
+   */
+  mapLat: number | null;
+  mapLng: number | null;
 }
 
 export interface ReservationContacts {
@@ -312,6 +319,7 @@ export interface Repository {
   updateMenuItem(id: number, patch: Partial<MenuItemDTO> & { isAvailable?: boolean; sortOrder?: number }): Promise<(MenuItemDTO & { isAvailable: boolean; sortOrder: number }) | null>;
   deleteMenuItem(id: number): Promise<boolean>;
   adminListReservations(): Promise<ReservationDTO[]>;
+  adminListReservations(filter: ReservationListFilter): Promise<ReservationDTO[]>;
   adminListReservations(filter: ReservationListFilter, page: PageParams): Promise<Page<ReservationDTO>>;
   getReservation(id: string): Promise<ReservationDTO | null>;
   adminCreateReservation(input: AdminReservationInput): Promise<ReservationDTO>;
