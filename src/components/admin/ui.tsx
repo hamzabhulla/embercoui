@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { formatMoney } from '../../lib/currency';
 
 /**
@@ -97,6 +97,32 @@ export const dangerBtn = 'inline-flex items-center justify-center gap-2 px-3.5 h
 export const chipBtn = 'inline-flex items-center px-3 h-[30px] rounded-[8px] bg-[linear-gradient(135deg,#C98A44,#A66932)] text-white font-bodytext text-[12px] font-medium hover:brightness-105 transition disabled:opacity-50 cursor-pointer';
 export const chipGhostBtn = 'inline-flex items-center px-3 h-[30px] rounded-[8px] bg-white border border-[#EAE3D3] text-[#16241A] font-bodytext text-[12px] font-medium hover:bg-[#FBF8F1] transition disabled:opacity-50 cursor-pointer';
 export const chipDangerBtn = 'inline-flex items-center px-3 h-[30px] rounded-[8px] bg-white border border-[#B0492F]/45 text-[#B0492F] font-bodytext text-[12px] font-medium hover:bg-[#F9ECEC] transition disabled:opacity-50 cursor-pointer';
+export const chipDangerSolidBtn = 'inline-flex items-center px-3 h-[30px] rounded-[8px] bg-[#B0492F] text-white font-bodytext text-[12px] font-semibold hover:brightness-110 transition disabled:opacity-50 cursor-pointer';
+
+/**
+ * Two-step inline delete (the product's established confirm idiom —
+ * the customer Account page arms address deletes the same way): the
+ * first click only ARMS the confirmation, naming the item; nothing is
+ * deleted until "Confirm delete" is clicked, and Cancel simply disarms.
+ * Used for every irreversible admin delete so none of them fires on a
+ * single click (audit-2 fix 6).
+ */
+export function DeleteButton({ name, onDelete, disabled = false }: { name: string; onDelete: () => void; disabled?: boolean }) {
+  const [armed, setArmed] = useState(false);
+  if (!armed) {
+    return (
+      <button type="button" className={chipDangerBtn} disabled={disabled} onClick={() => setArmed(true)}>Delete</button>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-2 flex-wrap">
+      <span className="font-bodytext text-[12px] font-medium text-[#B0492F]">Delete {name}?</span>
+      <button type="button" className={chipDangerSolidBtn} disabled={disabled}
+        onClick={() => { setArmed(false); onDelete(); }}>Confirm delete</button>
+      <button type="button" className={chipGhostBtn} disabled={disabled} onClick={() => setArmed(false)}>Cancel</button>
+    </span>
+  );
+}
 
 export function FChip({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (

@@ -372,8 +372,29 @@ export function adminRouter(deps: AdminDeps) {
     } catch (err) { next(err); }
   });
 
-  router.get('/reviews', async (_req, res, next) => {
-    try { res.json({ reviews: await repo().adminListReviews() }); } catch (err) { next(err); }
+  router.get('/reviews', async (req, res, next) => {
+    try {
+      const r = repo();
+      const page = parsePage(req);
+      const { items, total } = await r.adminListReviews(page);
+      // The page's headline stats describe what visitors actually see,
+      // so they aggregate the COMPLETE set (the unpaged call — the same
+      // route-level aggregation the dashboard/finance routes use),
+      // never the loaded page: a page-local average would silently
+      // misreport the public rating once reviews exceed one page
+      // (audit-2 fix 6). Approved-only, exactly as the UI computed them.
+      const all = await r.adminListReviews();
+      const approved = all.filter((x) => x.isApproved);
+      const distribution: Record<string, number> = {};
+      for (const star of [5, 4, 3, 2, 1]) distribution[String(star)] = approved.filter((x) => x.rating === star).length;
+      const stats = {
+        approvedCount: approved.length,
+        pendingCount: all.length - approved.length,
+        averageRating: approved.length ? approved.reduce((s, x) => s + x.rating, 0) / approved.length : 0,
+        distribution,
+      };
+      res.json({ reviews: items, total, limit: page.limit, offset: page.offset, stats });
+    } catch (err) { next(err); }
   });
 
   router.patch('/reviews/:id', validateBody(z.object({ isApproved: z.boolean() })), async (req, res, next) => {
@@ -395,7 +416,20 @@ export function adminRouter(deps: AdminDeps) {
   router.get('/newsletter', requireRole('admin'), async (req, res, next) => {
     try {
       const page = parsePage(req);
-      const { items, total } = await repo().adminListNewsletter(page);
+      // Optional `since` (ISO 8601): the returned total then counts
+      // only subscribers who joined at/after it — the "new this week"
+      // stat reads it with limit=1 instead of counting a loaded page
+      // (audit-2 fix 6). An unparseable value is a client error (400),
+      // same posture as parsePage.
+      const rawSince = req.query.since;
+      let since: string | undefined;
+      if (rawSince !== undefined) {
+        if (typeof rawSince !== 'string' || Number.isNaN(Date.parse(rawSince))) {
+          throw new ApiError(400, 'Invalid since — use an ISO 8601 timestamp');
+        }
+        since = new Date(rawSince).toISOString();
+      }
+      const { items, total } = await repo().adminListNewsletter(page, since);
       res.json({ subscribers: items, total, limit: page.limit, offset: page.offset });
     } catch (err) { next(err); }
   });
@@ -415,8 +449,12 @@ export function adminRouter(deps: AdminDeps) {
     } catch (err) { next(err); }
   });
 
-  router.get('/coupons', async (_req, res, next) => {
-    try { res.json({ coupons: await repo().adminListCoupons() }); } catch (err) { next(err); }
+  router.get('/coupons', async (req, res, next) => {
+    try {
+      const page = parsePage(req);
+      const { items, total } = await repo().adminListCoupons(page);
+      res.json({ coupons: items, total, limit: page.limit, offset: page.offset });
+    } catch (err) { next(err); }
   });
 
   router.post('/coupons', requireRole('admin'), validateBody(couponSchema), async (req, res, next) => {
@@ -501,8 +539,12 @@ export function adminRouter(deps: AdminDeps) {
     } catch (err) { next(err); }
   });
 
-  router.get('/staff', requireRole('admin'), async (_req, res, next) => {
-    try { res.json({ staff: await repo().adminListStaff() }); } catch (err) { next(err); }
+  router.get('/staff', requireRole('admin'), async (req, res, next) => {
+    try {
+      const page = parsePage(req);
+      const { items, total } = await repo().adminListStaff(page);
+      res.json({ staff: items, total, limit: page.limit, offset: page.offset });
+    } catch (err) { next(err); }
   });
 
   router.patch('/staff/:id/role', requireRole('admin'), validateBody(roleSchema), async (req, res, next) => {

@@ -1,20 +1,33 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { adminGet, adminSend } from '../../services/adminApi';
 import { useAuth } from '../../context/AuthContext';
-import { AdminsOnly, Avatar, Card, EmptyNote, ErrorNote, LoadingNote, NoticeNote, PageTitle, fmtDate, tableCls, tdCls, thCls } from '../../components/admin/ui';
+import { AdminsOnly, Avatar, Card, EmptyNote, ErrorNote, LoadingNote, NoticeNote, PageTitle, fmtDate, ghostBtn, tableCls, tdCls, thCls } from '../../components/admin/ui';
 
 interface Person { id: string; email: string | null; fullName: string | null; role: string; createdAt: string }
 const ROLES = ['customer', 'staff', 'admin'];
+const PAGE_SIZE = 100;
 
 export default function AdminStaff() {
   const { profile } = useAuth();
   const isAdmin = profile?.role === 'admin';
   const [rows, setRows] = useState<Person[]>([]);
+  const [total, setTotal] = useState(0);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [loaded, setLoaded] = useState(false);
-  const load = () => { adminGet<{ staff: Person[] }>('/api/v1/admin/staff').then((d) => setRows(d.staff)).catch((e: Error) => setError(e.message)).finally(() => setLoaded(true)); };
-  useEffect(() => { if (isAdmin) load(); }, [isAdmin]);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const fetchPage = useCallback((offset: number, append: boolean) => {
+    adminGet<{ staff: Person[]; total: number }>(`/api/v1/admin/staff?limit=${PAGE_SIZE}&offset=${offset}`)
+      .then((d) => {
+        setTotal(d.total);
+        setRows((prev) => (append ? [...prev, ...d.staff] : d.staff));
+      })
+      .catch((e: Error) => setError(e.message))
+      .finally(() => { setLoaded(true); setLoadingMore(false); });
+  }, []);
+  const load = useCallback(() => fetchPage(0, false), [fetchPage]);
+  useEffect(() => { if (isAdmin) load(); }, [isAdmin, load]);
+  const loadMore = () => { setLoadingMore(true); fetchPage(rows.length, true); };
   const changeRole = async (id: string, role: string) => {
     setError(''); setNotice('');
     try {
@@ -64,6 +77,16 @@ export default function AdminStaff() {
           </div>
         )}
       </Card>
+      {loaded && total > 0 && (
+        <p className="font-bodytext text-[12.5px] text-[#98A096] mt-4">Showing {rows.length} of {total} accounts</p>
+      )}
+      {loaded && rows.length < total && (
+        <div className="mt-3">
+          <button type="button" className={ghostBtn} disabled={loadingMore} onClick={loadMore}>
+            {loadingMore ? 'Loading…' : 'Load more'}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

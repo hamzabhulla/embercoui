@@ -1,9 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { adminGet, adminSend } from '../../services/adminApi';
 import { useAuth } from '../../context/AuthContext';
-import { Avatar, Card, CardHead, EmptyNote, ErrorNote, LoadingNote, PageTitle, StatusPill, chipBtn, chipDangerBtn, chipGhostBtn, fmtDate } from '../../components/admin/ui';
+import { Avatar, Card, CardHead, DeleteButton, EmptyNote, ErrorNote, LoadingNote, PageTitle, StatusPill, chipBtn, chipGhostBtn, fmtDate, ghostBtn } from '../../components/admin/ui';
+
+const PAGE_SIZE = 100;
 
 interface Review { id: string; name: string; country: string | null; rating: number; comment: string; isApproved: boolean; createdAt: string }
+interface ReviewStats { approvedCount: number; pendingCount: number; averageRating: number; distribution: Record<string, number> }
 
 function Stars({ rating }: { rating: number }) {
   return (
@@ -17,10 +20,24 @@ export default function AdminReviews() {
   const { profile } = useAuth();
   const isAdmin = profile?.role === 'admin';
   const [rows, setRows] = useState<Review[]>([]);
+  const [total, setTotal] = useState(0);
+  const [stats, setStats] = useState<ReviewStats | null>(null);
   const [error, setError] = useState('');
   const [loaded, setLoaded] = useState(false);
-  const load = () => { adminGet<{ reviews: Review[] }>('/api/v1/admin/reviews').then((d) => setRows(d.reviews)).catch((e: Error) => setError(e.message)).finally(() => setLoaded(true)); };
-  useEffect(load, []);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const fetchPage = useCallback((offset: number, append: boolean) => {
+    adminGet<{ reviews: Review[]; total: number; stats: ReviewStats }>(`/api/v1/admin/reviews?limit=${PAGE_SIZE}&offset=${offset}`)
+      .then((d) => {
+        setTotal(d.total);
+        setStats(d.stats);
+        setRows((prev) => (append ? [...prev, ...d.reviews] : d.reviews));
+      })
+      .catch((e: Error) => setError(e.message))
+      .finally(() => { setLoaded(true); setLoadingMore(false); });
+  }, []);
+  const load = useCallback(() => fetchPage(0, false), [fetchPage]);
+  useEffect(() => { load(); }, [load]);
+  const loadMore = () => { setLoadingMore(true); fetchPage(rows.length, true); };
   const setApproved = async (id: string, isApproved: boolean) => {
     try { await adminSend('PATCH', `/api/v1/admin/reviews/${id}`, { isApproved }); load(); }
     catch (e) { setError((e as Error).message); }
@@ -31,10 +48,13 @@ export default function AdminReviews() {
   };
   // Headline stats describe what visitors actually see on the website, so
   // they are computed from APPROVED reviews only — pending reviews awaiting
-  // moderation must not drag the public average around (audit fix 15).
-  const approved = rows.filter((r) => r.isApproved);
-  const avg = approved.length ? approved.reduce((s, r) => s + r.rating, 0) / approved.length : 0;
-  const dist = [5, 4, 3, 2, 1].map((star) => ({ star, count: approved.filter((r) => r.rating === star).length }));
+  // moderation must not drag the public average around (audit fix 15). They
+  // come from the server, aggregated over the COMPLETE set: deriving them
+  // from the loaded page would silently misreport the public average once
+  // reviews exceed one page (audit-2 fix 6).
+  const approvedCount = stats?.approvedCount ?? 0;
+  const avg = stats?.averageRating ?? 0;
+  const dist = [5, 4, 3, 2, 1].map((star) => ({ star, count: stats?.distribution[String(star)] ?? 0 }));
   return (
     <div>
       <PageTitle sub="Only approved reviews appear on the website">Reviews</PageTitle>
@@ -47,14 +67,14 @@ export default function AdminReviews() {
             <Card className="px-5 py-6 text-center">
               <div className="font-display text-[52px] leading-none font-semibold text-[#16241A]">{avg.toFixed(1)}</div>
               <div className="my-2.5"><Stars rating={Math.round(avg)} /></div>
-              <p className="font-bodytext text-[12px] text-[#98A096]">{approved.length} approved reviews · {rows.length - approved.length} awaiting approval</p>
+              <p className="font-bodytext text-[12px] text-[#98A096]">{approvedCount} approved reviews · {stats?.pendingCount ?? 0} awaiting approval</p>
             </Card>
             <Card className="px-5 py-4">
               {dist.map(({ star, count }) => (
                 <div key={star} className="flex items-center gap-2.5 py-[5px]">
                   <b className="font-bodytext text-[12.5px] w-3">{star}</b>
                   <div className="flex-1 h-[7px] rounded-full bg-[#EFE9DB] overflow-hidden">
-                    <div className="h-full rounded-full bg-[#C17A3A]" style={{ width: `${approved.length ? (count / approved.length) * 100 : 0}%` }} />
+                    <div className="h-full rounded-full bg-[#C17A3A]" style={{ width: `${approvedCount ? (count / approvedCount) * 100 : 0}%` }} />
                   </div>
                   <span className="font-bodytext text-[12px] text-[#98A096] w-6 text-right">{count}</span>
                 </div>
@@ -77,12 +97,22 @@ export default function AdminReviews() {
                   <div className="flex gap-2">
                     {!r.isApproved && <button onClick={() => void setApproved(r.id, true)} className={chipBtn}>Approve</button>}
                     {r.isApproved && <button onClick={() => void setApproved(r.id, false)} className={chipGhostBtn}>Unapprove</button>}
-                    {isAdmin && <button onClick={() => void remove(r.id)} className={chipDangerBtn}>Delete</button>}
+                    {isAdmin && <DeleteButton name={`the review by ${r.name}`} onDelete={() => void remove(r.id)} />}
                   </div>
                 </div>
               ))}
             </div>
           </Card>
+        </div>
+      )}
+      {loaded && total > 0 && (
+        <p className="font-bodytext text-[12.5px] text-[#98A096] mt-5">Showing {rows.length} of {total} reviews</p>
+      )}
+      {loaded && rows.length < total && (
+        <div className="mt-3">
+          <button type="button" className={ghostBtn} disabled={loadingMore} onClick={loadMore}>
+            {loadingMore ? 'Loading…' : 'Load more'}
+          </button>
         </div>
       )}
     </div>

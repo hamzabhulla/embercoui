@@ -290,14 +290,17 @@ export class FakeRepository implements Repository {
     return this.reviews.length < before;
   }
   async adminListNewsletter(): Promise<NewsletterSubscriberDTO[]>;
-  async adminListNewsletter(page: PageParams): Promise<Page<NewsletterSubscriberDTO>>;
-  async adminListNewsletter(page?: PageParams): Promise<NewsletterSubscriberDTO[] | Page<NewsletterSubscriberDTO>> {
+  async adminListNewsletter(page: PageParams, since?: string): Promise<Page<NewsletterSubscriberDTO>>;
+  async adminListNewsletter(page?: PageParams, since?: string): Promise<NewsletterSubscriberDTO[] | Page<NewsletterSubscriberDTO>> {
     // Mirrors the real repository's newest-first order: the fake's
     // subscribers all share one synthetic createdAt, so newest-first
-    // is reverse subscription order.
+    // is reverse subscription order. The `since` filter (applied before
+    // paging, so the total is the filtered count) mirrors the real
+    // repository's .gte('created_at', since).
     const all = [...this.newsletter]
       .map((email, i) => ({ id: `nl-${i}`, email, createdAt: '2026-01-01T00:00:00Z' }))
-      .reverse();
+      .reverse()
+      .filter((s) => !since || s.createdAt >= since);
     if (!page) return all;
     return { items: all.slice(page.offset, page.offset + page.limit), total: all.length };
   }
@@ -341,12 +344,16 @@ export class FakeRepository implements Repository {
     this.coupons = this.coupons.filter((c) => c.id !== id);
     return this.coupons.length < before;
   }
-  async adminListStaff() {
-    // Same order as the real repository's staff sweep:
+  async adminListStaff(): Promise<(ProfileDTO & { email: string | null })[]>;
+  async adminListStaff(page: PageParams): Promise<Page<ProfileDTO & { email: string | null }>>;
+  async adminListStaff(page?: PageParams): Promise<(ProfileDTO & { email: string | null })[] | Page<ProfileDTO & { email: string | null }>> {
+    // Same order as the real repository's staff list:
     // created_at asc, id asc.
-    return [...this.profiles.values()]
+    const all = [...this.profiles.values()]
       .sort((a, b) => byCreatedAscIdAsc(a, b))
       .map((p) => ({ ...p, email: `${p.id}@example.com` }));
+    if (!page) return all;
+    return { items: all.slice(page.offset, page.offset + page.limit), total: all.length };
   }
   async updateProfileRole(userId: string, role: ProfileDTO['role']) {
     const p = this.profiles.get(userId);

@@ -12,6 +12,12 @@ export default function AdminNewsletter() {
   const isAdmin = profile?.role === 'admin';
   const [rows, setRows] = useState<Sub[]>([]);
   const [total, setTotal] = useState(0);
+  // "New this week" is a SERVER count over all subscribers (the `since`
+  // filter's total), never a count of the loaded page — the page-local
+  // version silently undercounted past 100 subscribers (audit-2 fix 6).
+  // null = the count could not be loaded; the card then shows '—'
+  // instead of a number it cannot stand behind.
+  const [newThisWeek, setNewThisWeek] = useState<number | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState('');
   const [loaded, setLoaded] = useState(false);
@@ -21,6 +27,10 @@ export default function AdminNewsletter() {
       .then((d) => { setRows(d.subscribers); setTotal(d.total); })
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoaded(true));
+    const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    adminGet<{ total: number }>(`/api/v1/admin/newsletter?limit=1&offset=0&since=${encodeURIComponent(since)}`)
+      .then((d) => setNewThisWeek(d.total))
+      .catch(() => setNewThisWeek(null));
   }, [isAdmin]);
   const loadMore = () => {
     setLoadingMore(true);
@@ -33,8 +43,6 @@ export default function AdminNewsletter() {
     try { await adminDownloadCsv('/api/v1/admin/newsletter.csv'); }
     catch (e) { setError((e as Error).message); }
   };
-  const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-  const newThisWeek = rows.filter((s) => new Date(s.createdAt).getTime() >= weekAgo).length;
   if (!isAdmin) return <AdminsOnly />;
   return (
     <div>
@@ -42,7 +50,7 @@ export default function AdminNewsletter() {
       {error && <ErrorNote message={error} />}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 mb-6 max-w-xl">
         <StatCard label="Subscribers" value={total} />
-        <StatCard label="New this week" value={newThisWeek} />
+        <StatCard label="New this week" value={newThisWeek ?? '—'} />
       </div>
       <Card className="overflow-hidden">
         {!loaded && !error && <LoadingNote />}

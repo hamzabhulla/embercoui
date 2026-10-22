@@ -304,13 +304,14 @@ export interface Repository {
   setReviewApproved(id: string, approved: boolean): Promise<boolean>;
   deleteReview(id: string): Promise<boolean>;
   adminListNewsletter(): Promise<NewsletterSubscriberDTO[]>;
-  adminListNewsletter(page: PageParams): Promise<Page<NewsletterSubscriberDTO>>;
+  adminListNewsletter(page: PageParams, since?: string): Promise<Page<NewsletterSubscriberDTO>>;
   adminListCoupons(): Promise<CouponDTO[]>;
   adminListCoupons(page: PageParams): Promise<Page<CouponDTO>>;
   createCoupon(data: Omit<CouponDTO, 'id'>): Promise<CouponDTO>;
   updateCoupon(id: string, patch: Partial<Omit<CouponDTO, 'id'>>): Promise<CouponDTO | null>;
   deleteCoupon(id: string): Promise<boolean>;
   adminListStaff(): Promise<StaffDTO[]>;
+  adminListStaff(page: PageParams): Promise<Page<StaffDTO>>;
   updateProfileRole(userId: string, role: ProfileDTO['role']): Promise<ProfileDTO | null>;
   updateSettings(patch: SettingsPatch): Promise<PublicSettingsDTO>;
 }

@@ -1,23 +1,36 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { adminGet, adminSend } from '../../services/adminApi';
 import { useAuth } from '../../context/AuthContext';
 import { useCurrency } from '../../context/CurrencyContext';
 import { currencyExponent } from '../../lib/currency';
-import { Card, EmptyNote, ErrorNote, LoadingNote, NoticeNote, PageTitle, StatusPill, Toggle, chipDangerBtn, inputCls, labelCls, money, primaryBtn, tableCls, tdCls, thCls } from '../../components/admin/ui';
+import { Card, DeleteButton, EmptyNote, ErrorNote, LoadingNote, NoticeNote, PageTitle, StatusPill, Toggle, ghostBtn, inputCls, labelCls, money, primaryBtn, tableCls, tdCls, thCls } from '../../components/admin/ui';
 
 interface Coupon { id: string; code: string; type: 'percent' | 'fixed'; value: number; isActive: boolean; expiresAt: string | null }
+const PAGE_SIZE = 100;
 
 export default function AdminMarketing() {
   const { profile } = useAuth();
   const isAdmin = profile?.role === 'admin';
   const { currency } = useCurrency();
   const [rows, setRows] = useState<Coupon[]>([]);
+  const [total, setTotal] = useState(0);
   const [form, setForm] = useState({ code: '', type: 'percent' as 'percent' | 'fixed', value: 10, expiresAt: '' });
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [loaded, setLoaded] = useState(false);
-  const load = () => { adminGet<{ coupons: Coupon[] }>('/api/v1/admin/coupons').then((d) => setRows(d.coupons)).catch((e: Error) => setError(e.message)).finally(() => setLoaded(true)); };
-  useEffect(load, []);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const fetchPage = useCallback((offset: number, append: boolean) => {
+    adminGet<{ coupons: Coupon[]; total: number }>(`/api/v1/admin/coupons?limit=${PAGE_SIZE}&offset=${offset}`)
+      .then((d) => {
+        setTotal(d.total);
+        setRows((prev) => (append ? [...prev, ...d.coupons] : d.coupons));
+      })
+      .catch((e: Error) => setError(e.message))
+      .finally(() => { setLoaded(true); setLoadingMore(false); });
+  }, []);
+  const load = useCallback(() => fetchPage(0, false), [fetchPage]);
+  useEffect(() => { load(); }, [load]);
+  const loadMore = () => { setLoadingMore(true); fetchPage(rows.length, true); };
   const create = async (e: React.FormEvent) => {
     e.preventDefault(); setError(''); setNotice('');
     // Percent means a share of the bill — over 100% is meaningless and
@@ -77,7 +90,7 @@ export default function AdminMarketing() {
                     <td className={`${tdCls} text-[#5C665C]`}>{c.expiresAt ? new Date(c.expiresAt).toLocaleDateString() : 'No expiry'}</td>
                     <td className={tdCls}><StatusPill status={c.isActive ? 'active' : 'inactive'} /></td>
                     {isAdmin && <td className={tdCls}><Toggle on={c.isActive} onClick={() => void toggle(c)} label={`${c.isActive ? 'Deactivate' : 'Activate'} coupon ${c.code}`} /></td>}
-                    {isAdmin && <td className={tdCls}><span className="flex justify-end"><button className={chipDangerBtn} onClick={() => void remove(c.id)}>Delete</button></span></td>}
+                    {isAdmin && <td className={tdCls}><span className="flex justify-end"><DeleteButton name={`coupon ${c.code}`} onDelete={() => void remove(c.id)} /></span></td>}
                   </tr>
                 ))}
               </tbody>
@@ -85,6 +98,16 @@ export default function AdminMarketing() {
           </div>
         )}
       </Card>
+      {loaded && total > 0 && (
+        <p className="font-bodytext text-[12.5px] text-[#98A096] mt-4">Showing {rows.length} of {total} coupons</p>
+      )}
+      {loaded && rows.length < total && (
+        <div className="mt-3">
+          <button type="button" className={ghostBtn} disabled={loadingMore} onClick={loadMore}>
+            {loadingMore ? 'Loading…' : 'Load more'}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

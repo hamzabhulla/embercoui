@@ -4,7 +4,7 @@ import { ApiError } from '../lib/errors';
 import type {
   AdminReservationInput, CouponDTO, CreateOrderData, CustomerDTO, MenuItemDTO, NewsletterSubscriberDTO,
   OrderDTO, Page, PageParams, ProfileDTO, PublicSettingsDTO, ReservationDTO, ReservationInput,
-  Repository, ReservationListFilter, ReviewDTO, SettingsPatch, SiteLocations,
+  Repository, ReservationListFilter, ReviewDTO, SettingsPatch, SiteLocations, StaffDTO,
 } from './types';
 
 type Row = Record<string, unknown>;
@@ -296,15 +296,19 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
   }
 
   async function adminListNewsletter(): Promise<NewsletterSubscriberDTO[]>;
-  async function adminListNewsletter(page: PageParams): Promise<Page<NewsletterSubscriberDTO>>;
-  async function adminListNewsletter(page?: PageParams): Promise<NewsletterSubscriberDTO[] | Page<NewsletterSubscriberDTO>> {
+  async function adminListNewsletter(page: PageParams, since?: string): Promise<Page<NewsletterSubscriberDTO>>;
+  async function adminListNewsletter(page?: PageParams, since?: string): Promise<NewsletterSubscriberDTO[] | Page<NewsletterSubscriberDTO>> {
     if (!page) return fetchAllPages((p) => adminListNewsletter(p));
-    const { data, error, count } = await db
+    // The optional `since` filter applies BEFORE the range, so `total`
+    // is the filtered count (audit-2 fix 6) — the "new this week" stat
+    // reads it via a limit=1 request instead of counting a loaded page.
+    let query = db
       .from('newsletter_subscribers')
       .select('*', { count: 'exact' })
       .order('created_at', { ascending: false })
-      .order('id', { ascending: false })
-      .range(page.offset, page.offset + page.limit - 1);
+      .order('id', { ascending: false });
+    if (since) query = query.gte('created_at', since);
+    const { data, error, count } = await query.range(page.offset, page.offset + page.limit - 1);
     if (error) throw new Error(`newsletter query failed: ${error.message}`);
     const items = ((data ?? []) as Row[]).map((r) => ({ id: str(r.id), email: str(r.email), createdAt: str(r.created_at) }));
     return { items, total: count ?? 0 };
@@ -391,6 +395,25 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
     return { items: ((data ?? []) as Row[]).map(couponDTO), total: count ?? 0 };
   }
 
+  async function adminListStaff(): Promise<StaffDTO[]>;
+  async function adminListStaff(page: PageParams): Promise<Page<StaffDTO>>;
+  async function adminListStaff(page?: PageParams): Promise<StaffDTO[] | Page<StaffDTO>> {
+    if (!page) return fetchAllPages((p) => adminListStaff(p));
+    // All profiles: the Staff screen is where customers get promoted.
+    // created_at asc + id asc is a total order, so pages tile; emails
+    // come from the single listUsers sweep (no per-profile N+1).
+    const emails = await fetchEmailMap();
+    const { data, error, count } = await db
+      .from('profiles')
+      .select('*', { count: 'exact' })
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true })
+      .range(page.offset, page.offset + page.limit - 1);
+    if (error) throw new Error(`staff query failed: ${error.message}`);
+    const items = ((data ?? []) as Row[]).map((r) => ({ ...profileDTO(r), email: emails.get(str(r.id)) ?? null }));
+    return { items, total: count ?? 0 };
+  }
+
   const repo: Repository = {
     async listMenuItems() {
       const { data, error } = await db.from('menu_items').select('*').eq('is_available', true).order('sort_order').order('id');
@@ -398,9 +421,22 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
       return ((data ?? []) as Row[]).map(menuDTO);
     },
     async listAllMenuItems() {
-      const { data, error } = await db.from('menu_items').select('*').order('sort_order').order('id');
-      if (error) throw new Error(`menu query failed: ${error.message}`);
-      return ((data ?? []) as Row[]).map(menuFull);
+      // The admin Menu screen filters/searches this list client-side,
+      // so it must be the COMPLETE set: page through in ALL_PAGE_SIZE
+      // chunks (sort_order + id is a total order) instead of trusting
+      // one response, which PostgREST caps at 1000 rows (audit-2 fix 6).
+      const items: ReturnType<typeof menuFull>[] = [];
+      for (let p = 0; p < MAX_ALL_PAGES; p++) {
+        const from = p * ALL_PAGE_SIZE;
+        const { data, error } = await db
+          .from('menu_items').select('*').order('sort_order').order('id')
+          .range(from, from + ALL_PAGE_SIZE - 1);
+        if (error) throw new Error(`menu query failed: ${error.message}`);
+        const rows = ((data ?? []) as Row[]).map(menuFull);
+        items.push(...rows);
+        if (rows.length < ALL_PAGE_SIZE) break;
+      }
+      return items;
     },
     async getMenuItem(id) {
       const { data, error } = await db.from('menu_items').select('*').eq('id', id).eq('is_available', true).maybeSingle();
@@ -779,24 +815,7 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
       if (error) throw new Error(`coupon delete failed: ${error.message}`);
       return (data ?? []).length > 0;
     },
-    async adminListStaff() {
-      // All profiles: the Staff screen is where customers get promoted.
-      // Paged internally so the list stays complete past 1000 profiles,
-      // with emails from the single listUsers sweep (no per-profile N+1).
-      const emails = await fetchEmailMap();
-      const profiles: ProfileDTO[] = [];
-      for (let p = 0; p < MAX_ALL_PAGES; p++) {
-        const from = p * ALL_PAGE_SIZE;
-        const { data, error } = await db
-          .from('profiles').select('*').order('created_at').order('id')
-          .range(from, from + ALL_PAGE_SIZE - 1);
-        if (error) throw new Error(`staff query failed: ${error.message}`);
-        const rows = ((data ?? []) as Row[]).map(profileDTO);
-        profiles.push(...rows);
-        if (rows.length < ALL_PAGE_SIZE) break;
-      }
-      return profiles.map((profile) => ({ ...profile, email: emails.get(profile.id) ?? null }));
-    },
+    adminListStaff,
     async updateProfileRole(userId, role) {
       const { data, error } = await db.from('profiles').update({ role }).eq('id', userId).select('*').maybeSingle();
       if (error) throw new Error(`role update failed: ${error.message}`);

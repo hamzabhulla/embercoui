@@ -3,7 +3,7 @@ import { adminGet, adminSend } from '../../services/adminApi';
 import { useAuth } from '../../context/AuthContext';
 import { useCurrency } from '../../context/CurrencyContext';
 import { currencyExponent } from '../../lib/currency';
-import { Card, EmptyNote, ErrorNote, FChip, LoadingNote, NoticeNote, PageTitle, SearchInput, Toggle, chipDangerBtn, chipGhostBtn, ghostBtn, inputCls, labelCls, money, primaryBtn, tableCls, tdCls, thCls } from '../../components/admin/ui';
+import { Card, DeleteButton, EmptyNote, ErrorNote, FChip, LoadingNote, NoticeNote, PageTitle, SearchInput, Toggle, chipGhostBtn, ghostBtn, inputCls, labelCls, money, primaryBtn, tableCls, tdCls, thCls } from '../../components/admin/ui';
 
 interface Item { id: number; name: string; description: string; price: number; image: string; category: string; tags: string[]; isAvailable: boolean; sortOrder: number }
 const EMPTY: Omit<Item, 'id'> = { name: '', description: '', price: 0, image: '', category: '', tags: [], isAvailable: true, sortOrder: 0 };
@@ -154,6 +154,7 @@ export default function AdminMenu() {
         {!loaded && <LoadingNote />}
         {loaded && filtered.length === 0 && <EmptyNote message={items.length === 0 ? 'No dishes yet — add your first dish below.' : 'No dishes match this filter.'} />}
         {filtered.length > 0 && (
+          <>
           <div className="overflow-x-auto">
             <table className={tableCls}>
               <thead>
@@ -177,7 +178,7 @@ export default function AdminMenu() {
                     <td className={tdCls}>
                       <span className="flex gap-2 justify-end">
                         <button className={chipGhostBtn} onClick={() => { setForm(item); setTagsText(item.tags.join(', ')); scrollToForm(); }}>Edit</button>
-                        {isAdmin && <button className={chipDangerBtn} disabled={busy} onClick={() => void remove(item.id)}>Delete</button>}
+                        {isAdmin && <DeleteButton name={`"${item.name}"`} disabled={busy} onDelete={() => void remove(item.id)} />}
                       </span>
                     </td>
                   </tr>
@@ -185,6 +186,11 @@ export default function AdminMenu() {
               </tbody>
             </table>
           </div>
+          {/* The list is the complete menu (the repository pages
+              internally past the 1000-row cap); search/category slice
+              it client-side, so both numbers are exact. */}
+          <p className="px-[18px] py-3 border-t border-[#EFE9DB] font-bodytext text-[12.5px] text-[#98A096]">Showing {filtered.length} of {items.length} dishes</p>
+          </>
         )}
       </Card>
       <form ref={formRef} onSubmit={save} className="bg-white border border-[#EAE3D3] rounded-[14px] shadow-[0_1px_2px_rgba(22,36,26,0.03),0_10px_24px_-18px_rgba(22,36,26,0.18)] p-6 grid md:grid-cols-2 gap-4 scroll-mt-24">

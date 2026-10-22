@@ -1,7 +1,7 @@
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 import { createApp } from '../src/app';
-import type { OrderDTO, ReservationDTO } from '../src/repositories/types';
+import type { OrderDTO, ReservationDTO, ReviewDTO } from '../src/repositories/types';
 import { FakeRepository, fakeVerifyToken, testEnv } from './fakeRepository';
 import { FakeStripeService } from './fakeStripe';
 import { FakeStorageService } from './fakeStorage';
@@ -332,6 +332,179 @@ describe('aggregation completeness past 1000 rows', () => {
     const tail = await repo.adminListOrders(undefined, { limit: 1000, offset: 1000 });
     expect(tail.total).toBe(1005);
     expect(tail.items).toHaveLength(5);
+  });
+});
+
+describe('paged admin reviews + global stats (audit-2 fix 6)', () => {
+  const { repo, app } = setup();
+  // On top of the fake's two seeds (rev-1 approved 5★, rev-2 pending 4★):
+  // six older reviews, so the full order (created_at desc) is
+  // rev-2, rev-1, a, b, c, d, e, f and pending rows sit on later pages.
+  repo.reviews.push(
+    { id: 'seed-rev-a', name: 'A', rating: 5, comment: 'a', country: null, createdAt: '2025-12-06T00:00:00Z', isApproved: true },
+    { id: 'seed-rev-b', name: 'B', rating: 4, comment: 'b', country: null, createdAt: '2025-12-05T00:00:00Z', isApproved: true },
+    { id: 'seed-rev-c', name: 'C', rating: 3, comment: 'c', country: null, createdAt: '2025-12-04T00:00:00Z', isApproved: true },
+    { id: 'seed-rev-d', name: 'D', rating: 2, comment: 'd', country: null, createdAt: '2025-12-03T00:00:00Z', isApproved: false },
+    { id: 'seed-rev-e', name: 'E', rating: 5, comment: 'e', country: null, createdAt: '2025-12-02T00:00:00Z', isApproved: false },
+    { id: 'seed-rev-f', name: 'F', rating: 5, comment: 'f', country: null, createdAt: '2025-12-01T00:00:00Z', isApproved: true },
+  );
+
+  it('pages tile the full set without overlap (load-more contract)', async () => {
+    const seen: string[] = [];
+    for (const offset of [0, 3, 6]) {
+      const res = await as(request(app).get(`/api/v1/admin/reviews?limit=3&offset=${offset}`), ADMIN);
+      expect(res.status).toBe(200);
+      expect(res.body.total).toBe(8);
+      expect(res.body.limit).toBe(3);
+      expect(res.body.offset).toBe(offset);
+      seen.push(...res.body.reviews.map((r: ReviewDTO) => r.id));
+    }
+    expect(seen).toEqual(['rev-2', 'rev-1', 'seed-rev-a', 'seed-rev-b', 'seed-rev-c', 'seed-rev-d', 'seed-rev-e', 'seed-rev-f']);
+  });
+
+  it('defaults to limit=100/offset=0 and still returns the reviews array (backward compatible)', async () => {
+    const res = await as(request(app).get('/api/v1/admin/reviews'), ADMIN);
+    expect(res.status).toBe(200);
+    expect(res.body.limit).toBe(100);
+    expect(res.body.offset).toBe(0);
+    expect(res.body.reviews).toHaveLength(8);
+  });
+
+  it('stats describe the COMPLETE set, not the loaded page', async () => {
+    // A limit=1 page holds a single (pending) review, yet the stats
+    // must still cover all 8: 5 approved (5,5,4,3,5 → avg 4.4), 3 pending.
+    const res = await as(request(app).get('/api/v1/admin/reviews?limit=1&offset=0'), ADMIN);
+    expect(res.status).toBe(200);
+    expect(res.body.reviews).toHaveLength(1);
+    expect(res.body.stats.approvedCount).toBe(5);
+    expect(res.body.stats.pendingCount).toBe(3);
+    expect(res.body.stats.averageRating).toBeCloseTo(4.4);
+    expect(res.body.stats.distribution).toEqual({ '5': 3, '4': 1, '3': 1, '2': 0, '1': 0 });
+  });
+
+  it('moderation reaches a review that only appears on a later page', async () => {
+    // seed-rev-d is pending and sits at index 5 — page 2 at limit=3.
+    const page2 = await as(request(app).get('/api/v1/admin/reviews?limit=3&offset=3'), ADMIN);
+    expect(page2.body.reviews.map((r: ReviewDTO) => r.id)).toContain('seed-rev-d');
+    const patch = await as(request(app).patch('/api/v1/admin/reviews/seed-rev-d').send({ isApproved: true }), ADMIN);
+    expect(patch.status).toBe(200);
+    const after = await as(request(app).get('/api/v1/admin/reviews?limit=1'), ADMIN);
+    expect(after.body.stats.approvedCount).toBe(6);
+    expect(after.body.stats.pendingCount).toBe(2);
+    expect(after.body.stats.averageRating).toBeCloseTo(4); // (22 + 2) / 6
+    expect(after.body.stats.distribution['2']).toBe(1);
+  });
+
+  it('rejects invalid paging params with 400', async () => {
+    for (const q of ['limit=abc', 'limit=0', 'offset=-1']) {
+      const res = await as(request(app).get(`/api/v1/admin/reviews?${q}`), ADMIN);
+      expect(res.status, q).toBe(400);
+    }
+  });
+});
+
+describe('paged admin coupons (audit-2 fix 6)', () => {
+  const { app } = setup();
+
+  it('pages tile the full set with the exact total', async () => {
+    // The fake seeds 5 coupons; newest-first is reverse seed order.
+    const seen: string[] = [];
+    for (const offset of [0, 2, 4]) {
+      const res = await as(request(app).get(`/api/v1/admin/coupons?limit=2&offset=${offset}`), ADMIN);
+      expect(res.status).toBe(200);
+      expect(res.body.total).toBe(5);
+      seen.push(...res.body.coupons.map((c: { id: string }) => c.id));
+    }
+    expect(seen).toEqual(['cpn-5', 'cpn-4', 'cpn-3', 'cpn-2', 'cpn-1']);
+  });
+
+  it('a coupon that only appears on the last page can still be deleted by id', async () => {
+    const del = await as(request(app).delete('/api/v1/admin/coupons/cpn-1'), ADMIN);
+    expect(del.status).toBe(200);
+    const after = await as(request(app).get('/api/v1/admin/coupons'), ADMIN);
+    expect(after.body.total).toBe(4);
+    expect(after.body.coupons.map((c: { id: string }) => c.id)).not.toContain('cpn-1');
+  });
+
+  it('rejects invalid paging params with 400', async () => {
+    const res = await as(request(app).get('/api/v1/admin/coupons?limit=nope'), ADMIN);
+    expect(res.status).toBe(400);
+  });
+});
+
+describe('paged admin staff (audit-2 fix 6)', () => {
+  const { repo, app } = setup();
+
+  it('pages tile the full set with the exact total (id breaks the created_at tie)', async () => {
+    // The fake seeds 4 profiles sharing one createdAt; id asc orders them.
+    const first = await as(request(app).get('/api/v1/admin/staff?limit=3&offset=0'), ADMIN);
+    expect(first.status).toBe(200);
+    expect(first.body.total).toBe(4);
+    expect(first.body.staff.map((p: { id: string }) => p.id)).toEqual(['admin-1', 'staff-1', 'user-1']);
+    const rest = await as(request(app).get('/api/v1/admin/staff?limit=3&offset=3'), ADMIN);
+    expect(rest.body.staff.map((p: { id: string }) => p.id)).toEqual(['user-2']);
+    for (const p of [...first.body.staff, ...rest.body.staff]) expect(p.email).toContain('@');
+  });
+
+  it('role changes still reach accounts beyond the first page', async () => {
+    const res = await as(request(app).patch('/api/v1/admin/staff/user-2/role').send({ role: 'staff' }), ADMIN);
+    expect(res.status).toBe(200);
+    expect(res.body.profile.role).toBe('staff');
+  });
+
+  it('repository contract: paged returns slice + total, unpaged returns everything', async () => {
+    const page = await repo.adminListStaff({ limit: 2, offset: 2 });
+    expect(page.total).toBe(4);
+    expect(page.items).toHaveLength(2);
+    expect(await repo.adminListStaff()).toHaveLength(4);
+  });
+
+  it('rejects invalid paging params with 400', async () => {
+    const res = await as(request(app).get('/api/v1/admin/staff?offset=-1'), ADMIN);
+    expect(res.status).toBe(400);
+  });
+});
+
+describe('newsletter "new this week" server count (audit-2 fix 6)', () => {
+  const { repo, app } = setup();
+  for (let i = 0; i < 5; i++) repo.newsletter.add(`week${i}@example.com`);
+  // The fake stamps every subscriber 2026-01-01T00:00:00Z, so the
+  // since boundary can be tested exactly: at/before it counts all 5,
+  // after it counts none — the total is the FILTERED count.
+
+  it('since at or before the join date counts every subscriber', async () => {
+    for (const since of ['2025-12-31T00:00:00.000Z', '2026-01-01T00:00:00.000Z']) {
+      const res = await as(request(app).get(`/api/v1/admin/newsletter?limit=1&offset=0&since=${encodeURIComponent(since)}`), ADMIN);
+      expect(res.status).toBe(200);
+      expect(res.body.total, since).toBe(5);
+      expect(res.body.subscribers).toHaveLength(1);
+    }
+  });
+
+  it('since after the join date counts none — a true zero, not the page size', async () => {
+    const res = await as(request(app).get('/api/v1/admin/newsletter?limit=1&offset=0&since=2026-01-02T00:00:00.000Z'), ADMIN);
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(0);
+    expect(res.body.subscribers).toEqual([]);
+  });
+
+  it('no since keeps the unfiltered total (backward compatible)', async () => {
+    const res = await as(request(app).get('/api/v1/admin/newsletter?limit=2&offset=0'), ADMIN);
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(5);
+    expect(res.body.subscribers).toHaveLength(2);
+  });
+
+  it('rejects an unparseable since with 400', async () => {
+    const res = await as(request(app).get('/api/v1/admin/newsletter?since=garbage'), ADMIN);
+    expect(res.status).toBe(400);
+  });
+
+  it('repository contract: the paged overload filters by since', async () => {
+    const page = await repo.adminListNewsletter({ limit: 1, offset: 0 }, '2026-01-02T00:00:00.000Z');
+    expect(page.total).toBe(0);
+    const all = await repo.adminListNewsletter({ limit: 1, offset: 0 }, '2025-12-31T00:00:00.000Z');
+    expect(all.total).toBe(5);
   });
 });
 
