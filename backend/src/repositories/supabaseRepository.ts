@@ -203,14 +203,29 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
   async function attachItems(orders: Row[]): Promise<OrderDTO[]> {
     if (orders.length === 0) return [];
     const ids = orders.map((o) => str(o.id));
-    const { data, error } = await db
-      .from('order_items')
-      .select('order_id, menu_item_id, name, unit_price, quantity')
-      .in('order_id', ids)
-      .order('id', { ascending: true });
-    if (error) throw new Error(`order_items query failed: ${error.message}`);
+    // The items fetch pages through fetchAllPages (chunks of
+    // ALL_PAGE_SIZE rows against the exact count), NOT one bare
+    // .in() query: PostgREST caps every response at 1000 rows and the
+    // cap counts ITEM rows, so a single query silently truncated the
+    // tail once one page of orders held >1000 items combined (~250–350
+    // ordinary orders) and later orders rendered with missing items.
+    // Chunking by order-id count instead could not guarantee
+    // completeness — one order may hold many item rows — while paging
+    // by row count is complete regardless of items-per-order. `id` is
+    // the items primary key, so the page order is total and each
+    // order's items keep their previous (id-ascending) order.
+    const itemRows = await fetchAllPages(async (page) => {
+      const { data, error, count } = await db
+        .from('order_items')
+        .select('order_id, menu_item_id, name, unit_price, quantity', { count: 'exact' })
+        .in('order_id', ids)
+        .order('id', { ascending: true })
+        .range(page.offset, page.offset + page.limit - 1);
+      if (error) throw new Error(`order_items query failed: ${error.message}`);
+      return { items: (data ?? []) as Row[], total: count ?? 0 };
+    });
     const byOrder = new Map<string, OrderDTO['items']>();
-    for (const raw of (data ?? []) as Row[]) {
+    for (const raw of itemRows) {
       const list = byOrder.get(str(raw.order_id)) ?? [];
       list.push({
         menuItemId: raw.menu_item_id == null ? null : num(raw.menu_item_id),
@@ -243,7 +258,12 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
   async function adminListOrders(status: string | undefined, page: PageParams): Promise<Page<OrderDTO>>;
   async function adminListOrders(status?: string, page?: PageParams): Promise<OrderDTO[] | Page<OrderDTO>> {
     if (!page) return fetchAllPages((p) => adminListOrders(status, p));
-    let query = db.from('orders').select('*', { count: 'exact' }).order('created_at', { ascending: false });
+    // created_at + id: a total order, so pages tile exactly even when
+    // many orders share a timestamp (created_at alone leaves ties to
+    // the whim of the scan, and pages can overlap or skip rows).
+    let query = db.from('orders').select('*', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false });
     if (status) query = query.eq('status', status);
     const { data, error, count } = await query.range(page.offset, page.offset + page.limit - 1);
     if (error) throw new Error(`orders query failed: ${error.message}`);
@@ -259,10 +279,13 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
       .select('*', { count: 'exact' })
       // Deterministic order for paging: newest date first; within a date,
       // earliest seating first (the day board's view); created_at breaks
-      // the remaining ties so pages never overlap or skip a row.
+      // most remaining ties and id — unique — breaks the last ones (rows
+      // created in the same instant), so the order is total and pages
+      // never overlap or skip a row.
       .order('reservation_date', { ascending: false })
       .order('reservation_time', { ascending: true })
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false });
     // Filters apply BEFORE the range, so `total` is the filtered count
     // and pages tile the filtered set (audit-2 fix 3).
     if (filter?.date) query = query.eq('reservation_date', filter.date);
@@ -280,6 +303,7 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
       .from('newsletter_subscribers')
       .select('*', { count: 'exact' })
       .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
       .range(page.offset, page.offset + page.limit - 1);
     if (error) throw new Error(`newsletter query failed: ${error.message}`);
     const items = ((data ?? []) as Row[]).map((r) => ({ id: str(r.id), email: str(r.email), createdAt: str(r.created_at) }));
@@ -303,6 +327,12 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
       const { data: orderRows, error: ordersError } = await db
         .from('orders')
         .select('user_id, total, payment_status, currency')
+        // A paged scan MUST name a total order: without one the pages
+        // are arbitrary slices of an unstable scan and can double-count
+        // or drop orders between fetches (this sweep previously had no
+        // .order() at all). created_at + the unique id is total.
+        .order('created_at', { ascending: true })
+        .order('id', { ascending: true })
         .range(from, from + ALL_PAGE_SIZE - 1);
       if (ordersError) throw new Error(`customer order aggregation failed: ${ordersError.message}`);
       for (const o of (orderRows ?? []) as Row[]) {
@@ -320,6 +350,7 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
       .select('*', { count: 'exact' })
       .eq('role', 'customer')
       .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
       .range(page.offset, page.offset + page.limit - 1);
     if (error) throw new Error(`profiles query failed: ${error.message}`);
     const expFactor = 10 ** currencyExponent(settings.currency);
@@ -329,6 +360,35 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
       return { ...dto, email: emails.get(dto.id) ?? null, orderCount: c.count, totalSpent: Math.round(c.spent * expFactor) / expFactor };
     });
     return { items, total: count ?? 0 };
+  }
+
+  async function adminListReviews(): Promise<(ReviewDTO & { isApproved: boolean })[]>;
+  async function adminListReviews(page: PageParams): Promise<Page<ReviewDTO & { isApproved: boolean }>>;
+  async function adminListReviews(page?: PageParams): Promise<(ReviewDTO & { isApproved: boolean })[] | Page<ReviewDTO & { isApproved: boolean }>> {
+    if (!page) return fetchAllPages((p) => adminListReviews(p));
+    const { data, error, count } = await db
+      .from('reviews')
+      .select('*', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
+      .range(page.offset, page.offset + page.limit - 1);
+    if (error) throw new Error(`reviews query failed: ${error.message}`);
+    const items = ((data ?? []) as Row[]).map((r) => ({ ...reviewDTO(r), isApproved: r.is_approved === true }));
+    return { items, total: count ?? 0 };
+  }
+
+  async function adminListCoupons(): Promise<CouponDTO[]>;
+  async function adminListCoupons(page: PageParams): Promise<Page<CouponDTO>>;
+  async function adminListCoupons(page?: PageParams): Promise<CouponDTO[] | Page<CouponDTO>> {
+    if (!page) return fetchAllPages((p) => adminListCoupons(p));
+    const { data, error, count } = await db
+      .from('coupons')
+      .select('*', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
+      .range(page.offset, page.offset + page.limit - 1);
+    if (error) throw new Error(`coupons query failed: ${error.message}`);
+    return { items: ((data ?? []) as Row[]).map(couponDTO), total: count ?? 0 };
   }
 
   const repo: Repository = {
@@ -353,9 +413,21 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
       return data ? settingsDTO(data as Row) : DEFAULT_SETTINGS;
     },
     async listApprovedReviews() {
-      const { data, error } = await db.from('reviews').select('*').eq('is_approved', true).order('created_at', { ascending: false });
-      if (error) throw new Error(`reviews query failed: ${error.message}`);
-      return ((data ?? []) as Row[]).map(reviewDTO);
+      // Complete set, paged internally like every other fetch-all
+      // caller: a single unpaged select silently dropped every
+      // approved review past PostgREST's 1000-row cap from the
+      // homepage. created_at + id is a total order, so pages tile.
+      return fetchAllPages(async (page) => {
+        const { data, error, count } = await db
+          .from('reviews')
+          .select('*', { count: 'exact' })
+          .eq('is_approved', true)
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: false })
+          .range(page.offset, page.offset + page.limit - 1);
+        if (error) throw new Error(`reviews query failed: ${error.message}`);
+        return { items: ((data ?? []) as Row[]).map(reviewDTO), total: count ?? 0 };
+      });
     },
 
     async getProfile(userId) {
@@ -431,7 +503,7 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
       // no matter how long the account lives.
       const { data, error } = await db
         .from('orders').select('*').eq('user_id', userId)
-        .order('created_at', { ascending: false }).limit(100);
+        .order('created_at', { ascending: false }).order('id', { ascending: false }).limit(100);
       if (error) throw new Error(`orders query failed: ${error.message}`);
       return attachItems((data ?? []) as Row[]);
     },
@@ -656,11 +728,7 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
       return reservationDTO(data as Row);
     },
     adminListCustomers,
-    async adminListReviews() {
-      const { data, error } = await db.from('reviews').select('*').order('created_at', { ascending: false });
-      if (error) throw new Error(`reviews query failed: ${error.message}`);
-      return ((data ?? []) as Row[]).map((r) => ({ ...reviewDTO(r), isApproved: r.is_approved === true }));
-    },
+    adminListReviews,
     async setReviewApproved(id, approved) {
       const { data, error } = await db.from('reviews').update({ is_approved: approved }).eq('id', id).select('id');
       if (error) throw new Error(`review update failed: ${error.message}`);
@@ -672,11 +740,7 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
       return (data ?? []).length > 0;
     },
     adminListNewsletter,
-    async adminListCoupons() {
-      const { data, error } = await db.from('coupons').select('*').order('created_at', { ascending: false });
-      if (error) throw new Error(`coupons query failed: ${error.message}`);
-      return ((data ?? []) as Row[]).map(couponDTO);
-    },
+    adminListCoupons,
     async createCoupon(data) {
       const { data: row, error } = await db
         .from('coupons')
@@ -724,7 +788,7 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
       for (let p = 0; p < MAX_ALL_PAGES; p++) {
         const from = p * ALL_PAGE_SIZE;
         const { data, error } = await db
-          .from('profiles').select('*').order('created_at')
+          .from('profiles').select('*').order('created_at').order('id')
           .range(from, from + ALL_PAGE_SIZE - 1);
         if (error) throw new Error(`staff query failed: ${error.message}`);
         const rows = ((data ?? []) as Row[]).map(profileDTO);

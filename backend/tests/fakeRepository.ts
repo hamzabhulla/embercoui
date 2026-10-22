@@ -8,6 +8,19 @@ import type {
 
 type FullMenuItem = MenuItemDTO & { isAvailable: boolean; sortOrder: number };
 
+// The real repository's total order for its newest-first lists:
+// created_at desc with the unique id as tiebreak, so paged scans tile
+// exactly even when rows share a timestamp. Every fake list that
+// mirrors a real paged scan sorts with this (or its ascending twin).
+function byCreatedDescIdDesc(a: { createdAt: string; id: string }, b: { createdAt: string; id: string }): number {
+  return (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0) ||
+    (a.id < b.id ? 1 : a.id > b.id ? -1 : 0);
+}
+function byCreatedAscIdAsc(a: { createdAt: string; id: string }, b: { createdAt: string; id: string }): number {
+  return (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0) ||
+    (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+}
+
 export class FakeRepository implements Repository {
   menu: FullMenuItem[] = [
     { id: 1, name: 'Ember Classic', description: 'Beef patty', price: 24, image: 'img1', category: 'Burgers', tags: [], isAvailable: true, sortOrder: 0 },
@@ -57,7 +70,12 @@ export class FakeRepository implements Repository {
     return found ? (({ isAvailable: _a, sortOrder: _s, ...dto }) => dto)(found) : null;
   }
   async getSettings() { return { ...(this.settings ?? DEFAULT_SETTINGS) }; }
-  async listApprovedReviews() { return this.reviews.filter((r) => r.isApproved).map(({ isApproved: _a, ...dto }) => dto); }
+  async listApprovedReviews() {
+    // Same order as the real repository: created_at desc, id desc.
+    return this.reviews.filter((r) => r.isApproved)
+      .sort((a, b) => byCreatedDescIdDesc(a, b))
+      .map(({ isApproved: _a, ...dto }) => dto);
+  }
 
   async getProfile(userId: string) { return this.profiles.get(userId) ?? null; }
   async upsertProfile(userId: string, data: { fullName?: string | null; phone?: string | null }) {
@@ -96,10 +114,11 @@ export class FakeRepository implements Repository {
     return { id: review.id, name: review.name, rating: review.rating, comment: review.comment, country: review.country, createdAt: review.createdAt };
   }
   async listOrdersForUser(userId: string) {
-    // Mirrors the real repository: most recent first, capped at 100.
+    // Mirrors the real repository: most recent first (created_at desc,
+    // id desc tiebreak), capped at 100.
     return this.orders
       .filter((o) => o.userId === userId)
-      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))
+      .sort((a, b) => byCreatedDescIdDesc(a, b))
       .slice(0, 100);
   }
 
@@ -165,7 +184,7 @@ export class FakeRepository implements Repository {
   async adminListOrders(status?: string): Promise<OrderDTO[]>;
   async adminListOrders(status: string | undefined, page: PageParams): Promise<Page<OrderDTO>>;
   async adminListOrders(status?: string, page?: PageParams): Promise<OrderDTO[] | Page<OrderDTO>> {
-    const sorted = [...this.orders].sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
+    const sorted = [...this.orders].sort((a, b) => byCreatedDescIdDesc(a, b));
     const filtered = status ? sorted.filter((o) => o.status === status) : sorted;
     // No page = the complete list (the fake has no 1000-row cap to hide).
     if (!page) return filtered;
@@ -203,11 +222,13 @@ export class FakeRepository implements Repository {
     const filtered = this.reservations.filter((r) =>
       (!filter?.date || r.date === filter.date) && (!filter?.status || r.status === filter.status));
     // Same deterministic order as the real repository: date desc,
-    // time asc, created_at desc — so paged slices tile without overlap.
+    // time asc, created_at desc, id desc — so paged slices tile
+    // without overlap.
     const sorted = [...filtered].sort((a, b) =>
       (a.date < b.date ? 1 : a.date > b.date ? -1 : 0) ||
       (a.time < b.time ? -1 : a.time > b.time ? 1 : 0) ||
-      (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
+      (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0) ||
+      (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
     if (!page) return sorted;
     return { items: sorted.slice(page.offset, page.offset + page.limit), total: sorted.length };
   }
@@ -223,6 +244,11 @@ export class FakeRepository implements Repository {
   async adminListCustomers(page?: PageParams): Promise<CustomerDTO[] | Page<CustomerDTO>> {
     const all = [...this.profiles.values()]
       .filter((p) => p.role === 'customer')
+      // Same order as the real repository's profiles page:
+      // created_at desc, id desc (the aggregation itself is a per-user
+      // reduce — order-independent here, paged + ordered in the real
+      // repository where the scan can actually drift).
+      .sort((a, b) => byCreatedDescIdDesc(a, b))
       .map((p) => {
         const userOrders = this.orders.filter((o) => o.userId === p.id);
         return {
@@ -235,7 +261,16 @@ export class FakeRepository implements Repository {
     if (!page) return all;
     return { items: all.slice(page.offset, page.offset + page.limit), total: all.length };
   }
-  async adminListReviews() { return this.reviews.map((r) => ({ id: r.id, name: r.name, rating: r.rating, comment: r.comment, country: r.country, createdAt: r.createdAt, isApproved: r.isApproved })); }
+  async adminListReviews(): Promise<(ReviewDTO & { isApproved: boolean })[]>;
+  async adminListReviews(page: PageParams): Promise<Page<ReviewDTO & { isApproved: boolean }>>;
+  async adminListReviews(page?: PageParams): Promise<(ReviewDTO & { isApproved: boolean })[] | Page<ReviewDTO & { isApproved: boolean }>> {
+    const all = [...this.reviews]
+      .sort((a, b) => byCreatedDescIdDesc(a, b))
+      .map((r) => ({ id: r.id, name: r.name, rating: r.rating, comment: r.comment, country: r.country, createdAt: r.createdAt, isApproved: r.isApproved }));
+    // No page = the complete list (the fake has no 1000-row cap to hide).
+    if (!page) return all;
+    return { items: all.slice(page.offset, page.offset + page.limit), total: all.length };
+  }
   async setReviewApproved(id: string, approved: boolean) {
     const r = this.reviews.find((x) => x.id === id);
     if (!r) return false;
@@ -250,11 +285,26 @@ export class FakeRepository implements Repository {
   async adminListNewsletter(): Promise<NewsletterSubscriberDTO[]>;
   async adminListNewsletter(page: PageParams): Promise<Page<NewsletterSubscriberDTO>>;
   async adminListNewsletter(page?: PageParams): Promise<NewsletterSubscriberDTO[] | Page<NewsletterSubscriberDTO>> {
-    const all = [...this.newsletter].map((email, i) => ({ id: `nl-${i}`, email, createdAt: '2026-01-01T00:00:00Z' }));
+    // Mirrors the real repository's newest-first order: the fake's
+    // subscribers all share one synthetic createdAt, so newest-first
+    // is reverse subscription order.
+    const all = [...this.newsletter]
+      .map((email, i) => ({ id: `nl-${i}`, email, createdAt: '2026-01-01T00:00:00Z' }))
+      .reverse();
     if (!page) return all;
     return { items: all.slice(page.offset, page.offset + page.limit), total: all.length };
   }
-  async adminListCoupons() { return [...this.coupons]; }
+  async adminListCoupons(): Promise<CouponDTO[]>;
+  async adminListCoupons(page: PageParams): Promise<Page<CouponDTO>>;
+  async adminListCoupons(page?: PageParams): Promise<CouponDTO[] | Page<CouponDTO>> {
+    // CouponDTO carries no createdAt; the fake's array is append-only
+    // in creation order (seeds first, createCoupon pushes), so the
+    // real repository's created_at desc / id desc order is reverse
+    // array order here.
+    const all = [...this.coupons].reverse();
+    if (!page) return all;
+    return { items: all.slice(page.offset, page.offset + page.limit), total: all.length };
+  }
   async createCoupon(data: Omit<CouponDTO, 'id'>) {
     const code = data.code.toUpperCase();
     // Mirror the real repository: the coupons.code unique index makes a
@@ -284,7 +334,13 @@ export class FakeRepository implements Repository {
     this.coupons = this.coupons.filter((c) => c.id !== id);
     return this.coupons.length < before;
   }
-  async adminListStaff() { return [...this.profiles.values()].map((p) => ({ ...p, email: `${p.id}@example.com` })); }
+  async adminListStaff() {
+    // Same order as the real repository's staff sweep:
+    // created_at asc, id asc.
+    return [...this.profiles.values()]
+      .sort((a, b) => byCreatedAscIdAsc(a, b))
+      .map((p) => ({ ...p, email: `${p.id}@example.com` }));
+  }
   async updateProfileRole(userId: string, role: ProfileDTO['role']) {
     const p = this.profiles.get(userId);
     if (!p) return null;

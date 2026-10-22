@@ -300,11 +300,13 @@ export interface Repository {
   adminListCustomers(): Promise<CustomerDTO[]>;
   adminListCustomers(page: PageParams): Promise<Page<CustomerDTO>>;
   adminListReviews(): Promise<(ReviewDTO & { isApproved: boolean })[]>;
+  adminListReviews(page: PageParams): Promise<Page<ReviewDTO & { isApproved: boolean }>>;
   setReviewApproved(id: string, approved: boolean): Promise<boolean>;
   deleteReview(id: string): Promise<boolean>;
   adminListNewsletter(): Promise<NewsletterSubscriberDTO[]>;
   adminListNewsletter(page: PageParams): Promise<Page<NewsletterSubscriberDTO>>;
   adminListCoupons(): Promise<CouponDTO[]>;
+  adminListCoupons(page: PageParams): Promise<Page<CouponDTO>>;
   createCoupon(data: Omit<CouponDTO, 'id'>): Promise<CouponDTO>;
   updateCoupon(id: string, patch: Partial<Omit<CouponDTO, 'id'>>): Promise<CouponDTO | null>;
   deleteCoupon(id: string): Promise<boolean>;
