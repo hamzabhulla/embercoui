@@ -79,6 +79,29 @@ beforeEach(() => {
 
 afterEach(cleanup);
 
+describe('Reservation party-size options (CF-M2)', () => {
+  it('the desktop guests select offers exactly 1..20', () => {
+    render(<Reservation />);
+    const select = document.getElementById('guests') as HTMLSelectElement;
+    expect(select).toBeTruthy();
+    const values = Array.from(select.options).map((o) => o.value).filter((v) => v !== '');
+    expect(values).toEqual(Array.from({ length: 20 }, (_, i) => String(i + 1)));
+    expect(values).toHaveLength(20);
+    expect(values[values.length - 1]).toBe('20');
+  });
+
+  it('the mobile guests selector offers exactly 1..20', () => {
+    render(<Reservation />);
+    // The mobile party-size buttons are the only buttons whose whole
+    // label is a bare number (time slots read "12:00", actions words).
+    const labels = screen.getAllByRole('button')
+      .map((b) => (b.textContent ?? '').trim())
+      .filter((t) => /^\d+$/.test(t));
+    expect(labels).toEqual(Array.from({ length: 20 }, (_, i) => String(i + 1)));
+    expect(labels[labels.length - 1]).toBe('20');
+  });
+});
+
 describe('Reservation fee step — confirm outcomes', () => {
   it('a non-completed confirm with no Stripe error (requires_action) says so honestly — never silence', async () => {
     h.confirmPayment.mockResolvedValue({ paymentIntent: { status: 'requires_action' } });

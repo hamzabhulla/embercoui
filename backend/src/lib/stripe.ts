@@ -36,7 +36,10 @@ export interface StripeService {
 }
 
 export function createStripeService(secretKey: string, webhookSecret: string | null): StripeService {
-  const stripe = new Stripe(secretKey);
+  // Bounded HTTP timeout (the SDK default is 80 s — far past the
+  // 30 s function cap): a hung Stripe call must fail honestly inside
+  // the function's lifetime, chat booking execution included (OPS-M2).
+  const stripe = new Stripe(secretKey, { timeout: 10_000 });
   return {
     async createPaymentIntent({ orderId, amountCents, currency, idempotencyKey }) {
       const intent = await stripe.paymentIntents.create(

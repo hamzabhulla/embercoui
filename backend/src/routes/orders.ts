@@ -7,6 +7,7 @@ import type { TokenVerifier } from '../lib/auth';
 import { validateBody } from '../middleware/validate';
 import { fromMinorUnits, toMinorUnits } from '../lib/currency';
 import type { OrderDTO, Repository } from '../repositories/types';
+import { createRateLimitStore, type RateLimitBackend } from '../lib/rateLimitStore';
 
 const orderSchema = z.object({
   customerName: z.string().trim().min(1, 'Full name is required').max(120),
@@ -43,7 +44,7 @@ const orderSchema = z.object({
 
 const couponSchema = z.object({ code: z.string().trim().min(1, 'Coupon code is required').max(40) });
 
-export function ordersRouter(deps: { repo: Repository | null; verifyToken: TokenVerifier; rateLimitMax?: number; couponRateLimitMax?: number }) {
+export function ordersRouter(deps: { repo: Repository | null; verifyToken: TokenVerifier; rateLimitMax?: number; couponRateLimitMax?: number; rateLimitBackend?: RateLimitBackend | null }) {
   const router = Router();
   const repo = () => {
     if (!deps.repo) throw notConfigured();
@@ -59,6 +60,7 @@ export function ordersRouter(deps: { repo: Repository | null; verifyToken: Token
     limit: deps.rateLimitMax ?? 30,
     standardHeaders: 'draft-7',
     legacyHeaders: false,
+    store: createRateLimitStore('orders:', deps.rateLimitBackend ?? null),
     message: { error: 'Too many orders — please try again in a few minutes' },
   });
 
@@ -72,6 +74,7 @@ export function ordersRouter(deps: { repo: Repository | null; verifyToken: Token
     limit: deps.couponRateLimitMax ?? 60,
     standardHeaders: 'draft-7',
     legacyHeaders: false,
+    store: createRateLimitStore('coupon:', deps.rateLimitBackend ?? null),
     message: { error: 'Too many coupon checks — please try again in a few minutes' },
   });
 

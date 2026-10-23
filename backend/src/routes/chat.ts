@@ -5,14 +5,17 @@ import type { OrderDTO, ProfileDTO, Repository, ReservationDTO } from '../reposi
 import { ApiError, notConfigured } from '../lib/errors';
 import type { TokenVerifier } from '../lib/auth';
 import {
-  bookingConfirmationNote, bookingDetailsNeededNote, bookingFeePendingNote, bookingUnavailableNote,
-  buildChatSystemPrompt, extractBookingMarker, resolveCartActions, resolveCartSnapshot, summarizeOrderForChat, summarizeReservationDay,
+  bookingConfirmationNote, bookingDetailsNeededNote, bookingFeePendingNote, bookingSlotFullNote, bookingUnavailableNote,
+  buildChatSystemPrompt, CHAT_REQUEST_BUDGET_MS, extractBookingMarker, resolveCartActions, resolveCartSnapshot, summarizeOrderForChat, summarizeReservationDay,
+  withChatDeadline,
   type ChatMessage, type ChatOrderSummary, type ChatService, type ReservationDayAvailability,
 } from '../lib/chat';
+import { isReservationSlotFull } from '../lib/reservationCapacity';
 import { effectiveReservationFee } from '../lib/reservationFee';
 import type { StripeService } from '../lib/stripe';
 import { createReservationWithFee, reservationSchema, type ReservationFeePayment } from './forms';
 import { validateBody } from '../middleware/validate';
+import { createRateLimitStore, type RateLimitBackend } from '../lib/rateLimitStore';
 
 const chatBodySchema = z.object({
   messages: z
@@ -253,6 +256,14 @@ async function executeChatBooking(
       },
     };
   } catch (err) {
+    // A FULL slot (BE-M1) is not a failure on our side: the guest
+    // hears the true reason — that seating is fully booked, nothing
+    // was reserved — and may choose another time. It is told apart
+    // from generic creation failures by the shared flow's typed
+    // code, never by matching message text.
+    if (isReservationSlotFull(err)) {
+      return { note: bookingSlotFullNote(parsed.data.date, parsed.data.time), booking: null };
+    }
     // The booking could not be completed (provider, store, or the
     // creation flow's 409 race): the guest hears the honest note, the
     // operator hears the cause — the same logged-not-swallowed
@@ -262,7 +273,7 @@ async function executeChatBooking(
   }
 }
 
-export function chatRouter(deps: { repo: Repository | null; chat: ChatService | null; verifyToken?: TokenVerifier; rateLimitMax?: number; stripeConfigured?: boolean; stripe?: StripeService | null }) {
+export function chatRouter(deps: { repo: Repository | null; chat: ChatService | null; verifyToken?: TokenVerifier; rateLimitMax?: number; stripeConfigured?: boolean; stripe?: StripeService | null; chatDeadlineMs?: number; rateLimitBackend?: RateLimitBackend | null }) {
   const router = Router();
   // Stricter than the global limiter: every message spends API money.
   const limiter = rateLimit({
@@ -270,6 +281,7 @@ export function chatRouter(deps: { repo: Repository | null; chat: ChatService | 
     limit: deps.rateLimitMax ?? 20,
     standardHeaders: 'draft-7',
     legacyHeaders: false,
+    store: createRateLimitStore('chat:', deps.rateLimitBackend ?? null),
     message: { error: 'You are sending messages too quickly — please wait a few minutes.' },
   });
 
@@ -277,6 +289,17 @@ export function chatRouter(deps: { repo: Repository | null; chat: ChatService | 
     try {
       if (!deps.chat) throw new ApiError(503, 'Ember AI is not available right now.');
       if (!deps.repo) throw notConfigured();
+      const repo: Repository = deps.repo;
+      // ONE overall deadline for the request's upstream work (OPS-M2):
+      // the function is capped at 30 s (vercel.json maxDuration), so
+      // the grounding fetches below and the Gemini chain share a
+      // 25 s budget counted from here. Every grounding await races
+      // this deadline (withChatDeadline) and the chain receives it —
+      // slow failures can no longer sum past the platform cap into a
+      // platform timeout; the visitor gets the honest 502 instead.
+      // chatDeadlineMs is a test-only override (the rateLimitMax
+      // pattern); production always uses CHAT_REQUEST_BUDGET_MS.
+      const deadlineAt = Date.now() + (deps.chatDeadlineMs ?? CHAT_REQUEST_BUDGET_MS);
       const { messages, cart } = req.body as { messages: ChatMessage[]; cart?: CartEntry[] };
       if (messages[messages.length - 1].role !== 'user') {
         throw new ApiError(400, 'The last message must be from the user.');
@@ -296,24 +319,41 @@ export function chatRouter(deps: { repo: Repository | null; chat: ChatService | 
       if (!cleanMessages.length || cleanMessages[cleanMessages.length - 1].role !== 'user') {
         throw new ApiError(400, 'The last message must be from the user.');
       }
-      const [settings, items] = await Promise.all([deps.repo.getSettings(), deps.repo.listMenuItems()]);
+      // Required grounding, bounded by the deadline: a hang here is
+      // the honest 502 (withChatDeadline's rejection), never a
+      // platform timeout — and the model chain never starts.
+      const [settings, items] = await withChatDeadline(
+        Promise.all([repo.getSettings(), repo.listMenuItems()]),
+        deadlineAt,
+      );
       // Live context for the concierge: the visitor's cart resolved
       // against the menu just fetched, and today/tomorrow's seat
       // picture. Both are best-effort grounding — neither can fail the
       // chat (resolveCartSnapshot is pure; availability degrades to an
       // omitted section).
       const cartSnapshot = resolveCartSnapshot(cart, items, settings.currency);
-      const availability = await fetchReservationAvailability(deps.repo, settings.reservationSlotCapacity);
+      // Best-effort grounding, same deadline: a fetch that outlives
+      // the budget degrades to its failure value (null section),
+      // exactly like a fetch that failed — it can never hang the chat.
+      const availability = await withChatDeadline(
+        fetchReservationAvailability(repo, settings.reservationSlotCapacity),
+        deadlineAt,
+      ).catch(() => null);
       // Order awareness, same best-effort discipline: who is asking
       // (their session token rides along on every chat call), their own
       // recent orders when signed in, and the one order behind a pasted
       // id when it is theirs to see. None of it can fail the chat, and
       // none of it carries identity fields into the prompt —
       // summarizeOrderForChat drops those at the boundary.
-      const chatUser = await resolveChatUser(req, { repo: deps.repo, verifyToken: deps.verifyToken });
+      const chatUser = await withChatDeadline(
+        resolveChatUser(req, { repo, verifyToken: deps.verifyToken }),
+        deadlineAt,
+      ).catch(() => null);
       const [recentOrdersOutcome, focusOrder] = await Promise.all([
-        fetchRecentOrders(deps.repo, chatUser),
-        fetchFocusOrder(deps.repo, chatUser, cleanMessages),
+        withChatDeadline(fetchRecentOrders(repo, chatUser), deadlineAt)
+          .catch((): RecentOrdersOutcome => ({ kind: 'unavailable' })),
+        withChatDeadline(fetchFocusOrder(repo, chatUser, cleanMessages), deadlineAt)
+          .catch(() => null),
       ]);
       const raw = await deps.chat.reply({
         system: buildChatSystemPrompt(settings, items, {
@@ -329,6 +369,9 @@ export function chatRouter(deps: { repo: Repository | null; chat: ChatService | 
           reservationFee: effectiveReservationFee(settings, deps.stripeConfigured ?? false),
         }),
         messages: cleanMessages,
+        // The chain inherits the SAME deadline, so time already spent
+        // grounding counts against it — the total stays bounded.
+        deadlineAt,
       });
       // The BOOK marker is extracted from the model's reply BEFORE
       // the cart actions resolve, so no booking marker — whole or
@@ -337,6 +380,14 @@ export function chatRouter(deps: { repo: Repository | null; chat: ChatService | 
       const { text, actions } = resolveCartActions(bookingExtract.text, items);
       let bookingNote: string | null = null;
       let booking: ChatBookingOutcome['booking'] = null;
+      // Post-answer booking execution is deliberately OUTSIDE the
+      // deadline above (OPS-M2 boundary): the graded defect is the
+      // grounding + chain, and a creation flow must never be
+      // abandoned mid-write (an insert could land while its fee
+      // intent is orphaned). Its one unbounded network call — Stripe
+      // intent creation — is bounded at the client (lib/stripe.ts,
+      // 10 s SDK timeout), and its repository writes are the same
+      // writes the booking form makes under the same platform cap.
       if (bookingExtract.booking) {
         const outcome = await executeChatBooking(
           // Same M2 coherence as the form route: a raw service whose

@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { notConfigured } from '../lib/errors';
 import { validateBody } from '../middleware/validate';
 import type { Repository } from '../repositories/types';
+import { createRateLimitStore, type RateLimitBackend } from '../lib/rateLimitStore';
 
 /**
  * Failed admin sign-in reports (Phase C — Login Activity).
@@ -30,15 +31,17 @@ const loginFailedSchema = z.object({
   email: z.string().trim().min(1, 'Email is required').max(254).email('Invalid email format'),
 });
 
-export function authEventsRouter(deps: { repo: Repository | null }) {
+export function authEventsRouter(deps: { repo: Repository | null; rateLimitBackend?: RateLimitBackend | null }) {
   const router = Router();
   // Built per router (not module-level): the limiter's store belongs
-  // to the app instance, so separate apps never share a budget.
+  // to the app instance, so separate apps never share a budget —
+  // unless they share the OPS-M1 backend, which is the point of it.
   const loginFailedLimiter = rateLimit({
     windowMs: 10 * 60 * 1000,
     limit: 5,
     standardHeaders: 'draft-7',
     legacyHeaders: false,
+    store: createRateLimitStore('failed-login:', deps.rateLimitBackend ?? null),
     message: { error: 'Too many reports — please try again in a few minutes' },
   });
   router.post('/auth/admin-login-failed', loginFailedLimiter, validateBody(loginFailedSchema), async (req, res, next) => {

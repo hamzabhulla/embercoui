@@ -61,8 +61,30 @@ function CardPaymentForm({ orderId, onPaid }: { orderId: string; onPaid: (id: st
       setError(confirmError.message ?? 'Your card was declined — please try a different payment method.');
       return;
     }
-    if (paymentIntent && (paymentIntent.status === 'succeeded' || paymentIntent.status === 'processing')) {
-      onPaid(orderId);
+    // Every confirm outcome is handled explicitly — no silent
+    // fall-through (Mega Audit #2, CF-M1), mirroring the reservation
+    // fee form (ReservationFeePayment.tsx, FeePaymentForm), the
+    // behaviour standard for this defect class.
+    switch (paymentIntent?.status) {
+      case 'succeeded':
+        onPaid(orderId);
+        return;
+      case 'processing':
+        // The fee form's accepted nuance, kept explicit: Stripe has
+        // accepted the payment and it is still finalising, so the
+        // step completes — the tracking page shows the server's own
+        // payment status ("Payment processing…") until the webhook
+        // settles it; the payment is never claimed as paid here.
+        onPaid(orderId);
+        return;
+      default:
+        // No error from Stripe, but the payment did not complete
+        // either (canceled, requires_payment_method, a non-redirect
+        // requires_action, requires_confirmation, or no intent at
+        // all): never leave the customer staring at a silent form —
+        // the order exists but is NOT paid, and the form stays
+        // usable for another attempt.
+        setError('That payment was not completed, so your order is not paid. You can try again or use another card.');
     }
   };
 

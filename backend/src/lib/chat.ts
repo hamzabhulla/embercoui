@@ -1,5 +1,6 @@
 import { ApiError } from './errors';
 import { currencyExponent, fromMinorUnits, toMinorUnits } from './currency';
+import { reservationHoldsSeats } from './reservationCapacity';
 import type { ReservationFee } from './reservationFee';
 import type {
   MenuItemDTO, OrderDTO, OrderStatus, PaymentStatus, PublicSettingsDTO, ReservationDTO,
@@ -11,7 +12,42 @@ export interface ChatMessage {
 }
 
 export interface ChatService {
-  reply(input: { system: string; messages: ChatMessage[] }): Promise<string>;
+  /**
+   * `deadlineAt` (epoch ms) is the request's overall upstream deadline,
+   * computed once by the chat route at handler start (see
+   * CHAT_REQUEST_BUDGET_MS). The Gemini service folds it into its own
+   * budget so grounding time already spent counts against the chain.
+   * Optional: callers that pass none get the service's own budget,
+   * counted from the reply() call.
+   */
+  reply(input: { system: string; messages: ChatMessage[]; deadlineAt?: number }): Promise<string>;
+}
+
+/**
+ * The chat function's platform cap is 30 s (vercel.json maxDuration).
+ * Every upstream wait in a chat request — the grounding fetches AND
+ * the model chain — shares ONE overall budget of 25 s, counted from
+ * handler start: comfortably under the cap, leaving ~5 s for request
+ * parsing, prompt building, serialisation and platform overhead, so a
+ * slow upstream surfaces as this service's honest 502 instead of a
+ * platform timeout killing the function mid-flight. The normal path
+ * (sub-second grounding, ~1 s model answer) is nowhere near it.
+ */
+export const CHAT_REQUEST_BUDGET_MS = 25_000;
+/** One model attempt may still take up to 20 s — when the budget allows it. */
+export const CHAT_PER_ATTEMPT_TIMEOUT_MS = 20_000;
+/**
+ * An attempt started with less than this much budget left is not
+ * worth starting: it would be aborted almost immediately, and the
+ * honest 502 sooner is the better answer.
+ */
+export const CHAT_MIN_ATTEMPT_MS = 2_000;
+
+/** Injectable timing for the Gemini service / deadline helper — tests pin small budgets instead of waiting out the real ones. */
+export interface ChatTimingOptions {
+  totalBudgetMs?: number;
+  perAttemptTimeoutMs?: number;
+  minAttemptMs?: number;
 }
 
 /** A dish the assistant asked to add to the visitor's cart (resolved server-side). */
@@ -38,15 +74,46 @@ export const GEMINI_MODEL_CHAIN = [
   'gemini-2.5-flash',
 ] as const;
 
-const UPSTREAM_ERROR = 'The assistant is having trouble answering right now — please try again in a moment.';
+export const UPSTREAM_ERROR = 'The assistant is having trouble answering right now — please try again in a moment.';
 
-export function createGeminiChatService(apiKey: string, preferredModel?: string | null): ChatService {
+/**
+ * Races `work` against the request deadline: if the deadline passes
+ * first, the promise rejects with the chat's honest upstream 502 —
+ * the same ApiError the model chain throws — and the late result is
+ * dropped (its handlers stay attached, so a late rejection is never
+ * unhandled). The chat route bounds EVERY grounding fetch this way:
+ * the Repository contract carries no AbortSignal, so racing at the
+ * route is the clean bound that covers real and fake repositories
+ * alike. A rejection from `work` itself passes through untouched, so
+ * fast failures keep exactly their current behaviour.
+ */
+export function withChatDeadline<T>(work: Promise<T>, deadlineAt: number): Promise<T> {
+  const remaining = deadlineAt - Date.now();
+  if (remaining <= 0) {
+    // The work is already running and nobody will consume it now —
+    // keep a late rejection from surfacing as unhandled.
+    work.catch(() => undefined);
+    return Promise.reject(new ApiError(502, UPSTREAM_ERROR));
+  }
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new ApiError(502, UPSTREAM_ERROR)), remaining);
+    work.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (err: unknown) => { clearTimeout(timer); reject(err instanceof Error ? err : new Error(String(err))); },
+    );
+  });
+}
+
+export function createGeminiChatService(apiKey: string, preferredModel?: string | null, timing: ChatTimingOptions = {}): ChatService {
   const chain: string[] = preferredModel ? [preferredModel] : [...GEMINI_MODEL_CHAIN];
   let workingModel: string | null = preferredModel ?? null;
+  const totalBudgetMs = timing.totalBudgetMs ?? CHAT_REQUEST_BUDGET_MS;
+  const perAttemptTimeoutMs = timing.perAttemptTimeoutMs ?? CHAT_PER_ATTEMPT_TIMEOUT_MS;
+  const minAttemptMs = timing.minAttemptMs ?? CHAT_MIN_ATTEMPT_MS;
 
-  async function callModel(model: string, system: string, messages: ChatMessage[]): Promise<{ status: number; text: string | null }> {
+  async function callModel(model: string, system: string, messages: ChatMessage[], timeoutMs: number): Promise<{ status: number; text: string | null; timedOut?: boolean }> {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 20_000);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
         method: 'POST',
@@ -73,22 +140,50 @@ export function createGeminiChatService(apiKey: string, preferredModel?: string 
         .join('')
         .trim();
       return { status: 200, text: text || null };
+    } catch (err) {
+      // Our own abort timer firing is a TIMEOUT, reported as a result
+      // (not a throw) so reply() can decide — with budget left — to
+      // walk to the next model. Anything else is a genuine failure
+      // and propagates, exactly as before.
+      if (err instanceof Error && err.name === 'AbortError') {
+        return { status: 0, text: null, timedOut: true };
+      }
+      throw err;
     } finally {
       clearTimeout(timer);
     }
   }
 
   return {
-    async reply({ system, messages }) {
+    async reply({ system, messages, deadlineAt }) {
+      // One deadline for the whole chain: the earlier of the route's
+      // request deadline (grounding time already spent counts) and
+      // this call's own budget. Per-attempt timeouts are clamped to
+      // whatever budget remains, so the chain can never sum past it.
+      const deadline = Math.min(deadlineAt ?? Number.POSITIVE_INFINITY, Date.now() + totalBudgetMs);
       const order = workingModel ? [workingModel, ...chain.filter((m) => m !== workingModel)] : chain;
       let lastStatus = 0;
       for (const model of order) {
-        let result: { status: number; text: string | null };
+        const remaining = deadline - Date.now();
+        if (remaining < minAttemptMs) {
+          // Not enough budget left for a sane attempt — stop walking
+          // and answer with the honest 502 below, sooner rather than
+          // at the platform's 30 s kill.
+          console.error('[ember] Gemini: overall chat deadline reached — no budget left for another model attempt');
+          break;
+        }
+        let result: { status: number; text: string | null; timedOut?: boolean };
         try {
-          result = await callModel(model, system, messages);
+          result = await callModel(model, system, messages, Math.min(perAttemptTimeoutMs, remaining));
         } catch {
-          // Network failure / timeout — not model-specific; fail honestly.
+          // Network failure — not model-specific; fail honestly.
           throw new ApiError(502, UPSTREAM_ERROR);
+        }
+        if (result.timedOut) {
+          // This attempt spent its slice without answering. Another
+          // model may still answer inside the budget — the loop head
+          // re-checks what remains before trying it.
+          continue;
         }
         lastStatus = result.status;
         if (result.status === 404) {
@@ -171,17 +266,14 @@ export interface ReservationDayAvailability {
 }
 
 /**
- * The statuses that hold seats — the admin day board's ACTIVE set
- * (AdminReservations.tsx). Cancelled and completed bookings hold
- * nothing, exactly as the board shows the owner.
- */
-const SEAT_HOLDING_STATUSES: ReadonlySet<ReservationDTO['status']> = new Set(['pending', 'confirmed']);
-
-/**
  * Aggregates one day's reservations into the compact slot summary the
  * prompt carries. Aggregates only — no names, emails or party details
  * ever reach the model. Slots group by HH:MM (Postgres times can
- * arrive as HH:MM:SS; the board groups the same way).
+ * arrive as HH:MM:SS; the board groups the same way). The seat-holding
+ * predicate is the shared one (lib/reservationCapacity.ts) — the same
+ * rule the creation flow enforces and the admin day board displays:
+ * active status, and a fee-bearing booking only once its fee is paid,
+ * so an unpaid fee booking never makes a slot look taken here either.
  */
 export function summarizeReservationDay(
   dateISO: string,
@@ -191,13 +283,7 @@ export function summarizeReservationDay(
 ): ReservationDayAvailability {
   const bySlot = new Map<string, number>();
   for (const r of reservations) {
-    if (!SEAT_HOLDING_STATUSES.has(r.status)) continue;
-    // A fee-bearing booking holds seats ONLY once its fee is paid —
-    // the same capacity rule the admin day board applies. An unpaid
-    // (pending/failed) fee booking must never make a slot look taken
-    // here either, or the concierge would turn guests away from
-    // seats that are in fact open.
-    if (r.feeAmount != null && r.feePaymentStatus !== 'paid') continue;
+    if (!reservationHoldsSeats(r)) continue;
     const slot = r.time.slice(0, 5);
     bySlot.set(slot, (bySlot.get(slot) ?? 0) + r.guests);
   }
@@ -696,4 +782,18 @@ export function bookingDetailsNeededNote(fields: string[]): string {
  */
 export function bookingUnavailableNote(): string {
   return 'My apologies — something on our side kept the booking from completing just now, and your table is not held. Say the word and I will try once more with the same details.';
+}
+
+/**
+ * The note when the requested slot is FULL (BE-M1 capacity
+ * enforcement): nothing was created, and the guest is told exactly
+ * that — the day and time named from the validated request, in the
+ * concierge's register — with the door left open to another time.
+ * Distinct from bookingUnavailableNote on purpose: a full house is
+ * not a failure on our side, and the guest deserves the true reason
+ * (and the chance to choose a different seating) rather than a retry
+ * invitation for a slot that cannot take them.
+ */
+export function bookingSlotFullNote(date: string, time: string): string {
+  return `My apologies — ${bookingDatePhrase(date)} at ${bookingTimePhrase(time)} is fully booked, and no table has been reserved. Another time that day, or another day entirely, and I will arrange it straight away.`;
 }

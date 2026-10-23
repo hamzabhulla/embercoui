@@ -22,6 +22,7 @@ import { createSupabaseAuthAdminService, type AuthAdminService } from '../backen
 import { createStripeService, type StripeService } from '../backend/src/lib/stripe.js';
 import { createGeminiChatService, type ChatService } from '../backend/src/lib/chat.js';
 import { createStorageService, type StorageService } from '../backend/src/lib/storage.js';
+import { createSupabaseRateLimitBackend, type RateLimitBackend } from '../backend/src/lib/rateLimitStore.js';
 import type { Repository } from '../backend/src/repositories/types.js';
 
 const env = loadEnv();
@@ -29,10 +30,17 @@ const env = loadEnv();
 let repo: Repository | null = null;
 let verifyToken: TokenVerifier = async () => null;
 let authAdmin: AuthAdminService | null = null;
+let rateLimitBackend: RateLimitBackend | null = null;
 if (env.supabaseConfigured && env.supabaseUrl && env.supabaseServiceRoleKey) {
   repo = createSupabaseRepository(env.supabaseUrl, env.supabaseServiceRoleKey);
   verifyToken = createSupabaseTokenVerifier(env.supabaseUrl, env.supabaseServiceRoleKey);
   authAdmin = createSupabaseAuthAdminService(env.supabaseUrl, env.supabaseServiceRoleKey);
+  // Shared rate-limit counters (OPS-M1, migration 0018) — each
+  // function instance builds its own client, but they all count
+  // against the same Supabase table. Live-safe before 0018 runs:
+  // the store falls back to per-instance in-memory counters on any
+  // error (see backend/src/lib/rateLimitStore.ts).
+  rateLimitBackend = createSupabaseRateLimitBackend(env.supabaseUrl, env.supabaseServiceRoleKey);
 }
 
 const stripe: StripeService | null =
@@ -46,6 +54,6 @@ const storage: StorageService | null =
     : null;
 
 const chat: ChatService | null = env.geminiApiKey ? createGeminiChatService(env.geminiApiKey, env.geminiModel) : null;
-const app = createApp({ env, repo, verifyToken, stripe, storage, chat, authAdmin });
+const app = createApp({ env, repo, verifyToken, stripe, storage, chat, authAdmin, rateLimitBackend });
 
 export default app;

@@ -5,6 +5,7 @@ import { audit } from '../lib/audit';
 import { requireAuth, type AuthedRequest } from '../lib/auth';
 import type { TokenVerifier } from '../lib/auth';
 import { validateBody } from '../middleware/validate';
+import { MAX_PARTY_SIZE, OVER_PARTY_SIZE_MESSAGE } from '../lib/partySize';
 import type { Repository, ReservationDTO, ReservationRequestDTO } from '../repositories/types';
 
 const addressSchema = z
@@ -61,7 +62,7 @@ const reservationChangeSchema = z
       .number()
       .int('Guests must be a whole number')
       .min(1, 'Guests must be at least 1')
-      .max(20, 'For parties over 20, please contact us directly')
+      .max(MAX_PARTY_SIZE, OVER_PARTY_SIZE_MESSAGE)
       .nullable()
       .optional(),
     message: z.string().trim().max(1000, 'Please keep the note under 1000 characters').optional(),

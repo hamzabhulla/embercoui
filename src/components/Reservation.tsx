@@ -5,12 +5,15 @@ import { openingHoursLines, usePublicSettings } from '../hooks/usePublicSettings
 import { ReservationFeePaymentPanel } from './ReservationFeePayment.tsx';
 import { submitReservation, type ReservationFeePayment } from '../services/api.ts';
 import { formatMoney } from '../lib/currency.ts';
+import { GUEST_COUNT_OPTIONS } from '../lib/partySize.ts';
 import { stripePromise } from '../lib/stripe.ts';
 
 // ONE slot list for both layouts. The desktop <select> and the mobile
 // slot grid used to keep separate lists that had drifted apart (lunch
 // slots only on mobile, 17:00/17:30 only on desktop) — the same kitchen
-// hours must be offered everywhere.
+// hours must be offered everywhere. The guest counts come from the
+// same shared list too (lib/partySize.ts): desktop once stopped at 8
+// and mobile at 7 while the server accepted 20 (audit-2 CF-M2).
 const TIME_SLOTS = [
   '12:00', '12:30', '13:00', '13:30',
   '17:00', '17:30', '18:00', '18:30', '19:00', '19:30',
@@ -260,7 +263,7 @@ export default function Reservation() {
                         style={{ fontFamily: 'Jost, sans-serif', fontSize: '14px' }}
                       >
                         <option value="" disabled className="bg-[#1C2B1E] hidden"></option>
-                        {[1, 2, 3, 4, 5, 6, 7, 8].map(n => (
+                        {GUEST_COUNT_OPTIONS.map(n => (
                           <option key={n} value={n} className="bg-[#1C2B1E] text-[#F5F0E8]">{n} {n === 1 ? 'Guest' : 'Guests'}</option>
                         ))}
                       </select>
@@ -362,7 +365,7 @@ export default function Reservation() {
                       <div>
                         <label className="text-[9px] text-[#C17A3A] uppercase tracking-[0.15em] block mb-[16px]" style={{ fontFamily: 'Jost, sans-serif' }}>Guests</label>
                         <div className="flex flex-wrap gap-[8px]">
-                          {[1,2,3,4,5,6,7].map(n => (
+                          {GUEST_COUNT_OPTIONS.map(n => (
                             <button 
                               key={n} type="button"
                               onClick={() => setForm(prev => ({...prev, guests: n.toString()}))}

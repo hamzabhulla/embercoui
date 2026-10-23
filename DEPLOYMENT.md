@@ -44,7 +44,14 @@ No Railway, no second domain, no CORS juggling, $0 on the Hobby plan.
   faking them.
 - Limits to remember: 4.5 MB request body (admin image uploads are resized
   in the browser before upload for exactly this reason); functions are
-  stateless — the app is built for that (Supabase holds all state).
+  stateless — the app is built for that. Supabase holds all state:
+  the product data, and the rate-limit counters too (migration 0018),
+  so per-visitor limits are shared across function instances instead
+  of resetting on every cold start. Function instances keep only an
+  in-memory fallback counter, used per request when the shared store
+  is unreachable (including before 0018 has been run) — limiting
+  never switches off, it just degrades to per-instance budgets until
+  the shared store answers again.
 
 ## Option B — Vercel frontend + Railway backend (always-on server)
 
@@ -52,7 +59,7 @@ Use when a paying client needs an always-on server. Steps below.
 
 ## One-time setup
 
-Follow `SUPABASE_SETUP.md` first (all sixteen migrations, seed, storage buckets, first admin, Stripe webhook).
+Follow `SUPABASE_SETUP.md` first (all eighteen migrations — or the one-paste `supabase/all-in-one.sql`, which is the same 0001–0018 + seed — storage buckets, first admin, Google provider, Stripe webhook).
 
 ### Frontend (Vercel)
 - Import the repo, root directory = project root (not `backend/`).
@@ -74,6 +81,65 @@ Follow `SUPABASE_SETUP.md` first (all sixteen migrations, seed, storage buckets,
 ## Backups
 - Supabase provides daily backups on paid plans and **Point-in-Time Recovery (PITR)** on higher tiers (Project Settings → Database → Backups). Enable PITR before real customer data arrives.
 - The `menu-images` storage bucket is public-read; its contents are reproducible from the admin panel but should be included in any manual export routine. The `hero-portfolio-video` bucket holds the owner's hero video + mobile hero photo and is NOT reproducible from the admin panel — include it in manual exports too.
+
+## Security note — browser session storage (SEC-M1: accepted architecture, assessed 2026-10-23)
+
+**What is stored where, and why.** The browser Supabase client
+(`src/lib/supabase.ts`) is created with no auth options, so supabase-js uses
+its platform defaults: the session — access token, refresh token, expiry and
+user — is persisted in `localStorage` under its `sb-<project-ref>-auth-token`
+key, and the access token is sent as a `Bearer` header on every API call
+(`src/services/api.ts`, `src/services/adminApi.ts`). This is the app's
+standing Bearer architecture: the backend verifies the token server-side on
+every request, and the service-role key never reaches the browser. Nothing in
+app code writes tokens anywhere else — the only other web-storage records are
+the cart (`localStorage`) and the admin screen-lock / OAuth-return records
+(`sessionStorage`), and those carry user ids and validated admin paths only,
+never token material.
+
+**The contingent risk, stated plainly.** `localStorage` is readable by any
+JavaScript executing on the origin. If attacker JS ever ran on the origin
+(a cross-site scripting hole, a compromised dependency), it could copy the
+stored refresh token and hold a persistent session until the token is revoked
+or expires — and an access token stolen from a signed-in admin who has
+completed two-factor verification already carries that verification (aal2)
+until it expires. This is a contingent architectural residual, not a live
+hole: there is presently no way for attacker JS to get onto the origin.
+
+**Why it is not exploitable today.** Three mitigations hold together, and
+all three were re-verified in the 2026-10-23 assessment (Mega Audit #2,
+SEC-M1): (1) the tree contains **zero HTML sinks** — no
+`dangerouslySetInnerHTML`, no `innerHTML` writes outside a test file, and
+the one runtime-injected script payload (the Restaurant JSON-LD) is assigned
+via `textContent`, so rendered content cannot become markup; (2) the served
+Content-Security-Policy is strict — `script-src 'self' https://js.stripe.com`
+with `object-src 'none'` and `base-uri 'self'` — confirmed byte-for-byte
+against the live site's response headers on 2026-10-23 and matching
+`vercel.json`; and (3) **no third-party JavaScript executes on the origin
+beyond Stripe.js** (loaded via `loadStripe` only when a publishable key is
+configured) — there is no analytics or tag script at all; Google Fonts,
+OpenStreetMap tiles, Unsplash images and the Google Maps embed are passive
+resources or cross-origin frames, which cannot read this origin's storage.
+A full leak sweep in the same assessment (every `console.*`/log call, every
+URL and redirect target, every user-facing error path, the chat and API
+request layers) found no place where a token, session object or
+Authorization header is logged, placed in a URL, or serialised into a
+request body: the Bearer token travels in the `Authorization` header only.
+
+**The accepted decision.** Migrating the session to httpOnly cookies (or any
+other storage rewrite) was deliberately **not** undertaken: it would replace
+the Supabase client + Bearer design across the whole app to defend against
+an attack that currently has no entry point. The residual above is accepted
+as the architecture's standing cost.
+
+**Re-open triggers — this note must be revisited if any of these change:**
+adding any HTML sink (`dangerouslySetInnerHTML`, an `innerHTML` write, a new
+templating path that bypasses React escaping) — *adding a sink reopens this
+finding on its own*; relaxing the CSP (a new `script-src` host, or
+`'unsafe-inline'` / `'unsafe-eval'` in `script-src`); loading any new
+third-party script on the origin (analytics, chat widgets, tag managers);
+or changing token longevity in the Supabase dashboard (Auth → JWT expiry /
+refresh-token lifetime), which directly scales the blast radius above.
 
 ## Smoke checklist after every deploy
 1. `GET /api/v1/health` → `{ status: 'ok', supabaseConfigured: true, ... }`.

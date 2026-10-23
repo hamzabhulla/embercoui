@@ -8,6 +8,7 @@ import { apiRequest, fetchMenuItems, fetchPublicSettings } from '../services/api
 import type { PublicSettings } from '../services/api.ts';
 import { updatePassword } from '../services/auth.ts';
 import type { MenuItem } from '../data/menu.ts';
+import { MAX_PARTY_SIZE } from '../lib/partySize.ts';
 
 interface OrderItem { menuItemId: number | null; name: string; unitPrice: number; quantity: number }
 interface Order {
@@ -189,8 +190,8 @@ export default function Account() {
     if (changeForm.time) body.proposedTime = changeForm.time;
     if (changeForm.guests) {
       const g = Number(changeForm.guests);
-      if (!Number.isInteger(g) || g < 1 || g > 20) {
-        setChangeError('Guests must be between 1 and 20 — for larger parties, please call us.');
+      if (!Number.isInteger(g) || g < 1 || g > MAX_PARTY_SIZE) {
+        setChangeError(`Guests must be between 1 and ${MAX_PARTY_SIZE} — for larger parties, please call us.`);
         return;
       }
       body.proposedGuests = g;
@@ -685,7 +686,7 @@ export default function Account() {
                                 <div className="grid sm:grid-cols-3 gap-4">
                                   <div><label style={labelStyle}>New date</label><input type="date" value={changeForm.date} onChange={(e) => setChangeForm({ ...changeForm, date: e.target.value })} style={inputStyle} /></div>
                                   <div><label style={labelStyle}>New time</label><input type="time" value={changeForm.time} onChange={(e) => setChangeForm({ ...changeForm, time: e.target.value })} style={inputStyle} /></div>
-                                  <div><label style={labelStyle}>Guests</label><input type="number" min={1} max={20} value={changeForm.guests} onChange={(e) => setChangeForm({ ...changeForm, guests: e.target.value })} style={inputStyle} placeholder={String(r.guests)} /></div>
+                                  <div><label style={labelStyle}>Guests</label><input type="number" min={1} max={MAX_PARTY_SIZE} value={changeForm.guests} onChange={(e) => setChangeForm({ ...changeForm, guests: e.target.value })} style={inputStyle} placeholder={String(r.guests)} /></div>
                                 </div>
                                 <div style={{ marginTop: '14px' }}>
                                   <label style={labelStyle}>Note for our team (optional)</label>

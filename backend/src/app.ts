@@ -19,6 +19,7 @@ import { accountRouter } from './routes/account';
 import { chatRouter } from './routes/chat';
 import { geoRouter } from './routes/geo';
 import type { ChatService } from './lib/chat';
+import { createRateLimitStore, type RateLimitBackend } from './lib/rateLimitStore';
 
 export interface AppDeps {
   env: Env;
@@ -36,6 +37,16 @@ export interface AppDeps {
   // throttle can be pinned without firing 60 requests. Production
   // always uses the router default (60 / 15 min).
   couponRateLimitMax?: number;
+  // Test-only override for the chat route's overall upstream deadline
+  // (OPS-M2), so the bound can be pinned without waiting out the real
+  // 25 s budget. Production always uses CHAT_REQUEST_BUDGET_MS.
+  chatDeadlineMs?: number;
+  // Shared rate-limit backend (OPS-M1): the Supabase counter store
+  // built by the entry points when Supabase is configured. Absent or
+  // null → every limiter runs on its per-instance in-memory fallback,
+  // which is also the per-request degradation path when the shared
+  // store errors (see lib/rateLimitStore.ts's contract).
+  rateLimitBackend?: RateLimitBackend | null;
 }
 
 export function createApp(deps: AppDeps): Express {
@@ -77,6 +88,7 @@ export function createApp(deps: AppDeps): Express {
       limit: deps.globalRateLimitMax ?? 600,
       standardHeaders: 'draft-7',
       legacyHeaders: false,
+      store: createRateLimitStore('global:', deps.rateLimitBackend ?? null),
       message: { error: 'Too many requests — please try again in a few minutes' },
     })
   );
@@ -110,8 +122,8 @@ export function createApp(deps: AppDeps): Express {
   app.use('/', geo);
 
   app.use('/api/v1', publicRouter({ repo: deps.repo, stripeConfigured: deps.env.stripeConfigured }));
-  app.use('/api/v1', formsRouter({ repo: deps.repo, verifyToken: deps.verifyToken, stripe: deps.stripe ?? null, stripeConfigured: deps.env.stripeConfigured }));
-  app.use('/api/v1', authEventsRouter({ repo: deps.repo }));
+  app.use('/api/v1', formsRouter({ repo: deps.repo, verifyToken: deps.verifyToken, stripe: deps.stripe ?? null, stripeConfigured: deps.env.stripeConfigured, rateLimitBackend: deps.rateLimitBackend ?? null }));
+  app.use('/api/v1', authEventsRouter({ repo: deps.repo, rateLimitBackend: deps.rateLimitBackend ?? null }));
   app.use('/api/v1/account', accountRouter(deps));
   app.use('/api/v1', ordersRouter({
     repo: deps.repo,
@@ -122,8 +134,9 @@ export function createApp(deps: AppDeps): Express {
     // orders-hardening suite, which builds a production-mode app.
     rateLimitMax: deps.env.nodeEnv === 'test' ? 1000 : undefined,
     couponRateLimitMax: deps.couponRateLimitMax,
+    rateLimitBackend: deps.rateLimitBackend ?? null,
   }));
-  app.use('/api/v1', chatRouter({ repo: deps.repo, chat: deps.chat ?? null, verifyToken: deps.verifyToken, stripeConfigured: deps.env.stripeConfigured, stripe: deps.stripe ?? null }));
+  app.use('/api/v1', chatRouter({ repo: deps.repo, chat: deps.chat ?? null, verifyToken: deps.verifyToken, stripeConfigured: deps.env.stripeConfigured, stripe: deps.stripe ?? null, chatDeadlineMs: deps.chatDeadlineMs, rateLimitBackend: deps.rateLimitBackend ?? null }));
   app.use('/api/v1', paymentsRouter({ repo: deps.repo, stripe: deps.stripe ?? null, verifyToken: deps.verifyToken, stripeConfigured: deps.env.stripeConfigured }));
   app.use('/api/v1/admin', adminRouter({ repo: deps.repo, verifyToken: deps.verifyToken, storage: deps.storage ?? null, authAdmin: deps.authAdmin ?? null, stripeConfigured: deps.env.stripeConfigured }));
 

@@ -11,6 +11,7 @@ import {
   PERMISSION_LEVELS, SECTION_KEYS, effectivePermissionsFor, levelAtLeast, resolvePermissions,
 } from '../lib/permissions';
 import { MFA_REQUIRED_CODE, effectiveMfaRequired, mfaStateFor } from '../lib/mfa';
+import { MAX_PARTY_SIZE, OVER_PARTY_SIZE_MESSAGE } from '../lib/partySize';
 import type { AuthAdminService } from '../lib/authAdmin';
 import { audit, auditCategoryOf, auditVerifiedOf } from '../lib/audit';
 import type {
@@ -65,7 +66,7 @@ const reservationEditSchema = z
       const [h, m] = v.split(':').map(Number);
       return h >= 0 && h <= 23 && m >= 0 && m <= 59;
     }, 'Please choose a valid time').optional(),
-    guests: z.number().int().min(1, 'Guests must be at least 1').max(20, 'For parties over 20, please contact us directly').optional(),
+    guests: z.number().int().min(1, 'Guests must be at least 1').max(MAX_PARTY_SIZE, OVER_PARTY_SIZE_MESSAGE).optional(),
     requestId: z.string().trim().min(1).max(64).optional(),
     reply: z.string().trim().max(1000).optional(),
   })
@@ -246,7 +247,7 @@ const adminReservationSchema = z.object({
     const [h, m] = v.split(':').map(Number);
     return h >= 0 && h <= 23 && m >= 0 && m <= 59;
   }, 'Please choose a valid time'),
-  guests: z.number().int().min(1, 'Guests must be at least 1').max(20, 'For parties over 20, please contact us directly'),
+  guests: z.number().int().min(1, 'Guests must be at least 1').max(MAX_PARTY_SIZE, OVER_PARTY_SIZE_MESSAGE),
   notes: z.string().trim().max(500).optional(),
   status: z.enum(['pending', 'confirmed']).default('confirmed'),
 });

@@ -1,9 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { useGoToReservations } from '../lib/nav.ts';
+import { supabaseUrl } from '../lib/supabase.ts';
+import { HERO_FALLBACK_IMAGE, heroMobileImageUrl, heroVideoUrl } from '../lib/heroMedia.ts';
 
 export default function Hero() {
   const goToReservations = useGoToReservations();
+  // Hero media lives in this install's own Supabase storage bucket;
+  // the URLs are derived from the configured project URL, never
+  // hard-coded. Unconfigured, the mobile hero uses the fallback still
+  // and the desktop hero renders that still instead of a video with
+  // no playable source (see lib/heroMedia.ts).
+  const mobileImageSrc = heroMobileImageUrl(supabaseUrl) ?? HERO_FALLBACK_IMAGE;
+  const videoSrc = heroVideoUrl(supabaseUrl);
   const heroRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
   // Initialise from the real viewport on the FIRST render — starting
@@ -49,14 +58,14 @@ export default function Hero() {
       >
         {isMobile ? (
           <img
-            src="https://mmkokxwgdxqbgxbftfsl.supabase.co/storage/v1/object/public/hero-portfolio-video/hero-mobile.jpg"
+            src={mobileImageSrc}
             alt="Fine dining"
             loading="eager"
             width="1080"
             height="1350"
             className="w-full h-full object-cover"
           />
-        ) : (
+        ) : videoSrc ? (
           <video
             autoPlay
             muted
@@ -64,14 +73,14 @@ export default function Hero() {
             playsInline
             preload="metadata"
             className="w-full h-full object-cover"
-            poster="https://images.unsplash.com/photo-1414235077428-338989a2e8c0?w=1400&q=85&auto=format&fit=crop"
+            poster={HERO_FALLBACK_IMAGE}
           >
             <source
-              src="https://mmkokxwgdxqbgxbftfsl.supabase.co/storage/v1/object/public/hero-portfolio-video/hero-video.mp4"
+              src={videoSrc}
               type="video/mp4"
             />
             <img
-              src="https://images.unsplash.com/photo-1414235077428-338989a2e8c0?w=1400&q=85&auto=format&fit=crop"
+              src={HERO_FALLBACK_IMAGE}
               alt="Fine dining"
               loading="eager"
               width="1400"
@@ -79,6 +88,15 @@ export default function Hero() {
               className="w-full h-full object-cover"
             />
           </video>
+        ) : (
+          <img
+            src={HERO_FALLBACK_IMAGE}
+            alt="Fine dining"
+            loading="eager"
+            width="1400"
+            height="900"
+            className="w-full h-full object-cover"
+          />
         )}
       </div>
 

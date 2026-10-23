@@ -7,6 +7,7 @@ import { createApp } from './app';
 import { createStripeService, type StripeService } from './lib/stripe';
 import { createStorageService, type StorageService } from './lib/storage';
 import { createGeminiChatService, type ChatService } from './lib/chat';
+import { createSupabaseRateLimitBackend, type RateLimitBackend } from './lib/rateLimitStore';
 import type { Repository } from './repositories/types';
 
 function main() {
@@ -14,10 +15,15 @@ function main() {
   let repo: Repository | null = null;
   let verifyToken: TokenVerifier = async () => null;
   let authAdmin: AuthAdminService | null = null;
+  let rateLimitBackend: RateLimitBackend | null = null;
   if (env.supabaseConfigured && env.supabaseUrl && env.supabaseServiceRoleKey) {
     repo = createSupabaseRepository(env.supabaseUrl, env.supabaseServiceRoleKey);
     verifyToken = createSupabaseTokenVerifier(env.supabaseUrl, env.supabaseServiceRoleKey);
     authAdmin = createSupabaseAuthAdminService(env.supabaseUrl, env.supabaseServiceRoleKey);
+    // Shared rate-limit counters (OPS-M1, migration 0018). Safe to
+    // wire before 0018 runs: the store falls back per request to
+    // in-memory counters on any error (see lib/rateLimitStore.ts).
+    rateLimitBackend = createSupabaseRateLimitBackend(env.supabaseUrl, env.supabaseServiceRoleKey);
   } else {
     console.warn('[ember] Supabase is not configured — DB endpoints will respond 503. See SUPABASE_SETUP.md.');
   }
@@ -41,7 +47,7 @@ function main() {
   if (!chat) {
     console.warn('[ember] GEMINI_API_KEY is not set — Ember AI chat will respond 503 until it is configured.');
   }
-  const app = createApp({ env, repo, verifyToken, stripe, storage, chat, authAdmin });
+  const app = createApp({ env, repo, verifyToken, stripe, storage, chat, authAdmin, rateLimitBackend });
   app.listen(env.port, () => {
     console.log(`[ember] API listening on http://localhost:${env.port} (${env.nodeEnv})`);
   });

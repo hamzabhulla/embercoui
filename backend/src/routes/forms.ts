@@ -6,17 +6,12 @@ import { optionalAuth, requireAuth, type AuthedRequest } from '../lib/auth';
 import type { TokenVerifier } from '../lib/auth';
 import { toMinorUnits } from '../lib/currency';
 import { effectiveReservationFee } from '../lib/reservationFee';
+import { heldGuestsForSlot, reservationSlotFullError } from '../lib/reservationCapacity';
+import { MAX_PARTY_SIZE, OVER_PARTY_SIZE_MESSAGE } from '../lib/partySize';
 import type { StripeService } from '../lib/stripe';
 import { validateBody } from '../middleware/validate';
 import type { Repository, ReservationDTO } from '../repositories/types';
-
-const formLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  limit: 60,
-  standardHeaders: 'draft-7',
-  legacyHeaders: false,
-  message: { error: 'Too many submissions — please try again in a few minutes' },
-});
+import { createRateLimitStore, type RateLimitBackend } from '../lib/rateLimitStore';
 
 // 254 is the maximum length of a valid email address (RFC 5321) — anything
 // longer is not a real address, just payload.
@@ -48,7 +43,7 @@ export const reservationSchema = z.object({
     const [h, m] = v.split(':').map(Number);
     return h >= 0 && h <= 23 && m >= 0 && m <= 59;
   }, 'Please choose a valid time'),
-  guests: z.coerce.number().int('Guests must be a whole number').min(1, 'Guests must be at least 1').max(20, 'For parties over 20, please contact us directly'),
+  guests: z.coerce.number().int('Guests must be a whole number').min(1, 'Guests must be at least 1').max(MAX_PARTY_SIZE, OVER_PARTY_SIZE_MESSAGE),
 });
 
 const newsletterSchema = z.object({ email });
@@ -87,11 +82,13 @@ export interface ReservationCreation {
 /**
  * THE reservation creation flow — the one path every surface books
  * through (the website form, Ember AI), so a booking is a booking
- * however the guest makes it: same fee rule, same repository write,
- * same intent discipline. Failures behave exactly as the form route
- * always presented them — provider errors are rethrown AFTER the fee
- * compensation, and the one mid-flight race is an ApiError(409) —
- * callers decide how to present the failure to their guest.
+ * however the guest makes it: same fee rule, same slot-capacity rule
+ * (BE-M1 — a full slot is refused before any row exists), same
+ * repository write, same intent discipline. Failures behave exactly
+ * as the form route always presented them — provider errors are
+ * rethrown AFTER the fee compensation, and the one mid-flight race
+ * is an ApiError(409) — callers decide how to present the failure
+ * to their guest.
  */
 export async function createReservationWithFee(
   deps: { repo: Repository; stripe: StripeService | null },
@@ -118,6 +115,37 @@ export async function createReservationWithFee(
   // effective fee → the booking is exactly the pre-fee one.
   const settings = await repo.getSettings();
   const fee = effectiveReservationFee(settings, deps.stripe != null);
+  // ── Slot capacity (Mega Audit #2, BE-M1) ──────────────────────────
+  // Enforced HERE, in the shared flow, so the website form and Ember
+  // AI inherit it together. The ADMIN path never reaches this flow —
+  // it writes through repo.adminCreateReservation directly — so the
+  // owner's rule for staff bookings (the day board WARNS, nothing
+  // blocks) is untouched.
+  //
+  // Occupancy mirrors the admin day board EXACTLY (the shared
+  // predicate in lib/reservationCapacity.ts): only seat-holding
+  // bookings in this date+slot count — cancelled/completed hold
+  // nothing, and a booking whose fee is still unpaid holds nothing.
+  // The day's rows come from the repository's date-filtered admin
+  // list (the board's own source, complete/unpaged), and the
+  // capacity is the settings value already loaded above for the fee
+  // predicate — no second settings read.
+  //
+  // The INCOMING booking is counted prospectively, as the party that
+  // will hold these seats: with no fee in force it holds them the
+  // moment it is created (born 'pending', fee 'none'); with a fee in
+  // force it holds them the moment the fee is paid — which is the
+  // very next step of this flow, seconds later, in the same guest
+  // journey. Counting it now is the only honest choice: the
+  // alternative would sell a fee (or promise a table) for a slot
+  // already held full by others. Existing UNPAID fee bookings, by
+  // contrast, are NOT counted (board rule above): they may never
+  // pay, and seats they might one day claim stay open until they do.
+  const dayReservations = await repo.adminListReservations({ date: input.date });
+  const held = heldGuestsForSlot(dayReservations, input.date, input.time);
+  if (held + input.guests > settings.reservationSlotCapacity) {
+    throw reservationSlotFullError();
+  }
   // Build the repository input field by field instead of spreading
   // the caller's object: the explicit literal is a ReservationInput
   // under any TS config (z.infer types only keep their properties
@@ -187,8 +215,20 @@ export async function createReservationWithFee(
   };
 }
 
-export function formsRouter(deps: { repo: Repository | null; verifyToken: TokenVerifier; stripe?: StripeService | null; stripeConfigured?: boolean }) {
+export function formsRouter(deps: { repo: Repository | null; verifyToken: TokenVerifier; stripe?: StripeService | null; stripeConfigured?: boolean; rateLimitBackend?: RateLimitBackend | null }) {
   const router = Router();
+  // Built per router (not module-level, as this limiter used to be):
+  // its store must belong to the app instance — separate apps get
+  // separate fallback counters and share a budget ONLY through the
+  // OPS-M1 shared backend — never by accident of module scope.
+  const formLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 60,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    store: createRateLimitStore('forms:', deps.rateLimitBackend ?? null),
+    message: { error: 'Too many submissions — please try again in a few minutes' },
+  });
   const repo = () => {
     if (!deps.repo) throw notConfigured();
     return deps.repo;

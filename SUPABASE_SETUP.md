@@ -9,8 +9,21 @@ The code is complete and verified live — the demo at embercoui.vercel.app runs
 this exact stack. Going live is setup only, no code changes. Do these steps
 in order:
 
-## 1. Create the tables (2 minutes)
-Supabase Dashboard → **SQL Editor** → paste and run, in this order:
+## 1. Create the tables (one paste — the tables step itself takes about 2 minutes)
+**Primary path — the all-in-one file.** Supabase Dashboard → **SQL Editor** →
+paste the whole of `supabase/all-in-one.sql` (migrations **0001–0018 plus the
+seed**, in order) and run it **once**, on the fresh project. That is the whole
+tables step: schema, storage buckets, hardening, the shared rate-limit store
+and the starter content all land together, and the install ends at exactly
+the same schema as the step-by-step path below. (Run it once only — it is a
+fresh-install file, not an upgrade script for a project that already has
+some migrations.)
+
+**Alternative path — the individual files.** If you would rather apply (or
+later upgrade by) one migration at a time, paste and run the files below in
+this order instead of the all-in-one. Both paths end at the same schema;
+never run both on the same project.
+
 1. `supabase/migrations/0001_init.sql` — core schema: tables, checks, RLS policies, realtime on `orders`
 2. `supabase/migrations/0002_storage.sql` — `menu-images` storage bucket + policies (menu photos uploaded from the admin panel)
 3. `supabase/migrations/0003_currency.sql` — multi-currency: `currency` on the restaurant settings + a per-order currency snapshot
@@ -27,13 +40,16 @@ Supabase Dashboard → **SQL Editor** → paste and run, in this order:
 14. `supabase/migrations/0014_reservation_fee.sql` — reservation fee: owner controls on the settings (`reservation_fee_enabled`, `reservation_fee_amount`) plus a per-booking fee record on reservations (amount, currency, payment status, PaymentIntent id); fees stay off until it runs
 15. `supabase/migrations/0015_reservation_requests.sql` — customer reservation change requests (`reservation_requests`): a signed-in customer's proposed date/time/guests plus a note, handled from the admin Reservations inbox; change requests return 503 until it runs
 16. `supabase/migrations/0016_profile_authority_guard.sql` — profile authority-column guard: revokes direct client writes on `profiles.permissions` and `profiles.mfa_required` and adds a guard trigger (the same treatment 0001 gave `role`), closing a hole where a signed-in staff or manager account could grant itself full admin permissions and switch off its own two-factor requirement (a customer account gained nothing from it: that role resolves to no permissions regardless of the stored values and never reaches the admin panel)
-17. `supabase/seed.sql` — starter content: restaurant settings and the current menu (15 items)
+17. `supabase/migrations/0017_db_hardening.sql` — database hardening, three parts: (a) the profile authority guards are tightened so an `anon`/`authenticated` caller can **never** change `role`/`permissions`/`mfa_required` directly (the guards' old admin branch is gone, and table-level `UPDATE` on `profiles` is revoked from the API roles and granted back on only the non-authority columns, so the restriction actually binds — every authority change now goes through the backend, which is what writes Change History); (b) `audit_events` becomes append-only at the database level (BEFORE UPDATE / BEFORE DELETE triggers raise unconditionally, binding even the service role; `TRUNCATE` from an owner-grade channel such as the SQL Editor remains possible and is not claimed closed); (c) hot-path indexes the earlier migrations missed (reservations by user/email, reviews by approval + newest-first, profiles by role + newest-first, audit events by action/actor + newest-first)
+18. `supabase/migrations/0018_rate_limit_store.sql` — shared rate-limit store: a service-role-only `rate_limit_counters` table plus the atomic `rate_limit_hit` RPC the backend's limiters call, so per-visitor limits are shared across serverless instances instead of resetting per instance / cold start. **This migration must be run for shared limiting to activate** — until it runs, limiting is NOT off: every limiter falls back to a per-instance in-memory counter (the pre-0018 behaviour), and shared counting switches on by itself the moment the migration lands
+19. `supabase/seed.sql` — starter content: restaurant settings and the current menu (15 items)
 
 **Running behind on migrations is safe but reduced — and 0016 is not optional.**
 Until a feature's migration runs, that feature stays in its reduced-but-honest
 mode: permissions resolve to the built-in defaults, MFA enforcement is off,
 reservation fees are off, change requests are unavailable (the API returns
-503), and settings saves partially degrade — nothing fails unexpectedly and nothing fakes
+503), rate limiting uses the per-instance in-memory fallback described under
+0018 above, and settings saves partially degrade — nothing fails unexpectedly and nothing fakes
 success. Migration 0016 is different in kind: it closes a real
 privilege-escalation hole (see its entry above), so it belongs in every
 install's run list, not on a someday list.
@@ -43,9 +59,9 @@ The `hero-portfolio-video` bucket itself is created by migration **0009** above 
 Dashboard → **Storage** → **`hero-portfolio-video`** → **Upload**:
 - `hero-video.mp4` (homepage hero video) and `hero-mobile.jpg` (mobile hero photo).
 
-`src/components/Hero.tsx` loads both files from this bucket's public URLs —
-after uploading, make sure the two URLs in `Hero.tsx` point at YOUR project's
-storage URL (as shipped they carry the demo project's URL).
+`src/components/Hero.tsx` loads both files from this bucket's public URLs,
+which it derives from `VITE_SUPABASE_URL` (see §3) — no code edit is needed:
+once the env var points at YOUR project, the hero loads from YOUR bucket.
 
 ## 3. Keys (never share the service-role key publicly, never put it in the frontend)
 Dashboard → **Settings → API**:
@@ -80,7 +96,36 @@ Dashboard → **Authentication → URL Configuration**:
 - Site URL: your deployed domain
 - Redirect URLs: add `https://YOUR-DOMAIN/**` and, for local development, `http://localhost:5173/**` — Supabase matches redirect URLs exactly unless a glob is used, so a bare domain entry does **not** cover app pages. Password-reset emails link back to `/reset-password`, which the `/**` glob covers.
 
-## 6. Create the first admin
+## 6. Enable Google sign-in (required — the product ships it in three places)
+The site offers **Continue with Google** on the customer login, on
+`/admin/login`, and as the unlock proof for Google-created admin accounts at
+the screen lock. None of those buttons works until the Google provider is
+enabled in YOUR Supabase project: without this step every click fails with
+Supabase's **"Unsupported provider: provider is not enabled"**. Do it now,
+while you are in the dashboard:
+
+1. In the Supabase Dashboard → **Authentication → Providers → Google**, note
+   the **callback URL** Supabase displays on that page (it is of the form
+   `https://YOUR-PROJECT-REF.supabase.co/auth/v1/callback` — the ref differs
+   per install, so copy the one YOUR project shows).
+2. In the **Google Cloud Console** (console.cloud.google.com): select or
+   create a project → **APIs & Services → Credentials → Create Credentials →
+   OAuth client ID** → application type **Web application** (if Google asks
+   you to configure the OAuth consent screen first, do that, then return and
+   create the client). Under **Authorized redirect URIs**, add the callback
+   URL you copied in step 1 — exactly, character for character. Create, then
+   copy the **Client ID** and **Client Secret** Google shows.
+3. Back in Supabase → **Authentication → Providers → Google**: switch the
+   provider **on**, paste the Client ID and Client Secret from step 2, and
+   **Save**.
+4. Confirm §5 (Auth URL Configuration) is done for this same project:
+   **Site URL** = your deployment's origin (e.g. `https://YOUR-DOMAIN`), and
+   **Redirect URLs** include `https://YOUR-DOMAIN/**` — the `/**` glob is
+   what lets the sign-in, password-reset and admin-unlock returns land back
+   on the page they started from, including nested paths such as
+   `/admin/...`.
+
+## 7. Create the first admin
 1. Open the live site → **Sign up** with the owner's email (creates a `customer` profile automatically).
 2. Dashboard → **SQL Editor**:
    ```sql
@@ -89,7 +134,7 @@ Dashboard → **Authentication → URL Configuration**:
    ```
 3. Log in at `/admin/login` — done. More staff can be promoted later from **Admin → Staff**.
 
-## 7. Stripe webhook (for card payments)
+## 8. Stripe webhook (for card payments)
 Stripe Dashboard → **Developers → Webhooks** → Add endpoint:
 - URL: `https://YOUR-SITE-DOMAIN/api/v1/payments/webhook` (Option A: your Vercel domain — the API lives on the same domain; Option B: your Railway domain)
 - Events: `payment_intent.succeeded`, `payment_intent.payment_failed`
@@ -98,7 +143,10 @@ Stripe Dashboard → **Developers → Webhooks** → Add endpoint:
 Without Stripe keys the site still works: checkout will clearly report that
 card payments are not configured yet instead of pretending an order was paid.
 
-## 8. Verify
+## 9. Verify
 - `https://YOUR-SITE-DOMAIN/api/v1/health` → `{ "status": "ok", "supabaseConfigured": true, ... }`
 - Home page menu, LiveStatus bar, and testimonials now come from the database —
   change the wait time in **Admin → Settings** and watch the homepage bar update.
+- Click **Continue with Google** on the login page — it should go to Google's
+  account chooser, not fail with "provider is not enabled" (if it fails, §6
+  was not completed for this project).

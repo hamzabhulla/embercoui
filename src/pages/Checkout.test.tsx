@@ -252,6 +252,80 @@ describe('Checkout — card path (provider configured)', () => {
   });
 });
 
+describe('Checkout — card confirm outcomes (CF-M1)', () => {
+  // Mega Audit #2, CF-M1: a confirmPayment that returns NO Stripe
+  // error but a non-completed PaymentIntent status used to fall
+  // through silently — spinner stopped, form unchanged, the customer
+  // never told the payment did not happen. Every status now lands on
+  // an explicit outcome, mirroring the reservation fee form.
+  function mockCardApi() {
+    h.apiRequest.mockImplementation(async (path: string) => {
+      if (path === '/api/v1/orders') {
+        return {
+          ok: true, status: 201, error: null,
+          data: { order: { id: 'ord-card-00000001', subtotal: 20, deliveryFee: 0, discount: 0, total: 20, currency: 'USD' } },
+        };
+      }
+      if (path === '/api/v1/payments/create-intent') {
+        return { ok: true, status: 200, error: null, data: { clientSecret: 'pi_test_secret' } };
+      }
+      return { ok: false, status: 404, data: null, error: 'Not found' };
+    });
+  }
+
+  async function payWithStatus(status: string) {
+    mockCardApi();
+    h.confirmPayment.mockResolvedValue({ paymentIntent: { status } });
+    const { container } = setup([{ ...BURGER, quantity: 2 }]);
+    fillDetails(container);
+    fireEvent.click(screen.getByRole('button', { name: 'Place Order & Pay' }));
+    expect(await screen.findByTestId('payment-element')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Pay Now' }));
+  }
+
+  it('canceled with no Stripe error says the payment was not completed and the order is not paid — no navigation, form still usable', async () => {
+    await payWithStatus('canceled');
+
+    expect(await screen.findByText('That payment was not completed, so your order is not paid. You can try again or use another card.')).toBeTruthy();
+    expect(screen.queryByText(/TRACKING ORDER/)).toBeNull();
+    expect(screen.getByTestId('payment-element')).toBeTruthy();
+    const payButton = screen.getByRole('button', { name: 'Pay Now' }) as HTMLButtonElement;
+    expect(payButton.disabled).toBe(false);
+
+    // Usable means a second attempt really can complete: the same
+    // form, retried with a succeeding confirm, lands on tracking.
+    h.confirmPayment.mockResolvedValue({ paymentIntent: { status: 'succeeded' } });
+    fireEvent.click(payButton);
+    expect(await screen.findByText('TRACKING ORDER ord-card-00000001')).toBeTruthy();
+    expect(h.confirmPayment).toHaveBeenCalledTimes(2);
+  });
+
+  it('requires_action (no redirect) lands on the same explicit not-completed outcome', async () => {
+    await payWithStatus('requires_action');
+
+    expect(await screen.findByText('That payment was not completed, so your order is not paid. You can try again or use another card.')).toBeTruthy();
+    expect(screen.queryByText(/TRACKING ORDER/)).toBeNull();
+    expect(screen.getByTestId('payment-element')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Pay Now' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('requires_payment_method lands on the same explicit not-completed outcome', async () => {
+    await payWithStatus('requires_payment_method');
+
+    expect(await screen.findByText('That payment was not completed, so your order is not paid. You can try again or use another card.')).toBeTruthy();
+    expect(screen.queryByText(/TRACKING ORDER/)).toBeNull();
+    expect(screen.getByTestId('payment-element')).toBeTruthy();
+  });
+
+  it('processing completes the step to tracking (the fee-form nuance) — never a not-completed error', async () => {
+    await payWithStatus('processing');
+
+    expect(await screen.findByText('TRACKING ORDER ord-card-00000001')).toBeTruthy();
+    expect(screen.queryByText(/That payment was not completed/)).toBeNull();
+    expect(h.confirmPayment).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('Checkout — empty cart guard', () => {
   it('shows the empty state and no checkout form', () => {
     setup();
