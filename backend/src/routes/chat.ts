@@ -1,14 +1,17 @@
 import { Router, type Request } from 'express';
 import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
-import type { OrderDTO, ProfileDTO, Repository } from '../repositories/types';
+import type { OrderDTO, ProfileDTO, Repository, ReservationDTO } from '../repositories/types';
 import { ApiError, notConfigured } from '../lib/errors';
 import type { TokenVerifier } from '../lib/auth';
 import {
-  buildChatSystemPrompt, resolveCartActions, resolveCartSnapshot, summarizeOrderForChat, summarizeReservationDay,
+  bookingConfirmationNote, bookingDetailsNeededNote, bookingFeePendingNote, bookingUnavailableNote,
+  buildChatSystemPrompt, extractBookingMarker, resolveCartActions, resolveCartSnapshot, summarizeOrderForChat, summarizeReservationDay,
   type ChatMessage, type ChatOrderSummary, type ChatService, type ReservationDayAvailability,
 } from '../lib/chat';
 import { effectiveReservationFee } from '../lib/reservationFee';
+import type { StripeService } from '../lib/stripe';
+import { createReservationWithFee, reservationSchema } from './forms';
 import { validateBody } from '../middleware/validate';
 
 const chatBodySchema = z.object({
@@ -171,7 +174,82 @@ async function fetchFocusOrder(
   }
 }
 
-export function chatRouter(deps: { repo: Repository | null; chat: ChatService | null; verifyToken?: TokenVerifier; rateLimitMax?: number; stripeConfigured?: boolean }) {
+/** What executing a chat booking produced: the server-written note, and the created booking's summary (null when nothing was created). */
+interface ChatBookingOutcome {
+  note: string;
+  booking: {
+    id: string;
+    date: string;
+    time: string;
+    guests: number;
+    status: ReservationDTO['status'];
+    feePaymentStatus: ReservationDTO['feePaymentStatus'];
+  } | null;
+}
+
+/**
+ * Executes ONE booking the model requested in its reply: the fields
+ * are validated against the ONE reservation schema (routes/forms.ts)
+ * and created through the ONE creation flow (createReservationWithFee)
+ * — a chat booking is a website booking in every rule that touches it:
+ * same validation, same fee semantics, same repository write, source
+ * 'website'. The outcome is always a server-written note — the
+ * confirmation (or the fee still owed) on success, the honest failure
+ * wording otherwise. A booking attempt NEVER fails the chat itself.
+ */
+async function executeChatBooking(
+  deps: { repo: Repository; stripe: StripeService | null },
+  userId: string | null,
+  request: { date: string; time: string; guests: string; name: string; phone: string; email: string },
+): Promise<ChatBookingOutcome> {
+  const parsed = reservationSchema.safeParse({
+    name: request.name,
+    email: request.email,
+    phone: request.phone,
+    date: request.date,
+    time: request.time,
+    guests: request.guests,
+  });
+  if (!parsed.success) {
+    return {
+      note: bookingDetailsNeededNote(parsed.error.issues.map((i) => String(i.path[0] ?? ''))),
+      booking: null,
+    };
+  }
+  try {
+    const created = await createReservationWithFee(
+      { repo: deps.repo, stripe: deps.stripe },
+      {
+        userId,
+        name: parsed.data.name,
+        email: parsed.data.email,
+        phone: parsed.data.phone,
+        date: parsed.data.date,
+        time: parsed.data.time,
+        guests: parsed.data.guests,
+      },
+    );
+    const r = created.reservation;
+    return {
+      note: created.feePayment
+        ? bookingFeePendingNote(r, { amount: created.feePayment.amount, currency: created.feePayment.currency })
+        : bookingConfirmationNote(r),
+      booking: {
+        id: r.id, date: r.date, time: r.time, guests: r.guests,
+        status: r.status, feePaymentStatus: r.feePaymentStatus,
+      },
+    };
+  } catch (err) {
+    // The booking could not be completed (provider, store, or the
+    // creation flow's 409 race): the guest hears the honest note, the
+    // operator hears the cause — the same logged-not-swallowed
+    // posture as the fee compensation.
+    console.error('[ember] chat booking failed:', err instanceof Error ? err.message : err);
+    return { note: bookingUnavailableNote(), booking: null };
+  }
+}
+
+export function chatRouter(deps: { repo: Repository | null; chat: ChatService | null; verifyToken?: TokenVerifier; rateLimitMax?: number; stripeConfigured?: boolean; stripe?: StripeService | null }) {
   const router = Router();
   // Stricter than the global limiter: every message spends API money.
   const limiter = rateLimit({
@@ -239,11 +317,37 @@ export function chatRouter(deps: { repo: Repository | null; chat: ChatService | 
         }),
         messages: cleanMessages,
       });
-      const { text, actions } = resolveCartActions(raw, items);
-      const reply = text || (actions.length
+      // The BOOK marker is extracted from the model's reply BEFORE
+      // the cart actions resolve, so no booking marker — whole or
+      // fragmentary — can ever ride through into the visible text.
+      const bookingExtract = extractBookingMarker(raw);
+      const { text, actions } = resolveCartActions(bookingExtract.text, items);
+      let bookingNote: string | null = null;
+      let booking: ChatBookingOutcome['booking'] = null;
+      if (bookingExtract.booking) {
+        const outcome = await executeChatBooking(
+          { repo: deps.repo, stripe: deps.stripe ?? null },
+          chatUser?.id ?? null,
+          bookingExtract.booking,
+        );
+        bookingNote = outcome.note;
+        booking = outcome.booking;
+      } else if (bookingExtract.markerSeen) {
+        // The model attempted a booking whose details never arrived
+        // whole: nothing was created, and the guest hears that from
+        // the server — never the model's own implication that a
+        // table exists.
+        bookingNote = bookingDetailsNeededNote([]);
+      }
+      let reply = text || (actions.length
         ? `Added to your cart: ${actions.map((a) => `${a.quantity} × ${a.name}`).join(', ')}. Open the cart to review and check out whenever you are ready.`
         : 'That one slipped past me — say it another way and I will pick it right up.');
-      res.json({ reply, actions });
+      if (bookingNote) {
+        // The server's note is the factual tail of the reply; when
+        // the model wrote nothing of its own, the note stands alone.
+        reply = text || actions.length ? `${reply}\n\n${bookingNote}` : bookingNote;
+      }
+      res.json({ reply, actions, booking });
     } catch (err) {
       next(err);
     }

@@ -1,9 +1,10 @@
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 import { createApp } from '../src/app';
-import { summarizeOrderForChat, type ChatMessage, type ChatService } from '../src/lib/chat';
-import type { OrderDTO, ReservationDTO } from '../src/repositories/types';
+import { extractBookingMarker, summarizeOrderForChat, type ChatMessage, type ChatService } from '../src/lib/chat';
+import type { OrderDTO, PublicSettingsDTO, ReservationDTO } from '../src/repositories/types';
 import { FakeRepository, dateFromToday, fakeVerifyToken, testEnv } from './fakeRepository';
+import { FakeStripeService } from './fakeStripe';
 
 class FakeChatService implements ChatService {
   calls: { system: string; messages: ChatMessage[] }[] = [];
@@ -609,5 +610,333 @@ describe('POST /api/v1/chat — concierge tone pins', () => {
     // The concierge framing that replaced it:
     expect(system).toContain('concierge');
     expect(system).toContain('Lead with what is true');
+  });
+});
+
+// ── Direct reservation booking: the concierge books the table itself ──
+// The model asks with a [[BOOK: …]] marker; the SERVER validates
+// against the one reservation schema, creates through the one
+// creation flow, and writes the only confirmation a guest ever sees.
+const BOOK_FIELDS = {
+  date: dateFromToday(7), time: '19:00', guests: '4',
+  name: 'Ayesha Khan', phone: '+92 300 1234567', email: 'ayesha@example.com',
+};
+const bookMarker = (patch: Partial<typeof BOOK_FIELDS> = {}) => {
+  const f = { ...BOOK_FIELDS, ...patch };
+  return `[[BOOK: ${f.date} | ${f.time} | ${f.guests} | ${f.name} | ${f.phone} | ${f.email}]]`;
+};
+const datePhrase = (iso: string) => new Intl.DateTimeFormat('en-GB', {
+  weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC',
+}).format(new Date(`${iso}T00:00:00Z`));
+
+function freshBookingApp(opts: { repo?: FakeRepository; stripe?: FakeStripeService | null } = {}) {
+  const repo = opts.repo ?? new FakeRepository();
+  const fakeChat = new FakeChatService();
+  const stripe = opts.stripe ?? null;
+  const app = createApp({
+    env: testEnv({ stripeConfigured: stripe != null, stripeSecretKey: stripe ? 'sk_test_fake' : null }),
+    repo, verifyToken: fakeVerifyToken, chat: fakeChat, stripe,
+  });
+  return { repo, chat: fakeChat, app, stripe };
+}
+
+const askBooking = (
+  target: ReturnType<typeof createApp>,
+  fakeChat: FakeChatService,
+  modelReply: string,
+  token?: string,
+) => {
+  fakeChat.nextReply = modelReply;
+  const r = request(target).post('/api/v1/chat');
+  if (token) r.set('Authorization', `Bearer ${token}`);
+  return r.send({ messages: [{ role: 'user', content: 'Yes please, go ahead' }] });
+};
+
+describe('extractBookingMarker', () => {
+  it('parses a complete marker and strips it from the visible text', () => {
+    const out = extractBookingMarker(`Arranging it now. ${bookMarker()}`);
+    expect(out.markerSeen).toBe(true);
+    expect(out.text).toBe('Arranging it now.');
+    expect(out.booking).toEqual({
+      date: BOOK_FIELDS.date, time: '19:00', guests: '4',
+      name: 'Ayesha Khan', phone: '+92 300 1234567', email: 'ayesha@example.com',
+    });
+  });
+
+  it('is case-insensitive and trims the fields', () => {
+    const out = extractBookingMarker(`[[book:  ${BOOK_FIELDS.date}  | 19:00 | 2 |  Bo Lee  | 1234567 | bo@example.com ]]`);
+    expect(out.booking).toEqual({
+      date: BOOK_FIELDS.date, time: '19:00', guests: '2', name: 'Bo Lee', phone: '1234567', email: 'bo@example.com',
+    });
+  });
+
+  it('honours only the first complete marker; later markers are stripped, never parsed', () => {
+    const out = extractBookingMarker(`${bookMarker()} ${bookMarker({ name: 'Second Guest' })}`);
+    expect(out.booking?.name).toBe('Ayesha Khan');
+    expect(out.text).not.toContain('[[');
+  });
+
+  it('a marker with missing fields yields no booking — but the attempt is seen', () => {
+    const out = extractBookingMarker(`One moment. [[BOOK: ${BOOK_FIELDS.date} | 19:00 | 4]]`);
+    expect(out.booking).toBeNull();
+    expect(out.markerSeen).toBe(true);
+    expect(out.text).toBe('One moment.');
+  });
+
+  it('a marker with a blank field yields no booking', () => {
+    const out = extractBookingMarker(`[[BOOK: ${BOOK_FIELDS.date} | 19:00 | 4 |  | 1234567 | a@b.co]]`);
+    expect(out.booking).toBeNull();
+    expect(out.markerSeen).toBe(true);
+  });
+
+  it('a fragmentary marker (never closed) is seen and removed — it never reaches the guest', () => {
+    const out = extractBookingMarker(`Certainly. [[BOOK: ${BOOK_FIELDS.date} | 19:00 | 4 | Ayesha Khan`);
+    expect(out.booking).toBeNull();
+    expect(out.markerSeen).toBe(true);
+    expect(out.text).toBe('Certainly.');
+  });
+
+  it('no marker: nothing seen, text untouched', () => {
+    const out = extractBookingMarker('The fondant is a lovely way to finish.');
+    expect(out).toEqual({ text: 'The fondant is a lovely way to finish.', booking: null, markerSeen: false });
+  });
+});
+
+describe('POST /api/v1/chat — direct reservation booking', () => {
+  it('creates the reservation through the shared flow and appends the exact server confirmation', async () => {
+    const { repo, chat: fakeChat, app: target } = freshBookingApp();
+    const res = await askBooking(target, fakeChat, `With pleasure — arranging that for you now. ${bookMarker()}`);
+    expect(res.status).toBe(200);
+    expect(repo.reservations).toHaveLength(1);
+    const created = repo.reservations[0];
+    // The created row carries the marker's fields EXACTLY as the
+    // website form's row would: same source, same born-pending
+    // status, no fee.
+    expect(created).toMatchObject({
+      userId: null, name: 'Ayesha Khan', email: 'ayesha@example.com', phone: '+92 300 1234567',
+      date: BOOK_FIELDS.date, time: '19:00', guests: 4,
+      source: 'website', status: 'pending', feeAmount: null, feePaymentStatus: 'none',
+    });
+    const note = `It is done — a table for four on ${datePhrase(BOOK_FIELDS.date)} at 7:00 PM, under the name Ayesha Khan is reserved, and your reference is ${created.id.slice(-8)}. We look forward to welcoming you.`;
+    expect(res.body.reply).toBe(`With pleasure — arranging that for you now.\n\n${note}`);
+    expect(res.body.reply).not.toContain('[[');
+    expect(res.body.booking).toEqual({
+      id: created.id, date: BOOK_FIELDS.date, time: '19:00', guests: 4, status: 'pending', feePaymentStatus: 'none',
+    });
+    // Tone pin: the confirmation is a concierge's assurance, never an
+    // error message or a form read-out.
+    expect(note).toContain('We look forward to welcoming you');
+    expect(note).not.toMatch(/\b(error|invalid|failed|required|please provide)\b/i);
+  });
+
+  it('the confirmation is server-generated from the created record — a reference the model invents never stands', async () => {
+    const { repo, chat: fakeChat, app: target } = freshBookingApp();
+    const res = await askBooking(target, fakeChat, `Wonderful — you are all booked, your reference is ZZZ999! ${bookMarker()}`);
+    expect(res.status).toBe(200);
+    const created = repo.reservations[0];
+    const note = res.body.reply.split('\n\n').pop() as string;
+    expect(note).toContain(`your reference is ${created.id.slice(-8)}`);
+    expect(note).not.toContain('ZZZ999');
+    expect(res.body.booking.id).toBe(created.id);
+  });
+
+  it('links the booking to the account when the visitor is signed in', async () => {
+    const { repo, chat: fakeChat, app: target } = freshBookingApp();
+    const res = await askBooking(target, fakeChat, `Arranging it now. ${bookMarker()}`, 'token-user');
+    expect(res.status).toBe(200);
+    expect(repo.reservations[0].userId).toBe('user-1');
+  });
+
+  it('a past date books nothing and the note names the date, gracefully', async () => {
+    const { repo, chat: fakeChat, app: target } = freshBookingApp();
+    const res = await askBooking(target, fakeChat, `Arranging it now. ${bookMarker({ date: dateFromToday(-1) })}`);
+    expect(res.status).toBe(200);
+    expect(repo.reservations).toHaveLength(0);
+    expect(res.body.booking).toBeNull();
+    expect(res.body.reply).toContain('My apologies');
+    expect(res.body.reply).toContain('no table has been reserved');
+    expect(res.body.reply).toContain('the date needs to be today or a day still to come');
+    expect(res.body.reply).not.toContain('[[');
+  });
+
+  it('an incomplete phone number books nothing and the note names the phone', async () => {
+    const { repo, chat: fakeChat, app: target } = freshBookingApp();
+    const res = await askBooking(target, fakeChat, `Arranging it now. ${bookMarker({ phone: '123' })}`);
+    expect(res.status).toBe(200);
+    expect(repo.reservations).toHaveLength(0);
+    expect(res.body.reply).toContain('the phone number seems incomplete');
+  });
+
+  it('a malformed email books nothing and the note names the email', async () => {
+    const { repo, chat: fakeChat, app: target } = freshBookingApp();
+    const res = await askBooking(target, fakeChat, `Arranging it now. ${bookMarker({ email: 'ayesha@' })}`);
+    expect(res.status).toBe(200);
+    expect(repo.reservations).toHaveLength(0);
+    expect(res.body.reply).toContain('the email address seems incomplete');
+  });
+
+  it('an impossible time books nothing and the note names the time', async () => {
+    const { repo, chat: fakeChat, app: target } = freshBookingApp();
+    const res = await askBooking(target, fakeChat, `Arranging it now. ${bookMarker({ time: '25:00' })}`);
+    expect(res.status).toBe(200);
+    expect(repo.reservations).toHaveLength(0);
+    expect(res.body.reply).toContain('the time needs to be one of our seating times');
+  });
+
+  it('a party over twenty books nothing and the note names the party size', async () => {
+    const { repo, chat: fakeChat, app: target } = freshBookingApp();
+    const res = await askBooking(target, fakeChat, `Arranging it now. ${bookMarker({ guests: '25' })}`);
+    expect(res.status).toBe(200);
+    expect(repo.reservations).toHaveLength(0);
+    expect(res.body.reply).toContain('the party size needs to be between one and twenty');
+  });
+
+  it('an incomplete marker books nothing and the note asks for the details once more', async () => {
+    const { repo, chat: fakeChat, app: target } = freshBookingApp();
+    const res = await askBooking(target, fakeChat, `Of course. [[BOOK: ${BOOK_FIELDS.date} | 19:00]]`);
+    expect(res.status).toBe(200);
+    expect(repo.reservations).toHaveLength(0);
+    expect(res.body.booking).toBeNull();
+    expect(res.body.reply).toContain('the booking details reached me incomplete');
+    expect(res.body.reply).toContain('no table has been reserved');
+    expect(res.body.reply).not.toContain('[[');
+  });
+
+  it('a fragmentary marker books nothing, leaks nothing, and is answered honestly', async () => {
+    const { repo, chat: fakeChat, app: target } = freshBookingApp();
+    const res = await askBooking(target, fakeChat, `Certainly — one moment. [[BOOK: ${BOOK_FIELDS.date} | 19:00 | 4 | Ayesha Khan`);
+    expect(res.status).toBe(200);
+    expect(repo.reservations).toHaveLength(0);
+    expect(res.body.reply).toContain('Certainly — one moment.');
+    expect(res.body.reply).toContain('reached me incomplete');
+    expect(res.body.reply).not.toContain('[[');
+    expect(res.body.reply).not.toContain('BOOK');
+  });
+
+  it('a reply carrying both an ADD and a BOOK marker performs both', async () => {
+    const { repo, chat: fakeChat, app: target } = freshBookingApp();
+    const res = await askBooking(target, fakeChat, `With pleasure — the classic to start, and your table to follow. [[ADD: Ember Classic x1]] ${bookMarker()}`);
+    expect(res.status).toBe(200);
+    expect(res.body.actions).toEqual([{ menuItemId: 1, name: 'Ember Classic', quantity: 1 }]);
+    expect(repo.reservations).toHaveLength(1);
+    expect(res.body.reply).toContain('It is done — a table for four');
+    expect(res.body.reply).not.toContain('[[');
+  });
+
+  it('when creation itself fails, the chat still answers 200 — with the honest note, never a claim', async () => {
+    class BrokenCreateRepo extends FakeRepository {
+      override async createReservation(): Promise<never> {
+        throw new Error('reservations store unavailable');
+      }
+    }
+    const { chat: fakeChat, app: target } = freshBookingApp({ repo: new BrokenCreateRepo() });
+    const res = await askBooking(target, fakeChat, `Arranging it now. ${bookMarker()}`);
+    expect(res.status).toBe(200);
+    expect(res.body.booking).toBeNull();
+    expect(res.body.reply).toContain('something on our side kept the booking from completing just now, and your table is not held');
+    expect(res.body.reply).not.toContain('is reserved');
+  });
+
+  it('a chat with no booking marker behaves exactly as before — booking stays null', async () => {
+    const { repo, chat: fakeChat, app: target } = freshBookingApp();
+    const res = await askBooking(target, fakeChat, 'The Ember Classic is an excellent choice.');
+    expect(res.status).toBe(200);
+    expect(res.body.booking).toBeNull();
+    expect(repo.reservations).toHaveLength(0);
+  });
+});
+
+describe('POST /api/v1/chat — booking with a fee in force', () => {
+  const feeRepo = () => {
+    const repo = new FakeRepository();
+    repo.settings = { ...(repo.settings as PublicSettingsDTO), reservationFeeEnabled: true, reservationFeeAmount: 5 };
+    return repo;
+  };
+
+  it('creates the fee booking exactly as the form does — intent minted and stored — and the note keeps the booking unconfirmed until paid', async () => {
+    const stripe = new FakeStripeService();
+    const { repo, chat: fakeChat, app: target } = freshBookingApp({ repo: feeRepo(), stripe });
+    const res = await askBooking(target, fakeChat, `Arranging that for you now. ${bookMarker()}`);
+    expect(res.status).toBe(200);
+    expect(repo.reservations).toHaveLength(1);
+    const created = repo.reservations[0];
+    expect(created).toMatchObject({ feeAmount: 5, feeCurrency: 'USD', feePaymentStatus: 'pending', status: 'pending' });
+    // The intent discipline is the form's: idempotency-keyed by the
+    // reservation, the fee amount in minor units, stored against it.
+    const intentId = repo.reservationFeeIntentIds.get(created.id);
+    expect(intentId).toBeTruthy();
+    const intent = stripe.intents.get(intentId as string);
+    expect(intent).toMatchObject({
+      amountCents: 500, currency: 'usd', idempotencyKey: `reservation-fee-${created.id}`,
+      metadata: { type: 'reservation_fee', reservationId: created.id },
+    });
+    const note = `Your booking is made — a table for four on ${datePhrase(BOOK_FIELDS.date)} at 7:00 PM, under the name Ayesha Khan. To hold the table, the booking fee of USD 5.00 is payable by card: your table is held, and your booking confirmed, the moment it is paid — until then, it is not yet confirmed. Your reference is ${created.id.slice(-8)}.`;
+    expect(res.body.reply).toBe(`Arranging that for you now.\n\n${note}`);
+    // The honesty pins: amount and currency are stated, the booking
+    // is NOT called reserved or confirmed, and the register never
+    // drops to error-message language.
+    expect(note).toContain('USD 5.00');
+    expect(note).toContain('not yet confirmed');
+    expect(note).not.toContain('is reserved');
+    expect(note).not.toMatch(/\b(error|invalid|failed|required|please provide)\b/i);
+    expect(res.body.booking).toMatchObject({ id: created.id, feePaymentStatus: 'pending' });
+  });
+
+  it('fee switched on but NO card provider connected: the booking is free — the effective-fee rule, through chat', async () => {
+    const { repo, chat: fakeChat, app: target } = freshBookingApp({ repo: feeRepo(), stripe: null });
+    const res = await askBooking(target, fakeChat, `Arranging that for you now. ${bookMarker()}`);
+    expect(res.status).toBe(200);
+    const created = repo.reservations[0];
+    expect(created).toMatchObject({ feeAmount: null, feePaymentStatus: 'none' });
+    expect(res.body.reply).toContain('is reserved, and your reference is');
+    expect(res.body.reply).not.toContain('not yet confirmed');
+  });
+
+  it('card provider connected but the fee switched off: the booking is free', async () => {
+    const stripe = new FakeStripeService();
+    const { repo, chat: fakeChat, app: target } = freshBookingApp({ stripe });
+    const res = await askBooking(target, fakeChat, `Arranging that for you now. ${bookMarker()}`);
+    expect(res.status).toBe(200);
+    expect(repo.reservations[0]).toMatchObject({ feeAmount: null, feePaymentStatus: 'none' });
+    expect(stripe.intents.size).toBe(0);
+    expect(res.body.reply).toContain('is reserved, and your reference is');
+  });
+});
+
+describe('POST /api/v1/chat — the booking dialogue the prompt teaches', () => {
+  it('teaches the maître d\' flow: collect gracefully, read back, explicit yes, then the marker', async () => {
+    const { app: target, chat: fakeChat } = freshChatApp();
+    const res = await askWith(target, {});
+    expect(res.status).toBe(200);
+    const system = lastSystem(fakeChat);
+    // The booking is taken HERE, never deferred to a page or a phone call.
+    expect(system).toContain('never send a guest to another page or to the phone merely to book');
+    expect(system).not.toContain('You do not take the booking yourself');
+    expect(system).not.toContain('guide them to the Reservations page as the easy way to secure it');
+    // Gracious collection, one detail at a time — not a form read aloud.
+    expect(system).toContain('It would be my pleasure');
+    expect(system).toContain('one graceful question at a time');
+    expect(system).not.toContain('Please provide your');
+    // Read-back, explicit confirmation, then the exact marker format.
+    expect(system).toContain('Your table for four, tomorrow at seven, under the name Ayesha Khan');
+    expect(system).toContain('Only when the guest has clearly said yes');
+    expect(system).toContain('[[BOOK: YYYY-MM-DD | HH:MM | guests | Full Name | phone | email]]');
+    // The model never confirms in its own words — the system's note does.
+    expect(system).toContain('never write in your own text that a table is booked, held or confirmed');
+    // Grounding the model needs to propose valid bookings: the
+    // seating times the website offers, and the ISO dates.
+    expect(system).toContain('Reservations are offered at these times: 12:00, 12:30');
+    expect(system).toContain(`write today as ${dateFromToday(0)} and tomorrow as ${dateFromToday(1)}`);
+  });
+
+  it('with a fee in force, the prompt makes the concierge name it graciously before booking', async () => {
+    const repo = new FakeRepository();
+    repo.settings = { ...(repo.settings as PublicSettingsDTO), reservationFeeEnabled: true, reservationFeeAmount: 5 };
+    const { app: target, chat: fakeChat } = freshBookingApp({ repo, stripe: new FakeStripeService() });
+    const res = await askWith(target, {});
+    expect(res.status).toBe(200);
+    const system = lastSystem(fakeChat);
+    expect(system).toContain('A booking fee of USD 5.00 applies to reservations: mention it graciously before you take the booking');
+    expect(system).toContain('until that fee is paid, never call the table held or the booking confirmed');
   });
 });

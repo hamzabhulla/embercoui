@@ -1,5 +1,6 @@
 import { ApiError } from './errors';
 import { currencyExponent, fromMinorUnits, toMinorUnits } from './currency';
+import type { ReservationFee } from './reservationFee';
 import type {
   MenuItemDTO, OrderDTO, OrderStatus, PaymentStatus, PublicSettingsDTO, ReservationDTO,
 } from '../repositories/types';
@@ -162,6 +163,8 @@ export function resolveCartSnapshot(
 export interface ReservationDayAvailability {
   /** "Today, Thursday 22 October" */
   label: string;
+  /** The same day as YYYY-MM-DD — the form a [[BOOK: …]] marker must carry. */
+  dateISO: string;
   capacity: number;
   /** Guests already held per slot (pending + confirmed parties). */
   slots: { time: string; guests: number }[];
@@ -203,6 +206,7 @@ export function summarizeReservationDay(
   }).format(new Date(`${dateISO}T00:00:00Z`));
   return {
     label: `${dayWord}, ${weekday}`,
+    dateISO,
     capacity,
     slots: [...bySlot.entries()]
       .sort(([a], [b]) => (a < b ? -1 : 1))
@@ -350,6 +354,10 @@ export function buildChatSystemPrompt(
   const availabilitySection: string[] = [];
   if (context.availability) {
     availabilitySection.push('', 'Table availability (seats already held by bookings we have):');
+    const [firstDay, secondDay] = context.availability;
+    if (firstDay && secondDay) {
+      availabilitySection.push(`- In a booking, write today as ${firstDay.dateISO} and tomorrow as ${secondDay.dateISO}.`);
+    }
     const anyBooked = context.availability.some((d) => d.slots.length > 0);
     if (!anyBooked) {
       availabilitySection.push('- No reservations yet for today or tomorrow — every time is open.');
@@ -412,6 +420,25 @@ export function buildChatSystemPrompt(
     );
   }
 
+  // Taking the booking: the concierge books the table itself, in the
+  // chat, through the same creation flow as the website form — the
+  // [[BOOK: …]] marker below is its only instrument, and the system's
+  // server-written note beneath the reply is the only confirmation a
+  // guest is ever given. The register is a maître d's, never a form's:
+  // one graceful question at a time, the details read back with
+  // pleasure, and an explicit yes before anything is arranged.
+  const bookingRules: string[] = [
+    '- Taking a reservation: you can book a table for the guest yourself, right here in this chat — never send a guest to another page or to the phone merely to book. When a guest wishes to reserve, gather what you need the way a maître d\' would — one graceful question at a time, never a list of demands: "It would be my pleasure — for which evening?" … the day, then the time (offer the seating times from the facts rather than making the guest invent one), then how many guests, the name for the booking, a phone number, and an email for the confirmation.',
+    context.availability
+      ? '- For today and tomorrow, read the table availability below before you offer a time, and quote it exactly; for any later day, take the guest\'s date and offer the seating times.'
+      : '- Offer times from the opening hours and seating times in the facts; the system confirms what can be seated when it makes the booking.',
+    '- When you have everything, present it back in one gracious line — "Your table for four, tomorrow at seven, under the name Ayesha Khan" — and ask if you may go ahead. Only when the guest has clearly said yes, end your reply with a marker line in EXACTLY this format: [[BOOK: YYYY-MM-DD | HH:MM | guests | Full Name | phone | email]] — the date in ISO form (the availability notes above give today\'s and tomorrow\'s ISO dates; count forward with care for later days), the time in 24-hour form, the party size as a plain number. In your own words say only that you are arranging it — the system adds the true confirmation beneath your reply, so never write in your own text that a table is booked, held or confirmed, and never invent a booking reference.',
+    fee
+      ? `- A booking fee of ${price(fee.amount)} applies to reservations: mention it graciously before you take the booking, so it never arrives as a surprise. The fee is the guest's to pay by card — you never handle it — and the system's note beneath your reply will state exactly what remains to be paid; until that fee is paid, never call the table held or the booking confirmed in your own words.`
+      : null,
+    '- If a booking could not be completed, the system\'s note beneath your reply says what is needed — follow its lead with grace and ask for that one detail, rather than repeating the whole list.',
+  ].filter((l): l is string => l !== null);
+
   return [
     `You are Ember AI, the concierge of ${settings.restaurantName} — the restaurant's own host, in chat form. Speak the way excellent staff do at a fine table: warm, poised, quietly confident — never salesy, never robotic. Keep answers short: one to three short paragraphs of plain text, no markdown headings. Speak of the restaurant as "we", and skip corporate filler ("for assistance", "do not hesitate").`,
     '',
@@ -433,9 +460,7 @@ export function buildChatSystemPrompt(
     context.cart
       ? '- The visitor\'s cart is snapshotted below, exactly as it stands at this moment: answer anything about it — what is in it, the total, the priciest dish — straight from the snapshot, in your own words. Dishes can still be added with the cart marker above.'
       : '- If the visitor asks about their cart, invite them warmly to open the cart drawer at the bottom-right of the page — every line and the total are shown there — and offer to add anything they would like from the menu.',
-    context.availability
-      ? '- Answer questions about busy or free times from the table availability below, quoting it exactly. You do not take the booking yourself: to lock a table in, guide them to the Reservations page as the easy way to secure it, or give the phone number.'
-      : '- For a table, guide the visitor warmly to the Reservations page — the easy way to lock it in — or give the phone number. You do not take the booking yourself.',
+    ...bookingRules,
     recentOrders
       ? '- The visitor\'s most recent orders are listed below from our own records. Answer "what did my order come to", "where is my order" and the like straight from that list: quote each total exactly as shown, in that order\'s own currency; describe the status in the plain words given; name an order by its short ref when you mention it. Never invent a status, a total, an arrival time or an order that is not listed.'
       : null,
@@ -453,6 +478,7 @@ export function buildChatSystemPrompt(
     'Restaurant facts:',
     `- Kitchen right now: ${settings.kitchenOpen ? `open — typical wait ${settings.waitMin}–${settings.waitMax} minutes` : 'closed for orders right now (menu questions are still welcome)'}`,
     feeFactLine,
+    `- Reservations are offered at these times: ${RESERVATION_TIME_SLOTS.join(', ')}`,
     settings.phone ? `- Phone: ${settings.phone}` : null,
     settings.email ? `- Email: ${settings.email}` : null,
     settings.address ? `- Address: ${settings.address}` : null,
@@ -473,6 +499,19 @@ const ADD_MARKER = /\[\[ADD:([^\]]+)\]\]/gi;
 function normalizeName(s: string): string {
   return s.toLowerCase().replace(/\s+/g, ' ').trim();
 }
+
+/**
+ * The seating times the website's booking form offers (TIME_SLOTS in
+ * src/components/Reservation.tsx) — the concierge offers the same
+ * times, so a guest hears one set of seatings wherever they book.
+ * The reservation schema remains the only validator: it accepts any
+ * well-formed time, exactly as it does for the form.
+ */
+export const RESERVATION_TIME_SLOTS = [
+  '12:00', '12:30', '13:00', '13:30',
+  '17:00', '17:30', '18:00', '18:30', '19:00', '19:30',
+  '20:00', '20:30', '21:00', '21:30',
+] as const;
 
 /**
  * Extracts [[ADD: …]] markers from the model's reply, resolves dish names
@@ -499,4 +538,157 @@ export function resolveCartActions(replyText: string, items: MenuItemDTO[]): { t
     .replace(/\n{3,}/g, '\n\n')
     .trim();
   return { text, actions };
+}
+
+/**
+ * A booking the model asked the system to make, parsed from its
+ * [[BOOK: …]] marker — the six details exactly as the model wrote
+ * them, still unvalidated. The chat route validates them against the
+ * one reservation schema (routes/forms.ts) before anything is
+ * created; parsing here never trusts a field.
+ */
+export interface ChatBookingRequest {
+  date: string;
+  time: string;
+  /** Party size as written — the schema coerces and bounds it. */
+  guests: string;
+  name: string;
+  phone: string;
+  email: string;
+}
+
+const BOOK_MARKER = /\[\[BOOK:([^\]]+)\]\]/gi;
+// A fragmentary marker — cut off, never closed — must be recognised
+// (and removed) too: the guest must never see marker debris, and the
+// route must know a booking was attempted so it can answer honestly.
+const BOOK_FRAGMENT = /\[\[BOOK[^\]]*\]?/gi;
+
+/**
+ * Extracts the [[BOOK: date | time | guests | name | phone | email]]
+ * marker from the model's reply — the booking twin of
+ * resolveCartActions. Only the FIRST complete marker becomes a
+ * booking request (one booking per reply); every marker or fragment
+ * is stripped from the visible text whatever its fate. A marker whose
+ * fields are missing or blank yields no request, but `markerSeen`
+ * still reports the attempt, so the route answers with the honest
+ * note instead of letting the model's prose imply a booking exists.
+ */
+export function extractBookingMarker(replyText: string): { text: string; booking: ChatBookingRequest | null; markerSeen: boolean } {
+  let booking: ChatBookingRequest | null = null;
+  let markerSeen = false;
+  const text = replyText
+    .replace(BOOK_MARKER, (_match, body: string) => {
+      markerSeen = true;
+      if (booking) return '';
+      const parts = body.split('|').map((p) => p.trim());
+      if (parts.length === 6 && parts.every((p) => p.length > 0)) {
+        booking = {
+          date: parts[0], time: parts[1], guests: parts[2],
+          name: parts[3], phone: parts[4], email: parts[5],
+        };
+      }
+      return '';
+    })
+    .replace(BOOK_FRAGMENT, () => {
+      markerSeen = true;
+      return '';
+    })
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  return { text, booking, markerSeen };
+}
+
+const GUEST_COUNT_WORDS = [
+  'zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten',
+  'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen', 'twenty',
+];
+
+/** "a table for one" / "a table for four" — the note's party phrase. */
+function bookingPartyPhrase(guests: number): string {
+  if (guests === 1) return 'a table for one';
+  return `a table for ${GUEST_COUNT_WORDS[guests] ?? guests}`;
+}
+
+/** "Friday 24 October" — server-formatted (UTC), like the order summaries; the model never does date math here either. */
+function bookingDatePhrase(dateISO: string): string {
+  return new Intl.DateTimeFormat('en-GB', {
+    weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC',
+  }).format(new Date(`${dateISO}T00:00:00Z`));
+}
+
+/** "19:00" → "7:00 PM" — the hour a host would say aloud. */
+function bookingTimePhrase(time: string): string {
+  const [h, m] = time.split(':').map(Number);
+  const suffix = h >= 12 ? 'PM' : 'AM';
+  const hour12 = h % 12 === 0 ? 12 : h % 12;
+  return `${hour12}:${String(m || 0).padStart(2, '0')} ${suffix}`;
+}
+
+/** The booking's facts as one gracious clause, from the CREATED record — never from the model's text. */
+function bookingDetailsPhrase(r: ReservationDTO): string {
+  return `${bookingPartyPhrase(r.guests)} on ${bookingDatePhrase(r.date)} at ${bookingTimePhrase(r.time)}, under the name ${r.name}`;
+}
+
+/** The short reference a guest can quote — the last 8 characters of the reservation id, the order summaries' convention. */
+function bookingReference(r: ReservationDTO): string {
+  return r.id.slice(-8);
+}
+
+/**
+ * The confirmation the SERVER appends when a booking was created and
+ * no fee applies. Every fact in it comes from the created record; the
+ * model is instructed never to confirm in its own words, so this note
+ * is the guest's only — and therefore trustworthy — assurance.
+ */
+export function bookingConfirmationNote(r: ReservationDTO): string {
+  return `It is done — ${bookingDetailsPhrase(r)} is reserved, and your reference is ${bookingReference(r)}. We look forward to welcoming you.`;
+}
+
+/**
+ * The note for a booking that EXISTS but whose fee is still unpaid:
+ * created, not confirmed, table not held — stated without softening
+ * the fact, in the concierge's register. The amount is the effective
+ * fee the creation flow actually charged, in its own currency.
+ */
+export function bookingFeePendingNote(r: ReservationDTO, fee: ReservationFee): string {
+  const amount = `${fee.currency} ${fee.amount.toFixed(currencyExponent(fee.currency))}`;
+  return `Your booking is made — ${bookingDetailsPhrase(r)}. To hold the table, the booking fee of ${amount} is payable by card: your table is held, and your booking confirmed, the moment it is paid — until then, it is not yet confirmed. Your reference is ${bookingReference(r)}.`;
+}
+
+/** Field → the graceful clause naming what is needed, for the details-needed note. */
+const BOOKING_ISSUE_CLAUSES: Record<string, string> = {
+  name: 'I still need the name for the booking',
+  email: 'the email address seems incomplete',
+  phone: 'the phone number seems incomplete',
+  date: 'the date needs to be today or a day still to come',
+  time: 'the time needs to be one of our seating times',
+  guests: 'the party size needs to be between one and twenty — for a larger gathering, we would be delighted to arrange it by phone',
+};
+
+/**
+ * The note when a booking was attempted but its details did not pass
+ * the reservation schema: nothing was created, and the note says
+ * exactly which detail needs another look. `fields` are the schema's
+ * failing field names; unknown names are ignored. An empty list
+ * means the marker itself arrived incomplete.
+ */
+export function bookingDetailsNeededNote(fields: string[]): string {
+  const clauses = [...new Set(fields)]
+    .map((f) => BOOKING_ISSUE_CLAUSES[f])
+    .filter((c): c is string => !!c);
+  if (!clauses.length) {
+    return 'My apologies — the booking details reached me incomplete, and no table has been reserved. May I have them once more — the day, the time, the party size, the name for the booking, a phone number and an email — and I will arrange it straight away.';
+  }
+  return `My apologies — I could not quite complete the booking, and no table has been reserved: ${clauses.join('; ')}. Share the corrected detail and I will arrange it straight away.`;
+}
+
+/**
+ * The note when creation itself failed on our side (provider, store,
+ * or the mid-flight fee race): the chat never fails for it, and the
+ * guest is told plainly that no table is held — true in every such
+ * case, since a fee booking whose setup failed holds no seats and a
+ * failed insert created nothing.
+ */
+export function bookingUnavailableNote(): string {
+  return 'My apologies — something on our side kept the booking from completing just now, and your table is not held. Say the word and I will try once more with the same details.';
 }
