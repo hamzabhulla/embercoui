@@ -35,9 +35,10 @@ if (env.supabaseConfigured && env.supabaseUrl && env.supabaseServiceRoleKey) {
   authAdmin = createSupabaseAuthAdminService(env.supabaseUrl, env.supabaseServiceRoleKey);
 }
 
-const stripe: StripeService | null = env.stripeSecretKey
-  ? createStripeService(env.stripeSecretKey, env.stripeWebhookSecret)
-  : null;
+const stripe: StripeService | null =
+  env.stripeConfigured && env.stripeSecretKey
+    ? createStripeService(env.stripeSecretKey, env.stripeWebhookSecret)
+    : null;
 
 const storage: StorageService | null =
   env.supabaseConfigured && env.supabaseUrl && env.supabaseServiceRoleKey

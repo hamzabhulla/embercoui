@@ -298,6 +298,30 @@ describe('fee webhook routing + capacity', () => {
     expect((await feeWebhook(app, 'payment_intent.succeeded', pi)).status).toBe(200);
     expect(dto().feePaymentStatus).toBe('paid');
   });
+  it('succeeded for a CANCELLED reservation: the fee is never marked paid, exactly one marker is recorded, still 200 (M1 analogue)', async () => {
+    const { repo, app } = buildApp();
+    setFee(repo, { reservationFeeEnabled: true, reservationFeeAmount: 5 });
+    const body = await bookWithFee(app);
+    const pi = body.feePayment?.paymentIntentId as string;
+    // The booking is cancelled after its fee intent was minted; the
+    // guest can still complete that already-issued card session.
+    await repo.updateReservationStatus(body.reservation.id, 'pending', 'cancelled');
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = await feeWebhook(app, 'payment_intent.succeeded', pi);
+    warnSpy.mockRestore();
+    expect(res.status).toBe(200);
+    const dto = repo.reservations.find((r) => r.id === body.reservation.id);
+    expect(dto?.status).toBe('cancelled');
+    expect(dto?.feePaymentStatus).not.toBe('paid');
+    expect(dto?.feePaymentStatus).toBe('pending'); // the guard matched zero rows
+    const markers = repo.auditEvents.filter((e) => e.action === 'reservation.payment_on_cancelled' && e.entityId === body.reservation.id);
+    expect(markers).toHaveLength(1);
+    expect(markers[0]).toMatchObject({ actorId: null, actorLabel: 'Stripe webhook', actorRole: null, entity: 'reservation' });
+    expect(markers[0].summary).toContain('USD 5');
+    expect(markers[0].summary).toContain('cancelled reservation');
+    expect(markers[0].summary).toContain('not counted as revenue');
+    expect(markers[0].summary).toContain('Stripe dashboard');
+  });
   it('an unknown fee intent is acked 200 and changes nothing', async () => {
     const { repo, app } = buildApp();
     const res = await feeWebhook(app, 'payment_intent.succeeded', 'pi_not_ours');
@@ -520,6 +544,16 @@ describe('repository — reservation fee rows + transitions (0014)', () => {
     expect((await realRepo.markReservationFeePaidByPaymentIntent('pi_fee_2'))?.feePaymentStatus).toBe('paid');
     expect((await realRepo.markReservationFeeFailedByPaymentIntent('pi_fee_2'))?.feePaymentStatus).toBe('paid');
     expect(await realRepo.markReservationFeePaidByPaymentIntent('pi_unknown')).toBeNull();
+  });
+  it('guarded paid transition refuses a CANCELLED booking; a live booking still recovers failed → paid (M1 analogue)', async () => {
+    stub.seed('reservations', [stubReservationRow({ status: 'cancelled', fee_amount: 5, fee_currency: 'USD', fee_payment_status: 'pending', fee_payment_intent_id: 'pi_fee_cancelled' })]);
+    const blocked = await realRepo.markReservationFeePaidByPaymentIntent('pi_fee_cancelled');
+    expect(blocked?.status).toBe('cancelled');
+    expect(blocked?.feePaymentStatus).toBe('pending');
+    expect(rows('reservations')[0].fee_payment_status).toBe('pending'); // stored row untouched
+    stub.seed('reservations', [stubReservationRow({ fee_amount: 5, fee_currency: 'USD', fee_payment_status: 'failed', fee_payment_intent_id: 'pi_fee_live' })]);
+    expect((await realRepo.markReservationFeePaidByPaymentIntent('pi_fee_live'))?.feePaymentStatus).toBe('paid');
+    expect(rows('reservations')[0].fee_payment_status).toBe('paid');
   });
   it('pre-0014: fee webhook lookups degrade to null instead of throwing', async () => {
     stub.setMissingColumns('reservations', ['fee_amount', 'fee_currency', 'fee_payment_status', 'fee_payment_intent_id']);

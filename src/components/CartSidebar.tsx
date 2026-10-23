@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { X } from 'lucide-react';
-import { useCart, type AppliedCoupon } from '../context/CartContext.tsx';
+import { useCart, MAX_LINE_QUANTITY, type AppliedCoupon } from '../context/CartContext.tsx';
 import { useCurrency } from '../context/CurrencyContext.tsx';
 import { usePublicSettings } from '../hooks/usePublicSettings.ts';
 import { useNavigate } from 'react-router-dom';
@@ -243,7 +243,8 @@ export default function CartSidebar() {
                       )}
                     </div>
                     
-                    <div className="flex items-center justify-between mt-3">
+                    <div className="mt-3">
+                      <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
                         <button
                           onClick={() => updateQuantity(item.id, item.quantity - 1)}
@@ -272,7 +273,10 @@ export default function CartSidebar() {
                         </span>
                         <button
                           onClick={() => updateQuantity(item.id, item.quantity + 1)}
-                          className="flex items-center justify-center transition-colors hover:bg-[rgba(193,122,58,0.2)] hover:text-[#C17A3A]"
+                          disabled={item.quantity >= MAX_LINE_QUANTITY}
+                          title={item.quantity >= MAX_LINE_QUANTITY ? `Max ${MAX_LINE_QUANTITY} per dish` : undefined}
+                          aria-label={item.quantity >= MAX_LINE_QUANTITY ? `Maximum of ${MAX_LINE_QUANTITY} per dish reached` : `Add one more ${item.name}`}
+                          className="flex items-center justify-center transition-colors hover:bg-[rgba(193,122,58,0.2)] hover:text-[#C17A3A] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-[rgba(245,240,232,0.6)]"
                           style={{
                             width: '26px',
                             height: '26px',
@@ -294,6 +298,19 @@ export default function CartSidebar() {
                       >
                         {format(item.price * item.quantity)}
                       </span>
+                      </div>
+                      {item.quantity >= MAX_LINE_QUANTITY && (
+                        <p
+                          style={{
+                            fontFamily: 'Jost, sans-serif',
+                            fontSize: '11px',
+                            color: 'rgba(245,240,232,0.45)',
+                            marginTop: '6px'
+                          }}
+                        >
+                          Max {MAX_LINE_QUANTITY} per dish
+                        </p>
+                      )}
                     </div>
                   </div>
                 </div>

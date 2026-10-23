@@ -489,11 +489,24 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
     if (!data || data.length === 0) return null;
     const reservationId = str((data[0] as Row).id);
     const fromStates = target === 'paid' ? ['pending', 'failed'] : ['pending'];
-    const { error: updError } = await db
+    // The order pair's M1 guard, applied to the 'paid' transition
+    // only: a CANCELLED reservation's fee is never marked paid in the
+    // same statement (no read-then-write window). Capacity and
+    // revenue never counted a cancelled booking either way — both
+    // seat-holding rules gate on the booking status first — but the
+    // row would otherwise read "fee paid" for a booking that will
+    // never happen while the money sits taken; the webhook handler
+    // records the blocked transition for the owner instead. The
+    // 'failed' transition is deliberately unguarded: marking a
+    // cancelled booking's fee failed creates no paid state, holds
+    // no seats and counts nothing.
+    let updateQuery = db
       .from('reservations')
       .update({ fee_payment_status: target })
       .eq('id', reservationId)
       .in('fee_payment_status', fromStates);
+    if (target === 'paid') updateQuery = updateQuery.neq('status', 'cancelled');
+    const { error: updError } = await updateQuery;
     if (updError) throw new Error(`reservation fee update failed: ${updError.message}`);
     return repo.getReservation(reservationId);
   }
@@ -1009,12 +1022,21 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
       // Guarded transition: 'paid' may be set from unpaid/pending/failed
       // (a succeeded event after a failed attempt is a legitimate card
       // retry). 'paid' itself is terminal — re-deliveries and later events
-      // match zero rows here and change nothing.
+      // match zero rows here and change nothing. A CANCELLED order is
+      // excluded in the same statement (mega-audit M1): an intent minted
+      // before the cancellation can still be completed at Stripe, but
+      // its success must never flip the cancelled order to paid — the
+      // dashboard/finance filters count paid orders as revenue and no
+      // refund path exists. The webhook handler detects the blocked
+      // transition from the returned row and records it for the owner
+      // instead (see routes/payments.ts). The status condition rides
+      // THIS update — no read-then-write window.
       const { error: updError } = await db
         .from('orders')
         .update({ payment_status: 'paid' })
         .eq('id', orderId)
-        .in('payment_status', ['unpaid', 'pending', 'failed']);
+        .in('payment_status', ['unpaid', 'pending', 'failed'])
+        .neq('status', 'cancelled');
       if (updError) throw new Error(`order payment update failed: ${updError.message}`);
       return repo.getOrder(orderId);
     },
@@ -1344,6 +1366,14 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
     },
     adminListCustomers,
     adminListReviews,
+    async getReview(id) {
+      const { data, error } = await db.from('reviews').select('*').eq('id', id).maybeSingle();
+      if (error) {
+        if (isInvalidUuidError(error)) return null;
+        throw new Error(`review query failed: ${error.message}`);
+      }
+      return data ? { ...reviewDTO(data as Row), isApproved: (data as Row).is_approved === true } : null;
+    },
     async setReviewApproved(id, approved) {
       const { data, error } = await db.from('reviews').update({ is_approved: approved }).eq('id', id).select('id');
       if (error) {
@@ -1597,25 +1627,97 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
       // exactly as before in that state, so a missing-column failure
       // retries the same write WITHOUT the columns that do not exist
       // yet — those fields simply activate once their migration runs.
+      //
+      // The retry is COLUMN-AWARE (mega-audit Area 4 M2): the shared
+      // matchers answer on the bare 42703/PGRST204 code, which cannot
+      // tell WHICH family is missing — in a partially-migrated DB
+      // (0010 run, 0014 not) stripping on the bare code dropped the
+      // HEALTHY locations half of a save whose only problem was the
+      // fee columns. Both real error shapes name the column —
+      // PostgREST PGRST204: "Could not find the 'reservation_fee_amount'
+      // column of 'restaurant_settings' in the schema cache"; PG
+      // 42703: "column restaurant_settings.reservation_fee_amount does
+      // not exist" — so the names are extracted from the message and
+      // ONLY the family(ies) owning a named column present in the row
+      // are stripped. An error naming no recognisable column keeps the
+      // conservative fallback: strip every optional family present.
+      // (The shared matchers keep their bare-code semantics for their
+      // other callers — read/degradation paths — untouched; the
+      // precision lives only in this retry.)
+      const OPTIONAL_COLUMN_FAMILIES: { columns: string[]; isMissing: (e: { code?: string; message?: string }) => boolean }[] = [
+        { columns: ['site_locations'], isMissing: isMissingSiteLocationsError },
+        { columns: ['reservation_fee_enabled', 'reservation_fee_amount'], isMissing: isMissingReservationFeeError },
+      ];
+      const namedOptionalColumns = (message: string | undefined): Set<string> => {
+        const named = new Set<string>();
+        if (typeof message !== 'string') return named;
+        for (const family of OPTIONAL_COLUMN_FAMILIES) {
+          for (const column of family.columns) {
+            if (message.includes(column)) named.add(column);
+          }
+        }
+        return named;
+      };
+      // One strip step: returns the row minus the family(ies) the
+      // error indicts, or null when this error justifies no (further)
+      // strip — either it is not a missing-column error at all, or
+      // every family it names is already absent from the row.
       const withoutMissingColumns = (row: Row, error: { code?: string; message?: string }): Row | null => {
+        // Code veto (audit D1): only missing-column errors may trigger
+        // degradation. If the error carries a code that is neither
+        // 42703 nor PGRST204 it is a genuine error, however its message
+        // reads — a named column in another error's message (e.g. an
+        // auto-named CHECK constraint on the fee column) must never
+        // cause a silent drop. Errors with no code keep the
+        // message-based behaviour below.
+        if (error.code && error.code !== '42703' && error.code !== 'PGRST204') return null;
+        const named = namedOptionalColumns(error.message);
         const rest = { ...row };
         let stripped = false;
-        if ('site_locations' in rest && isMissingSiteLocationsError(error)) {
-          delete rest.site_locations;
-          stripped = true;
-        }
-        if (('reservation_fee_enabled' in rest || 'reservation_fee_amount' in rest) && isMissingReservationFeeError(error)) {
-          delete rest.reservation_fee_enabled;
-          delete rest.reservation_fee_amount;
+        for (const family of OPTIONAL_COLUMN_FAMILIES) {
+          if (!family.columns.some((c) => c in rest)) continue;
+          if (!family.isMissing(error)) continue;
+          // Precision applies only when the error names a column of
+          // THIS family; a named column from another family (or the
+          // family matcher firing on message text alone) must not
+          // strip a family the error never indicted.
+          if (named.size > 0 && !family.columns.some((c) => named.has(c))) continue;
+          for (const column of family.columns) delete rest[column];
           stripped = true;
         }
         return stripped ? rest : null;
       };
-      let { data, error } = await db.from('restaurant_settings').update(update).eq('id', 1).select('id');
-      if (error) {
-        const retry = withoutMissingColumns(update, error);
-        if (retry) ({ data, error } = await db.from('restaurant_settings').update(retry).eq('id', 1).select('id'));
-      }
+      // Precise stripping can need more than one round: when BOTH
+      // migrations are missing, the first error names only one family
+      // (PostgREST reports a single column), the retry then fails
+      // naming the other. Iterate — re-attempt, re-parse, strip
+      // further — until the write lands or no further strip is
+      // possible. Two optional families bound the loop: the initial
+      // attempt plus at most one productive strip per family.
+      const MAX_WRITE_ATTEMPTS = 1 + OPTIONAL_COLUMN_FAMILIES.length;
+      const writeWithDegradation = async (
+        write: (row: Row) => Promise<{ error: { code?: string; message?: string } | null }>,
+        row: Row,
+      ): Promise<{ code?: string; message?: string } | null> => {
+        let current = row;
+        for (let attempt = 1; ; attempt++) {
+          const { error: writeError } = await write(current);
+          if (!writeError) return null;
+          if (attempt >= MAX_WRITE_ATTEMPTS) return writeError;
+          const retry = withoutMissingColumns(current, writeError);
+          if (!retry) return writeError;
+          current = retry;
+        }
+      };
+      let data: unknown[] | null = null;
+      const error = await writeWithDegradation(
+        async (row) => {
+          const res = await db.from('restaurant_settings').update(row).eq('id', 1).select('id');
+          data = res.data;
+          return { error: res.error };
+        },
+        update,
+      );
       if (error) throw new Error(`settings update failed: ${error.message}`);
       if ((data ?? []).length === 0) {
         // The singleton row is missing (seed never ran, or the row was
@@ -1630,11 +1732,13 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
           siteLocations: mergedLocations ?? DEFAULT_SETTINGS.siteLocations,
         };
         const row = settingsRow(merged);
-        let { error: insertError } = await db.from('restaurant_settings').insert(row);
-        if (insertError) {
-          const retryRow = withoutMissingColumns(row, insertError);
-          if (retryRow) ({ error: insertError } = await db.from('restaurant_settings').insert(retryRow));
-        }
+        const insertError = await writeWithDegradation(
+          async (r) => {
+            const res = await db.from('restaurant_settings').insert(r);
+            return { error: res.error };
+          },
+          row,
+        );
         if (insertError) throw new Error(`settings insert failed: ${insertError.message}`);
       }
       return repo.getSettings();

@@ -65,7 +65,7 @@ export function createApp(deps: AppDeps): Express {
   // 1 MB limit is explicit: the implicit body-parser default (100 KB)
   // could 413 a legitimately large Stripe event; real events are far
   // smaller than 1 MB.
-  app.post('/api/v1/payments/webhook', express.raw({ type: 'application/json', limit: '1mb' }), createWebhookHandler({ repo: deps.repo, stripe: deps.stripe ?? null }));
+  app.post('/api/v1/payments/webhook', express.raw({ type: 'application/json', limit: '1mb' }), createWebhookHandler({ repo: deps.repo, stripe: deps.stripe ?? null, stripeConfigured: deps.env.stripeConfigured }));
   // The global limiter runs BEFORE the body parsers: it only reads
   // headers, so an unauthenticated garbage body is counted (and, past
   // the budget, refused with 429) without ever being parsed. It stays
@@ -110,7 +110,7 @@ export function createApp(deps: AppDeps): Express {
   app.use('/', geo);
 
   app.use('/api/v1', publicRouter({ repo: deps.repo, stripeConfigured: deps.env.stripeConfigured }));
-  app.use('/api/v1', formsRouter(deps));
+  app.use('/api/v1', formsRouter({ repo: deps.repo, verifyToken: deps.verifyToken, stripe: deps.stripe ?? null, stripeConfigured: deps.env.stripeConfigured }));
   app.use('/api/v1', authEventsRouter({ repo: deps.repo }));
   app.use('/api/v1/account', accountRouter(deps));
   app.use('/api/v1', ordersRouter({
@@ -124,7 +124,7 @@ export function createApp(deps: AppDeps): Express {
     couponRateLimitMax: deps.couponRateLimitMax,
   }));
   app.use('/api/v1', chatRouter({ repo: deps.repo, chat: deps.chat ?? null, verifyToken: deps.verifyToken, stripeConfigured: deps.env.stripeConfigured, stripe: deps.stripe ?? null }));
-  app.use('/api/v1', paymentsRouter({ repo: deps.repo, stripe: deps.stripe ?? null, verifyToken: deps.verifyToken }));
+  app.use('/api/v1', paymentsRouter({ repo: deps.repo, stripe: deps.stripe ?? null, verifyToken: deps.verifyToken, stripeConfigured: deps.env.stripeConfigured }));
   app.use('/api/v1/admin', adminRouter({ repo: deps.repo, verifyToken: deps.verifyToken, storage: deps.storage ?? null, authAdmin: deps.authAdmin ?? null, stripeConfigured: deps.env.stripeConfigured }));
 
   app.use(notFound);

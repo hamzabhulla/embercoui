@@ -22,11 +22,16 @@ function main() {
     console.warn('[ember] Supabase is not configured — DB endpoints will respond 503. See SUPABASE_SETUP.md.');
   }
   let stripe: StripeService | null = null;
-  if (env.stripeSecretKey) {
+  if (env.stripeConfigured && env.stripeSecretKey) {
+    // stripeConfigured now requires BOTH secrets (mega-audit M2), so
+    // a constructed service can always settle what it mints.
     stripe = createStripeService(env.stripeSecretKey, env.stripeWebhookSecret);
-    if (!env.stripeWebhookSecret) {
-      console.warn('[ember] STRIPE_WEBHOOK_SECRET is not set — the payments webhook will respond 503 until it is configured.');
-    }
+  } else if (env.stripeSecretKey) {
+    // Key-only deployment: no service is constructed at all, so no
+    // intent can be minted for a charge that could never settle (the
+    // webhook would 503 on verification without its secret). Every
+    // surface reads card payments as not configured.
+    console.warn('[ember] STRIPE_SECRET_KEY is set but STRIPE_WEBHOOK_SECRET is not — card payments are disabled until the webhook secret is set, because charges could never be confirmed.');
   }
   const storage: StorageService | null =
     env.supabaseConfigured && env.supabaseUrl && env.supabaseServiceRoleKey

@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { ArrowRight, Check } from 'lucide-react';
-import { Elements, PaymentElement, useElements, useStripe } from '@stripe/react-stripe-js';
 import { useInView } from '../hooks/useInView';
 import { openingHoursLines, usePublicSettings } from '../hooks/usePublicSettings';
+import { ReservationFeePaymentPanel } from './ReservationFeePayment.tsx';
 import { submitReservation, type ReservationFeePayment } from '../services/api.ts';
 import { formatMoney } from '../lib/currency.ts';
 import { stripePromise } from '../lib/stripe.ts';
@@ -25,71 +25,6 @@ function todayLocal(): string {
   const mm = String(d.getMonth() + 1).padStart(2, '0');
   const dd = String(d.getDate()).padStart(2, '0');
   return `${d.getFullYear()}-${mm}-${dd}`;
-}
-
-/**
- * The booking-fee card step (Phase F), modelled on Checkout's card
- * form: the server has already created the booking and its payment
- * intent; confirming here is what pays the fee. A declined card is an
- * honest error and the step stays open for another try — the booking
- * holds no table until the fee is paid, which the copy says plainly.
- */
-function FeePaymentForm({ fee, onPaid }: { fee: ReservationFeePayment; onPaid: () => void }) {
-  const stripe = useStripe();
-  const elements = useElements();
-  const [paying, setPaying] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const pay = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!stripe || !elements) return;
-    setPaying(true);
-    setError(null);
-    const { error: confirmError, paymentIntent } = await stripe.confirmPayment({ elements, redirect: 'if_required' });
-    setPaying(false);
-    if (confirmError) {
-      setError(confirmError.message ?? 'Your card was declined — the booking fee was not paid, so your table is not held yet. You can try another card.');
-      return;
-    }
-    if (paymentIntent && (paymentIntent.status === 'succeeded' || paymentIntent.status === 'processing')) {
-      onPaid();
-      return;
-    }
-    // No error from Stripe, but the payment did not complete either
-    // (a further step was requested, the attempt was cancelled, …):
-    // never leave the guest staring at a silent form — the fee is
-    // unpaid and the table is not held, and the step stays open for
-    // another try.
-    setError('That payment was not completed, so the booking fee was not paid and your table is not held yet. You can try again or use another card.');
-  };
-
-  return (
-    <form onSubmit={pay} className="w-full max-w-md mx-auto lg:mx-0 flex flex-col gap-5 px-[24px] py-[32px] md:p-0">
-      <div>
-        <h3 className="text-3xl mb-3" style={{ fontFamily: 'Cormorant Garamond, serif', color: '#F5F0E8' }}>
-          Booking Fee
-        </h3>
-        <p className="text-sm" style={{ color: 'rgba(245,240,232,0.6)', fontFamily: 'Jost, sans-serif' }}>
-          A booking fee of {formatMoney(fee.amount, fee.currency)} is charged by card now.
-          Your table is held once the fee is paid.
-        </p>
-      </div>
-      <PaymentElement options={{ layout: 'tabs' }} />
-      {error && <p className="text-[#ef4444]" style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px' }}>{error}</p>}
-      <button
-        type="submit"
-        disabled={!stripe || paying}
-        className="w-full bg-[#C17A3A] hover:bg-[#A66932] text-white py-4 px-6 flex items-center justify-between transition-all duration-[250ms] uppercase disabled:opacity-50"
-        style={{ fontFamily: 'Jost, sans-serif', fontSize: '11px', letterSpacing: '0.2em' }}
-      >
-        <span>{paying ? 'Processing…' : `Pay ${formatMoney(fee.amount, fee.currency)}`}</span>
-        <ArrowRight className="w-4 h-4" />
-      </button>
-      <p style={{ fontFamily: 'Jost, sans-serif', fontSize: '10px', color: 'rgba(245,240,232,0.3)' }}>
-        Payments are processed by Stripe.
-      </p>
-    </form>
-  );
 }
 
 export default function Reservation() {
@@ -251,9 +186,7 @@ export default function Reservation() {
                 </p>
               </div>
             ) : feeStep ? (
-              <Elements stripe={stripePromise} options={{ clientSecret: feeStep.clientSecret, appearance: { theme: 'night', variables: { colorPrimary: '#C17A3A', colorBackground: '#1C2B1E', colorText: '#F5F0E8', fontFamily: 'Jost, sans-serif' } } }}>
-                <FeePaymentForm fee={feeStep} onPaid={handleFeePaid} />
-              </Elements>
+              <ReservationFeePaymentPanel fee={feeStep} onPaid={handleFeePaid} />
             ) : (
               <>
                 {/* DESKTOP FORM */}

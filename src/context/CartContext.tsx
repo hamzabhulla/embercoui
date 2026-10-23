@@ -28,7 +28,7 @@ export interface AppliedCoupon {
 /** Outcome of the latest drawer-open price check against the live menu. */
 export type CartPriceStatus = 'idle' | 'verified' | 'unverified';
 
-interface CartContextType {
+export interface CartContextType {
   items: CartItem[];
   addItem: (item: Omit<CartItem, 'quantity'>) => void;
   removeItem: (id: number) => void;
@@ -49,6 +49,21 @@ const CartContext = createContext<CartContextType | null>(null);
 
 const CART_STORAGE_KEY = 'ember_cart';
 const COUPON_STORAGE_KEY = 'ember_cart_coupon';
+
+/**
+ * Maximum quantity for a single cart line: 50. This mirrors the
+ * server schema exactly — backend/src/routes/orders.ts caps each
+ * order line's quantity at `.max(50)` — so a cart the store accepts
+ * can never be one checkout rejects. EVERY quantity mutation clamps
+ * to it (add, set, stored-cart merge and hydration); the drawer's
+ * stepper surfaces the limit to the customer at the cap.
+ */
+export const MAX_LINE_QUANTITY = 50;
+
+/** Clamp a line quantity to the per-line cap (lower bound is the caller's concern). */
+export function clampLineQuantity(quantity: number): number {
+  return Math.min(quantity, MAX_LINE_QUANTITY);
+}
 
 function isValidCartItem(i: unknown): i is CartItem {
   if (!i || typeof i !== 'object') return false;
@@ -80,13 +95,19 @@ function loadStoredCart(): CartItem[] {
       if (existing) {
         byId.set(entry.id, {
           ...existing,
-          quantity: existing.quantity + entry.quantity,
+          // Merge path: duplicate stored lines sum — clamped to the
+          // per-line cap like every other quantity mutation.
+          quantity: clampLineQuantity(existing.quantity + entry.quantity),
           description: existing.description ?? description,
         });
       } else {
         byId.set(entry.id, {
           id: entry.id, name: entry.name, price: entry.price, image: entry.image,
-          quantity: entry.quantity, ...(description ? { description } : {}),
+          // Hydration: a stored line over the cap (e.g. persisted
+          // before the cap, or tampered with) loads AT the cap —
+          // clamped, never dropped. Validity above still only
+          // requires an integer ≥ 1, so the line itself survives.
+          quantity: clampLineQuantity(entry.quantity), ...(description ? { description } : {}),
         });
       }
     }
@@ -157,7 +178,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
         // Backfill the description if this entry predates it (e.g. a
         // cart persisted before descriptions were snapshotted).
         return prev.map(i => i.id === item.id
-          ? { ...i, quantity: i.quantity + 1, description: i.description ?? item.description }
+          ? { ...i, quantity: clampLineQuantity(i.quantity + 1), description: i.description ?? item.description }
           : i);
       }
       return [...prev, { ...item, quantity: 1 }];
@@ -252,7 +273,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
   const updateQuantity = (id: number, quantity: number) => {
     setItems(prev => {
       if (quantity <= 0) return prev.filter(i => i.id !== id);
-      return prev.map(i => i.id === id ? { ...i, quantity } : i);
+      return prev.map(i => i.id === id ? { ...i, quantity: clampLineQuantity(quantity) } : i);
     });
   };
 

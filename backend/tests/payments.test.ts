@@ -1,5 +1,5 @@
 import request from 'supertest';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/app';
 import { FakeRepository, fakeVerifyToken, testEnv } from './fakeRepository';
 import { FakeStripeService } from './fakeStripe';
@@ -320,5 +320,135 @@ describe('create-intent when the intent store is refused (state moved mid-reques
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/cancelled/);
     expect(res.body.clientSecret).toBeUndefined();
+  });
+});
+
+describe('webhook — payment arriving on a cancelled order (mega-audit M1)', () => {
+  const markersFor = (orderId: string) =>
+    repo.auditEvents.filter((e) => e.action === 'order.payment_on_cancelled' && e.entityId === orderId);
+
+  async function cancelledOrderWithIntent() {
+    const order = await createOrder();
+    const intent = await createIntent(order.id);
+    expect(intent.status).toBe(200);
+    // The admin cancels the (still unpaid) order AFTER the intent was
+    // minted — the exact sequence the audit describes. The customer
+    // can still complete the already-issued PaymentElement session.
+    await repo.updateOrderStatus(order.id, 'pending', 'cancelled');
+    return { order, pi: intent.body.paymentIntentId as string };
+  }
+
+  it('succeeded for a CANCELLED order: stays cancelled, never paid, exactly one honest marker, still 200', async () => {
+    const { order, pi } = await cancelledOrderWithIntent();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = await webhook('payment_intent.succeeded', pi);
+    const warns = warnSpy.mock.calls.map((a) => a.map(String).join(' ')).join('\n');
+    warnSpy.mockRestore();
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ received: true });
+
+    const after = await repo.getOrder(order.id);
+    expect(after?.status).toBe('cancelled');
+    expect(after?.paymentStatus).not.toBe('paid');
+    expect(after?.paymentStatus).toBe('pending'); // the guard matched zero rows
+
+    // Exactly one marker, with the honest shape: no human actor, the
+    // webhook labelled as itself, the facts in the summary.
+    const markers = markersFor(order.id);
+    expect(markers).toHaveLength(1);
+    expect(markers[0]).toMatchObject({
+      actorId: null, actorLabel: 'Stripe webhook', actorRole: null,
+      action: 'order.payment_on_cancelled', entity: 'order', entityId: order.id,
+      changes: null, ip: null, userAgent: null,
+    });
+    expect(markers[0].summary).toContain(`USD ${after?.total}`);
+    expect(markers[0].summary).toContain('cancelled order');
+    expect(markers[0].summary).toContain('not counted as revenue');
+    expect(markers[0].summary).toContain('Stripe dashboard');
+    // 'change' category by construction (anything not auth.*), and the
+    // loud console trace fired in the existing [payments] style.
+    expect(markers[0].action.startsWith('auth.')).toBe(false);
+    expect(warns).toContain('[payments] webhook');
+    expect(warns).toContain('cancelled');
+  });
+
+  it('a re-delivered succeeded event for the cancelled order still never pays (each arrival is recorded)', async () => {
+    const { order, pi } = await cancelledOrderWithIntent();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect((await webhook('payment_intent.succeeded', pi)).status).toBe(200);
+    expect((await webhook('payment_intent.succeeded', pi)).status).toBe(200);
+    warnSpy.mockRestore();
+    const after = await repo.getOrder(order.id);
+    expect(after?.status).toBe('cancelled');
+    expect(after?.paymentStatus).not.toBe('paid');
+    // Stripe delivery is at-least-once and the marker is append-only:
+    // each arrival is a fact the owner can see, never deduplicated
+    // away — and crucially the order is never flipped by any of them.
+    expect(markersFor(order.id)).toHaveLength(2);
+  });
+
+  it('succeeded after failed on a LIVE order still recovers to paid — and records no marker', async () => {
+    const order = await createOrder();
+    const intent = await createIntent(order.id);
+    const pi = intent.body.paymentIntentId as string;
+    expect((await webhook('payment_intent.payment_failed', pi)).status).toBe(200);
+    expect((await repo.getOrder(order.id))?.paymentStatus).toBe('failed');
+    expect((await webhook('payment_intent.succeeded', pi)).status).toBe(200);
+    const after = await repo.getOrder(order.id);
+    expect(after?.paymentStatus).toBe('paid');
+    expect(after?.status).not.toBe('cancelled');
+    expect(markersFor(order.id)).toHaveLength(0);
+  });
+
+  it('an already-paid re-delivery is a no-op with NO marker event', async () => {
+    const order = await createOrder();
+    const intent = await createIntent(order.id);
+    const pi = intent.body.paymentIntentId as string;
+    expect((await webhook('payment_intent.succeeded', pi)).status).toBe(200);
+    expect((await repo.getOrder(order.id))?.paymentStatus).toBe('paid');
+    expect((await webhook('payment_intent.succeeded', pi)).status).toBe(200);
+    expect((await repo.getOrder(order.id))?.paymentStatus).toBe('paid');
+    expect(markersFor(order.id)).toHaveLength(0);
+    expect(repo.auditEvents.filter((e) => e.entityId === order.id)).toHaveLength(0);
+  });
+
+  it('a failed event on a cancelled order marks the payment failed, never paid, and records no marker', async () => {
+    const { order, pi } = await cancelledOrderWithIntent();
+    expect((await webhook('payment_intent.payment_failed', pi)).status).toBe(200);
+    const after = await repo.getOrder(order.id);
+    expect(after?.status).toBe('cancelled');
+    expect(after?.paymentStatus).toBe('failed');
+    expect(markersFor(order.id)).toHaveLength(0);
+  });
+
+  it('a marker write that fails never fails the webhook — Stripe still gets its 200', async () => {
+    class ThrowingAuditRepository extends FakeRepository {
+      override async insertAuditEvent(): Promise<never> {
+        throw new Error('audit store down');
+      }
+    }
+    const r = new ThrowingAuditRepository();
+    const s = new FakeStripeService();
+    const localApp = createApp({ env: testEnv(), repo: r, verifyToken: fakeVerifyToken, stripe: s });
+    const created = await request(localApp).post('/api/v1/orders').send(checkoutBody);
+    expect(created.status).toBe(201);
+    const orderId = created.body.order.id as string;
+    const intent = await request(localApp).post('/api/v1/payments/create-intent').send({ orderId });
+    expect(intent.status).toBe(200);
+    await r.updateOrderStatus(orderId, 'pending', 'cancelled');
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await request(localApp)
+      .post('/api/v1/payments/webhook')
+      .set('stripe-signature', 'valid-sig')
+      .set('Content-Type', 'application/json')
+      .send(JSON.stringify({ type: 'payment_intent.succeeded', paymentIntentId: intent.body.paymentIntentId as string }));
+    warnSpy.mockRestore();
+    errSpy.mockRestore();
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ received: true });
+    const after = await r.getOrder(orderId);
+    expect(after?.status).toBe('cancelled');
+    expect(after?.paymentStatus).not.toBe('paid');
   });
 });

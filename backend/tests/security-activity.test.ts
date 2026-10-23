@@ -1,6 +1,7 @@
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 import { createApp } from '../src/app';
+import { auditCategoryOf, auditVerifiedOf } from '../src/lib/audit';
 import { FakeRepository, dateFromToday, fakeVerifyToken, testEnv } from './fakeRepository';
 import { FakeStripeService } from './fakeStripe';
 import { FakeStorageService } from './fakeStorage';
@@ -293,6 +294,102 @@ describe('change-history hooks on admin mutations', () => {
     expect(res.status).toBe(200);
     const row = repo.auditEvents.find((e) => e.action === 'settings.updated');
     expect(row?.changes).toEqual({ 'siteLocations.footer.phone': { from: null, to: '+1 555 0199' } });
+  });
+});
+
+describe('review moderation — Change History (mega-audit High H1)', () => {
+  const reviewRows = (repo: FakeRepository) => repo.auditEvents.filter((e) => e.action.startsWith('review.'));
+
+  it('review.* actions land in the change category, verified — like menu_item.* content moderation', () => {
+    for (const action of ['review.approved', 'review.unapproved', 'review.deleted']) {
+      expect(auditCategoryOf(action)).toBe('change');
+      expect(auditCategoryOf(action)).toBe(auditCategoryOf('menu_item.deleted'));
+      expect(auditVerifiedOf(action)).toBe(true);
+    }
+  });
+
+  it('PATCH approve writes exactly one row with the true before/after isApproved — and never the review text', async () => {
+    const { repo, app } = setup();
+    // rev-2 is the seeded PENDING review (isApproved false, rating 4).
+    const res = await as(request(app).patch('/api/v1/admin/reviews/rev-2'), ADMIN).send({ isApproved: true });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ updated: true });
+    const rows = reviewRows(repo);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      action: 'review.approved',
+      entity: 'review',
+      entityId: 'rev-2',
+      actorId: 'admin-1',
+      actorRole: 'admin',
+    });
+    expect(rows[0].changes).toEqual({ isApproved: { from: false, to: true } });
+    // Identifying fields only (author + rating, the reservation
+    // summary precedent): the comment is customer free text and the
+    // Phase C body-hygiene rule keeps it out of the log entirely.
+    expect(rows[0].summary).toContain('Pending Pete');
+    expect(rows[0].summary).toContain('4 stars');
+    expect(JSON.stringify(rows[0])).not.toContain('Awaiting moderation.');
+
+    // And the row surfaces through the read API under the change
+    // category with the review. action prefix, badged verified.
+    const read = await as(request(app).get('/api/v1/admin/security/events?category=change&action=review.'), ADMIN);
+    expect(read.status).toBe(200);
+    expect(read.body.total).toBe(1);
+    expect(read.body.events[0]).toMatchObject({
+      category: 'change', action: 'review.approved',
+      metadata: { verified: true, source: 'server' },
+    });
+  });
+
+  it('PATCH unapprove writes exactly one row with the true before/after isApproved', async () => {
+    const { repo, app } = setup();
+    // rev-1 is the seeded APPROVED review (isApproved true, rating 5).
+    const res = await as(request(app).patch('/api/v1/admin/reviews/rev-1'), ADMIN).send({ isApproved: false });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ updated: true });
+    const rows = reviewRows(repo);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].action).toBe('review.unapproved');
+    expect(rows[0].entity).toBe('review');
+    expect(rows[0].entityId).toBe('rev-1');
+    expect(rows[0].changes).toEqual({ isApproved: { from: true, to: false } });
+    expect(rows[0].summary).toContain('Amélie Fontaine');
+    expect(JSON.stringify(rows[0])).not.toContain('Wonderful.');
+  });
+
+  it('a no-op PATCH (already in the target state) writes no row — the orders/menu/coupon rule', async () => {
+    const { repo, app } = setup();
+    const res = await as(request(app).patch('/api/v1/admin/reviews/rev-1'), ADMIN).send({ isApproved: true });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ updated: true });
+    expect(reviewRows(repo)).toHaveLength(0);
+  });
+
+  it('DELETE writes exactly one row with the pre-write snapshot in the summary (delete convention: no changes, no review text)', async () => {
+    const { repo, app } = setup();
+    const res = await as(request(app).delete('/api/v1/admin/reviews/rev-1'), ADMIN);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ deleted: true });
+    expect(await repo.getReview('rev-1')).toBeNull();
+    const rows = reviewRows(repo);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ action: 'review.deleted', entity: 'review', entityId: 'rev-1', actorId: 'admin-1' });
+    // Menu/coupon delete convention: the identifying snapshot rides
+    // in the summary (author + rating here), changes stays null.
+    expect(rows[0].summary).toContain('Amélie Fontaine');
+    expect(rows[0].summary).toContain('5 stars');
+    expect(rows[0].changes).toBeNull();
+    expect(JSON.stringify(rows[0])).not.toContain('Wonderful.');
+  });
+
+  it('a missing review is a 404 on both mutations and writes NO row', async () => {
+    const { repo, app } = setup();
+    const patch = await as(request(app).patch('/api/v1/admin/reviews/rev-missing'), ADMIN).send({ isApproved: true });
+    expect(patch.status).toBe(404);
+    const del = await as(request(app).delete('/api/v1/admin/reviews/rev-missing'), ADMIN);
+    expect(del.status).toBe(404);
+    expect(repo.auditEvents).toHaveLength(0);
   });
 });
 

@@ -214,7 +214,7 @@ export default function AdminMenu() {
             <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void upload(f); e.target.value = ''; }} />
           </div>
         </div>
-        <div><label className={labelCls} htmlFor="m-tags">Dietary tags (comma separated)</label><input id="m-tags" className={inputCls} value={tagsText} onChange={(e) => setTagsText(e.target.value)} placeholder="Vegan, Gluten-Free" /></div>
+        <div><label className={labelCls} htmlFor="m-tags">Dietary tags (comma separated)</label><input id="m-tags" className={inputCls} value={tagsText} onChange={(e) => setTagsText(e.target.value)} placeholder="Vegan, Gluten Free" /></div>
         <label className="flex items-center gap-2 font-bodytext text-[13.5px] text-[#16241A] md:col-span-2">
           <input type="checkbox" checked={form.isAvailable} onChange={(e) => setForm({ ...form, isAvailable: e.target.checked })} className="accent-[#C17A3A] w-4 h-4" /> Available on the public menu
         </label>

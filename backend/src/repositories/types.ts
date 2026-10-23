@@ -468,7 +468,9 @@ export interface Repository {
    * Fee payment transitions, guarded exactly like the order pair:
    * 'paid' may be set from pending/failed and is terminal; 'failed'
    * may be set from pending only (a late failure never un-pays a
-   * booking). Return the reservation, or null when no reservation
+   * booking). 'paid' additionally requires the booking NOT be
+   * cancelled (mega-audit M1 analogue, same guarded statement).
+   * Return the reservation, or null when no reservation
    * references the intent (a foreign intent — the webhook acks and
    * leaves everything untouched).
    */
@@ -509,7 +511,9 @@ export interface Repository {
   setOrderPaymentIntent(orderId: string, paymentIntentId: string): Promise<boolean>;
   /**
    * Payment-state transitions are GUARDED in every implementation:
-   * 'paid' is terminal; 'paid' may be set from unpaid/pending/failed;
+   * 'paid' is terminal; 'paid' may be set from unpaid/pending/failed
+   * AND only while the order is not cancelled (mega-audit M1 — the
+   * status condition rides the same UPDATE, never a read-then-write);
    * 'failed' may be set from unpaid/pending only. Return the order, or
    * null when no order references the intent.
    */
@@ -590,6 +594,8 @@ export interface Repository {
   adminListCustomers(page: PageParams): Promise<Page<CustomerDTO>>;
   adminListReviews(): Promise<(ReviewDTO & { isApproved: boolean })[]>;
   adminListReviews(page: PageParams): Promise<Page<ReviewDTO & { isApproved: boolean }>>;
+  /** One review by id (the moderation handlers' pre-write snapshot read). */
+  getReview(id: string): Promise<(ReviewDTO & { isApproved: boolean }) | null>;
   setReviewApproved(id: string, approved: boolean): Promise<boolean>;
   deleteReview(id: string): Promise<boolean>;
   adminListNewsletter(): Promise<NewsletterSubscriberDTO[]>;

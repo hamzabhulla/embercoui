@@ -178,8 +178,9 @@ export class FakeRepository implements Repository {
   async markReservationFeePaidByPaymentIntent(paymentIntentId: string) {
     const reservation = this.reservations.find((r) => this.reservationFeeIntentIds.get(r.id) === paymentIntentId);
     if (!reservation) return null;
-    // Same guards as the real repository: 'paid' from pending/failed, terminal.
-    if (reservation.feePaymentStatus === 'pending' || reservation.feePaymentStatus === 'failed') {
+    // Same guards as the real repository: 'paid' from pending/failed,
+    // terminal — and never on a cancelled booking (M1 analogue).
+    if (reservation.status !== 'cancelled' && (reservation.feePaymentStatus === 'pending' || reservation.feePaymentStatus === 'failed')) {
       reservation.feePaymentStatus = 'paid';
     }
     return reservation;
@@ -272,8 +273,9 @@ export class FakeRepository implements Repository {
     const order = this.orders.find((o) => o.paymentIntentId === paymentIntentId);
     if (!order) return null;
     // Same guarded transitions as the Supabase repository: 'paid' may be
-    // set from unpaid/pending/failed and is terminal once set.
-    if (order.paymentStatus === 'unpaid' || order.paymentStatus === 'pending' || order.paymentStatus === 'failed') {
+    // set from unpaid/pending/failed, is terminal once set, and is
+    // never set on a cancelled order (mega-audit M1).
+    if (order.status !== 'cancelled' && (order.paymentStatus === 'unpaid' || order.paymentStatus === 'pending' || order.paymentStatus === 'failed')) {
       order.paymentStatus = 'paid';
     }
     return order;
@@ -460,6 +462,12 @@ export class FakeRepository implements Repository {
     // No page = the complete list (the fake has no 1000-row cap to hide).
     if (!page) return all;
     return { items: all.slice(page.offset, page.offset + page.limit), total: all.length };
+  }
+  async getReview(id: string) {
+    const r = this.reviews.find((x) => x.id === id);
+    // A copy, like adminListReviews: the stored row must not be
+    // mutated through the snapshot the moderation handlers hold.
+    return r ? { id: r.id, name: r.name, rating: r.rating, comment: r.comment, country: r.country, createdAt: r.createdAt, isApproved: r.isApproved } : null;
   }
   async setReviewApproved(id: string, approved: boolean) {
     const r = this.reviews.find((x) => x.id === id);

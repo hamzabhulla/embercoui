@@ -244,6 +244,156 @@ describe('settings writes — site_locations merge + degradation', () => {
   });
 });
 
+describe('settings writes — column-aware degradation (Step 6, mega-audit Area 4 M2)', () => {
+  // A partially-migrated DB (0010 run, 0014 not — or the reverse) must
+  // lose ONLY the family whose migration is missing: the old retry
+  // stripped BOTH optional families on any bare 42703/PGRST204, so a
+  // healthy half of the save silently evaporated.
+  const fullPatch = {
+    restaurantName: 'Partial Diner',
+    reservationFeeEnabled: true,
+    reservationFeeAmount: 500,
+    siteLocations: { footer: { phone: 'F-new' } },
+  };
+
+  it('(i) fee columns missing (0014 not run): locations PERSIST, fee fields absent', async () => {
+    stub.setMissingColumns('restaurant_settings', ['reservation_fee_enabled', 'reservation_fee_amount']);
+    stub.seed('restaurant_settings', [settingsRow()]);
+    const saved = await repo.updateSettings(fullPatch);
+    expect(saved.restaurantName).toBe('Partial Diner');
+    // The healthy half of the save actually landed this time.
+    expect(saved.siteLocations.footer.phone).toBe('F-new');
+    const stored = rows('restaurant_settings')[0];
+    expect((stored.site_locations as Row).footer).toMatchObject({ phone: 'F-new' });
+    // The missing family is simply not active yet — absent, never faked.
+    expect('reservation_fee_enabled' in stored).toBe(false);
+    expect('reservation_fee_amount' in stored).toBe(false);
+    expect(saved.reservationFeeEnabled).toBe(false);
+    expect(saved.reservationFeeAmount).toBe(0);
+  });
+
+  it('(ii) site_locations missing (0010 not run): the fee PERSISTS, locations absent', async () => {
+    stub.setMissingColumns('restaurant_settings', ['site_locations']);
+    stub.seed('restaurant_settings', [settingsRow()]);
+    const saved = await repo.updateSettings(fullPatch);
+    expect(saved.reservationFeeEnabled).toBe(true);
+    expect(saved.reservationFeeAmount).toBe(500);
+    const stored = rows('restaurant_settings')[0];
+    expect(stored.reservation_fee_enabled).toBe(true);
+    expect(stored.reservation_fee_amount).toBe(500);
+    expect(stored.site_locations).toBeNull(); // the seeded value was never overwritten
+    expect(saved.siteLocations.footer.phone).toBeNull(); // not active yet
+  });
+
+  it('(iii) BOTH families missing: the save still succeeds via iteration, base fields persist', async () => {
+    stub.setMissingColumns('restaurant_settings', ['site_locations', 'reservation_fee_enabled', 'reservation_fee_amount']);
+    stub.seed('restaurant_settings', [settingsRow()]);
+    const saved = await repo.updateSettings(fullPatch);
+    expect(saved.restaurantName).toBe('Partial Diner');
+    const stored = rows('restaurant_settings')[0];
+    expect(stored.restaurant_name).toBe('Partial Diner');
+    expect(stored.site_locations).toBeNull(); // never written (seeded null survives)
+    expect('reservation_fee_enabled' in stored).toBe(false);
+    expect('reservation_fee_amount' in stored).toBe(false);
+    // Iteration is observable: first attempt + one retry per family.
+    expect(stub.writeAttempts.get('restaurant_settings')).toBe(3);
+  });
+
+  it('(iii-b) both families missing on the INSERT path: iteration applies there too', async () => {
+    stub.setMissingColumns('restaurant_settings', ['site_locations', 'reservation_fee_enabled', 'reservation_fee_amount']);
+    stub.seed('restaurant_settings', []);
+    const saved = await repo.updateSettings({ restaurantName: 'First Save', reservationFeeEnabled: true, reservationFeeAmount: 250 });
+    expect(saved.restaurantName).toBe('First Save');
+    expect(rows('restaurant_settings')).toHaveLength(1);
+    const stored = rows('restaurant_settings')[0];
+    expect(stored.restaurant_name).toBe('First Save');
+    expect('site_locations' in stored).toBe(false);
+    expect('reservation_fee_enabled' in stored).toBe(false);
+  });
+
+  it('(iv) an error naming NO column keeps the whole-strip fallback', async () => {
+    // A bare PGRST204 with a generic message: nothing to parse, so
+    // every optional family present is stripped (today's behaviour).
+    const OPTIONAL = ['site_locations', 'reservation_fee_enabled', 'reservation_fee_amount'];
+    stub.failWrites('restaurant_settings', (_op, cols) =>
+      cols.some((c) => OPTIONAL.includes(c))
+        ? { code: 'PGRST204', message: 'schema cache error — reload in progress' }
+        : null);
+    stub.seed('restaurant_settings', [settingsRow()]);
+    const saved = await repo.updateSettings(fullPatch);
+    expect(saved.restaurantName).toBe('Partial Diner'); // base fields persist
+    const stored = rows('restaurant_settings')[0];
+    expect(stored.restaurant_name).toBe('Partial Diner');
+    expect(stored.site_locations).toBeNull(); // never written (seeded null survives)
+    expect('reservation_fee_enabled' in stored).toBe(false);
+    expect('reservation_fee_amount' in stored).toBe(false);
+  });
+
+  it('(v) an unrelated error throws — no retry theatre, exactly one write attempt', async () => {
+    stub.failWrites('restaurant_settings', () => ({
+      code: '23514', message: 'new row for relation "restaurant_settings" violates check constraint "settings_wait_check"',
+    }));
+    stub.seed('restaurant_settings', [settingsRow()]);
+    await expect(repo.updateSettings({ restaurantName: 'Boom' })).rejects.toThrow('settings update failed');
+    expect(stub.writeAttempts.get('restaurant_settings')).toBe(1);
+    expect(rows('restaurant_settings')[0].restaurant_name).toBe('Ember & Co.'); // untouched
+  });
+
+  it('(vi) a PERSISTENT 23514 naming reservation_fee_amount throws — no strip, no retry (audit D1)', async () => {
+    // Postgres auto-names a CHECK on the fee column
+    // "…_reservation_fee_amount_check", so a genuine fee check
+    // violation's message names the optional column exactly like a
+    // missing-column error would. The shared matcher fires on that
+    // message — only the code veto in withoutMissingColumns keeps
+    // this from being misread as "0014 not run".
+    stub.failWrites('restaurant_settings', () => ({
+      code: '23514', message: 'new row for relation "restaurant_settings" violates check constraint "restaurant_settings_reservation_fee_amount_check"',
+    }));
+    stub.seed('restaurant_settings', [settingsRow()]);
+    await expect(repo.updateSettings(fullPatch)).rejects.toThrow('settings update failed');
+    expect(stub.writeAttempts.get('restaurant_settings')).toBe(1);
+    const stored = rows('restaurant_settings')[0];
+    expect(stored.restaurant_name).toBe('Ember & Co.'); // untouched
+    expect(stored.site_locations).toBeNull();
+    expect('reservation_fee_enabled' in stored).toBe(false);
+    expect('reservation_fee_amount' in stored).toBe(false);
+  });
+
+  it('(vii) a CONDITIONAL 23514 naming reservation_fee_amount throws — must NOT succeed by stripping (audit D1)', async () => {
+    // The harmful shape: the error fires only while the fee column
+    // is in the payload, so a strip-and-retry would "succeed" and
+    // the admin's fee setting would evaporate behind a normal
+    // response. The veto makes the genuine error surface instead.
+    stub.failWrites('restaurant_settings', (_op, cols) =>
+      cols.includes('reservation_fee_amount')
+        ? { code: '23514', message: 'new row for relation "restaurant_settings" violates check constraint "restaurant_settings_reservation_fee_amount_check"' }
+        : null);
+    stub.seed('restaurant_settings', [settingsRow()]);
+    await expect(repo.updateSettings(fullPatch)).rejects.toThrow('settings update failed');
+    expect(stub.writeAttempts.get('restaurant_settings')).toBe(1);
+    const stored = rows('restaurant_settings')[0];
+    expect(stored.restaurant_name).toBe('Ember & Co.'); // untouched — nothing was saved
+    expect(stored.site_locations).toBeNull();
+    expect('reservation_fee_enabled' in stored).toBe(false);
+    expect('reservation_fee_amount' in stored).toBe(false);
+  });
+
+  it('(viii) a CONDITIONAL 23514 naming site_locations throws — the veto guards both families (audit D1)', async () => {
+    stub.failWrites('restaurant_settings', (_op, cols) =>
+      cols.includes('site_locations')
+        ? { code: '23514', message: 'new row for relation "restaurant_settings" violates check constraint "restaurant_settings_site_locations_check"' }
+        : null);
+    stub.seed('restaurant_settings', [settingsRow()]);
+    await expect(repo.updateSettings(fullPatch)).rejects.toThrow('settings update failed');
+    expect(stub.writeAttempts.get('restaurant_settings')).toBe(1);
+    const stored = rows('restaurant_settings')[0];
+    expect(stored.restaurant_name).toBe('Ember & Co.'); // untouched — nothing was saved
+    expect(stored.site_locations).toBeNull();
+    expect('reservation_fee_enabled' in stored).toBe(false);
+    expect('reservation_fee_amount' in stored).toBe(false);
+  });
+});
+
 describe('reservations — create paths', () => {
   const input = {
     userId: 'user-9', name: 'Walk In', email: 'walk@example.com', phone: '555-1',
@@ -320,6 +470,21 @@ describe('reviews moderation writes', () => {
     await expect(repo.deleteReview(created.id)).resolves.toBe(true);
     expect(rows('reviews')).toHaveLength(0);
     await expect(repo.deleteReview(created.id)).resolves.toBe(false);
+  });
+
+  it('getReview reads one review by id with its approval flag; absent and malformed ids are null', async () => {
+    stub.seed('reviews', [
+      { id: 'rev-a', name: 'Nia', rating: 4, comment: 'Superb', country: null, is_approved: false, created_at: ts(1) },
+      { id: 'rev-b', name: 'Omar', rating: 5, comment: 'Great', country: 'Canada', is_approved: true, created_at: ts(2) },
+    ]);
+    // The moderation handlers' pre-write snapshot read (Step 2): the
+    // DTO plus isApproved, for exactly the requested row.
+    await expect(repo.getReview('rev-a')).resolves.toEqual({
+      id: 'rev-a', name: 'Nia', rating: 4, comment: 'Superb', country: null, createdAt: ts(1), isApproved: false,
+    });
+    await expect(repo.getReview('rev-b')).resolves.toMatchObject({ isApproved: true });
+    await expect(repo.getReview('absent-id')).resolves.toBeNull();
+    await expect(repo.getReview('not-a-uuid')).resolves.toBeNull();
   });
 });
 
@@ -562,5 +727,38 @@ describe('order create — items, replay, race, degradation', () => {
     await expect(repo.createOrder(orderData())).rejects.toThrow(/order items insert failed/);
     expect(rows('orders')).toHaveLength(0); // no orphan left behind
     expect(rows('order_items')).toHaveLength(0);
+  });
+});
+
+describe('order payment transitions — the cancelled guard (mega-audit M1)', () => {
+  function orderRow(patch: Row = {}): Row {
+    return {
+      id: 'ord-m1', user_id: null, customer_name: 'Guest', customer_email: 'guest@example.com',
+      customer_phone: null, delivery_address: null, notes: null, coupon_code: null, currency: 'USD',
+      subtotal: 24, delivery_fee: 0, discount: 0, total: 24, status: 'pending',
+      payment_status: 'pending', payment_intent_id: 'pi_m1', created_at: ts(1), updated_at: ts(1),
+      ...patch,
+    };
+  }
+
+  it('markOrderPaidByPaymentIntent never pays a CANCELLED order — the stored row is untouched', async () => {
+    stub.seed('orders', [orderRow({ status: 'cancelled' })]);
+    stub.seed('order_items', []);
+    const result = await repo.markOrderPaidByPaymentIntent('pi_m1');
+    // The row is still returned (the webhook handler detects the
+    // blocked transition from it) — but nothing was written.
+    expect(result?.status).toBe('cancelled');
+    expect(result?.paymentStatus).toBe('pending');
+    expect(rows('orders')[0].payment_status).toBe('pending');
+    expect(rows('orders')[0].status).toBe('cancelled');
+  });
+
+  it('a live order still recovers failed → paid, and an already-paid replay stays a no-op', async () => {
+    stub.seed('orders', [orderRow({ status: 'confirmed', payment_status: 'failed' })]);
+    stub.seed('order_items', []);
+    expect((await repo.markOrderPaidByPaymentIntent('pi_m1'))?.paymentStatus).toBe('paid');
+    expect(rows('orders')[0].payment_status).toBe('paid');
+    expect((await repo.markOrderPaidByPaymentIntent('pi_m1'))?.paymentStatus).toBe('paid');
+    expect(rows('orders')[0].payment_status).toBe('paid');
   });
 });

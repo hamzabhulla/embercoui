@@ -29,7 +29,10 @@ No Railway, no second domain, no CORS juggling, $0 on the Hobby plan.
   - Server (function): `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
     `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `GEMINI_API_KEY` (Ember AI
     chat — without it `/api/v1/chat` returns 503), `CORS_ORIGIN` (the site's
-    own https origin), `TRUST_PROXY=1` (Vercel's edge is the one proxy hop in
+    own https origin), `SITE_URL` (the site's own https origin — drives the
+    absolute URLs in `robots.txt`, `sitemap.xml`, `llms.txt` and
+    `llms-full.txt`; unset it falls back to the demo's origin),
+    `TRUST_PROXY=1` (Vercel's edge is the one proxy hop in
     front of the function — the per-visitor rate limits key off it),
     `NODE_ENV=production`.
 - Stripe webhook URL becomes `https://<site-domain>/api/v1/payments/webhook`.
@@ -49,7 +52,7 @@ Use when a paying client needs an always-on server. Steps below.
 
 ## One-time setup
 
-Follow `SUPABASE_SETUP.md` first (all eleven migrations, seed, storage buckets, first admin, Stripe webhook).
+Follow `SUPABASE_SETUP.md` first (all sixteen migrations, seed, storage buckets, first admin, Stripe webhook).
 
 ### Frontend (Vercel)
 - Import the repo, root directory = project root (not `backend/`).
@@ -60,7 +63,7 @@ Follow `SUPABASE_SETUP.md` first (all eleven migrations, seed, storage buckets, 
 ### Backend (Railway)
 - New service from the same repo, root directory = `backend/`.
 - Build `npm run build`, start `npm start` (runs `node dist/index.js`).
-- Env vars: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (server-side only — never as a `VITE_` var or anywhere in the browser bundle; in Option A the same key lives as a server-side env var on the Vercel project, where only the function can read it), `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `GEMINI_API_KEY` (Ember AI chat), `CORS_ORIGIN` (the exact Vercel domain), `TRUST_PROXY=1` (one proxy hop in front of the backend — the per-visitor rate limits key off it), `NODE_ENV=production`. `PORT` is provided by Railway.
+- Env vars: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (server-side only — never as a `VITE_` var or anywhere in the browser bundle; in Option A the same key lives as a server-side env var on the Vercel project, where only the function can read it), `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `GEMINI_API_KEY` (Ember AI chat), `CORS_ORIGIN` (the exact Vercel domain), `SITE_URL` (the site's own domain — drives the absolute URLs in `robots.txt`, `sitemap.xml`, `llms.txt` and `llms-full.txt`; unset it falls back to the demo's origin), `TRUST_PROXY=1` (one proxy hop in front of the backend — the per-visitor rate limits key off it), `NODE_ENV=production`. `PORT` is provided by Railway.
 - Health check: `GET /api/v1/health`.
 
 ## Rollback

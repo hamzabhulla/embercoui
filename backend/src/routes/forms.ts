@@ -187,7 +187,7 @@ export async function createReservationWithFee(
   };
 }
 
-export function formsRouter(deps: { repo: Repository | null; verifyToken: TokenVerifier; stripe?: StripeService | null }) {
+export function formsRouter(deps: { repo: Repository | null; verifyToken: TokenVerifier; stripe?: StripeService | null; stripeConfigured?: boolean }) {
   const router = Router();
   const repo = () => {
     if (!deps.repo) throw notConfigured();
@@ -202,7 +202,13 @@ export function formsRouter(deps: { repo: Repository | null; verifyToken: TokenV
       // form's response shape — { reservation } for a free booking,
       // { reservation, feePayment } when a fee's card step is owed.
       const { reservation, feePayment } = await createReservationWithFee(
-        { repo: repo(), stripe: deps.stripe ?? null },
+        // Mega-audit M2 coherence: the fee predicate inside the flow
+        // reads the SERVICE's presence, so a raw service must not be
+        // handed over when the (corrected) configured flag says the
+        // provider cannot settle (key-only) — the booking stays free
+        // exactly as the public settings/chat/GEO surfaces report.
+        // Default (flag unpassed) preserves the historical behaviour.
+        { repo: repo(), stripe: (deps.stripeConfigured ?? true) ? (deps.stripe ?? null) : null },
         {
           userId: req.user?.id ?? null,
           name: body.name,

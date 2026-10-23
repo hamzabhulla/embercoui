@@ -17,6 +17,19 @@ describe('loadEnv', () => {
     const env = loadEnv({ SUPABASE_URL: 'https://x.supabase.co', SUPABASE_SERVICE_ROLE_KEY: 'k' });
     expect(env.supabaseConfigured).toBe(true);
   });
+  it('stripeConfigured requires BOTH the secret key and the webhook secret (mega-audit M2)', () => {
+    // Both present → configured; either alone → NOT configured, because
+    // a charge minted with only the key could never be confirmed (the
+    // webhook 503s on verification without its secret).
+    expect(loadEnv({ STRIPE_SECRET_KEY: 'sk', STRIPE_WEBHOOK_SECRET: 'whsec' }).stripeConfigured).toBe(true);
+    expect(loadEnv({ STRIPE_SECRET_KEY: 'sk' }).stripeConfigured).toBe(false);
+    expect(loadEnv({ STRIPE_WEBHOOK_SECRET: 'whsec' }).stripeConfigured).toBe(false);
+    expect(loadEnv({}).stripeConfigured).toBe(false);
+    // The raw fields ride along untouched — only the derived flag changed.
+    const keyOnly = loadEnv({ STRIPE_SECRET_KEY: 'sk' });
+    expect(keyOnly.stripeSecretKey).toBe('sk');
+    expect(keyOnly.stripeWebhookSecret).toBeNull();
+  });
   it('rejects invalid ports', () => {
     expect(() => loadEnv({ PORT: 'abc' })).toThrow(/Invalid PORT/);
     expect(() => loadEnv({ PORT: '70000' })).toThrow(/Invalid PORT/);

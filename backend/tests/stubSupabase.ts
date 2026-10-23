@@ -90,6 +90,13 @@ export interface StubSupabase {
   seed: (table: string, rows: Row[]) => void;
   addUnique: (table: string, column: string) => void;
   setMissingColumns: (table: string, columns: string[]) => void;
+  /** Force write failures per table: the callback sees the op and the
+   * payload column names and returns the error to surface (or null to
+   * let the write proceed) — e.g. a PGRST204 whose message names NO
+   * column, which setMissingColumns cannot express. Every write op
+   * execution (forced or not) is counted in writeAttempts. */
+  failWrites: (table: string, make: ((op: string, payloadCols: string[]) => StubError | null) | null) => void;
+  writeAttempts: Map<string, number>;
   beforeInsert: (table: string, hook: (tables: Map<string, Row[]>, rows: Row[]) => StubError | null) => void;
   seedAuthUsers: (users: { id: string; email?: string }[]) => void;
   /** MFA factors per auth user, served by auth.admin.mfa (Phase B). */
@@ -103,6 +110,8 @@ export function createStubSupabase(): StubSupabase {
   const uniques = new Map<string, Set<string>>();
   const missing = new Map<string, Set<string>>();
   const insertHooks = new Map<string, ((tables: Map<string, Row[]>, rows: Row[]) => StubError | null)[]>();
+  const writeFailures = new Map<string, (op: string, payloadCols: string[]) => StubError | null>();
+  const writeAttempts = new Map<string, number>();
   const authFactors = new Map<string, { id: string; factor_type: string; status: string }[]>();
   let authUsers: { id: string; email?: string }[] = [];
   let idSeq = 0;
@@ -239,6 +248,14 @@ export function createStubSupabase(): StubSupabase {
       const payloadCols = this.op === 'update' ? Object.keys(this.patch)
         : (this.op === 'insert' || this.op === 'upsert') ? this.insertRows.flatMap((r) => Object.keys(r))
         : [];
+      if (this.op !== 'select') {
+        writeAttempts.set(this.table, (writeAttempts.get(this.table) ?? 0) + 1);
+        const fail = writeFailures.get(this.table);
+        if (fail) {
+          const forced = fail(this.op, payloadCols);
+          if (forced) return { data: null, count: null, error: forced };
+        }
+      }
       const payloadMissing = payloadCols.find((c) => missingCols.has(c));
       if (payloadMissing) {
         return {
@@ -457,9 +474,15 @@ export function createStubSupabase(): StubSupabase {
   return {
     tables,
     authFactors,
+    writeAttempts,
+    failWrites(table, make) {
+      if (make) writeFailures.set(table, make);
+      else writeFailures.delete(table);
+    },
     createClient: () => client,
     reset() {
       tables.clear(); querySeq.clear(); uniques.clear(); missing.clear(); insertHooks.clear();
+      writeFailures.clear(); writeAttempts.clear();
       authFactors.clear();
       authUsers = []; idSeq = 0; clockSeq = 0;
     },

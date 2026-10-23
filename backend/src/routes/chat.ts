@@ -11,7 +11,7 @@ import {
 } from '../lib/chat';
 import { effectiveReservationFee } from '../lib/reservationFee';
 import type { StripeService } from '../lib/stripe';
-import { createReservationWithFee, reservationSchema } from './forms';
+import { createReservationWithFee, reservationSchema, type ReservationFeePayment } from './forms';
 import { validateBody } from '../middleware/validate';
 
 const chatBodySchema = z.object({
@@ -184,6 +184,16 @@ interface ChatBookingOutcome {
     guests: number;
     status: ReservationDTO['status'];
     feePaymentStatus: ReservationDTO['feePaymentStatus'];
+    /**
+     * The fee's card step for THIS booking only — the same
+     * ReservationFeePayment handle the form route returns — present
+     * only when the creation flow minted an intent for the booking
+     * this very response created; absent for a free booking, exactly
+     * as the form route omits it. It exists so the widget can render
+     * the card step in the conversation; it is never attached to any
+     * other reservation.
+     */
+    feePayment?: ReservationFeePayment;
   } | null;
 }
 
@@ -237,6 +247,9 @@ async function executeChatBooking(
       booking: {
         id: r.id, date: r.date, time: r.time, guests: r.guests,
         status: r.status, feePaymentStatus: r.feePaymentStatus,
+        // The fee handle rides along only when the flow created one
+        // for this booking — the widget's card step keys off it.
+        ...(created.feePayment ? { feePayment: created.feePayment } : {}),
       },
     };
   } catch (err) {
@@ -326,7 +339,10 @@ export function chatRouter(deps: { repo: Repository | null; chat: ChatService | 
       let booking: ChatBookingOutcome['booking'] = null;
       if (bookingExtract.booking) {
         const outcome = await executeChatBooking(
-          { repo: deps.repo, stripe: deps.stripe ?? null },
+          // Same M2 coherence as the form route: a raw service whose
+          // provider cannot settle (key-only) mints no fee intent —
+          // the booking follows the corrected configured flag.
+          { repo: deps.repo, stripe: (deps.stripeConfigured ?? false) ? (deps.stripe ?? null) : null },
           chatUser?.id ?? null,
           bookingExtract.booking,
         );

@@ -969,16 +969,57 @@ export function adminRouter(deps: AdminDeps) {
 
   router.patch('/reviews/:id', requireSection('reviews', 'manage'), validateBody(z.object({ isApproved: z.boolean() })), async (req, res, next) => {
     try {
-      const ok = await repo().setReviewApproved(req.params.id, req.body.isApproved);
+      const r = repo();
+      const target = req.body.isApproved as boolean;
+      // The BEFORE state, for the audit row (Phase C hook — the last
+      // mutation family to gain one, mega-audit High H1): read the
+      // review by id BEFORE the write and snapshot the approval flag
+      // as a primitive (shared-reference hazard — see the orders
+      // handler). A missing review is the same 404 as before and
+      // writes no audit row.
+      const before = await r.getReview(req.params.id);
+      if (!before) throw new ApiError(404, 'Review not found');
+      const previousApproved = before.isApproved;
+      const ok = await r.setReviewApproved(req.params.id, target);
       if (!ok) throw new ApiError(404, 'Review not found');
+      // Change History: a real flip is recorded with its true
+      // from → to; a no-op write (already in the target state)
+      // records nothing — nothing changed (same rule as orders,
+      // menu and coupons). BODY HYGIENE (the Phase C rule): the
+      // review's comment is customer free text and is NEVER logged —
+      // the row carries only the author name and rating as
+      // identifiers (the reservation.created summary likewise names
+      // its customer) plus the approval change itself.
+      if (target !== previousApproved) {
+        await audit(deps, req, {
+          action: target ? 'review.approved' : 'review.unapproved',
+          entity: 'review',
+          entityId: req.params.id,
+          summary: `Review ${target ? 'approved' : 'unapproved'} — ${before.name}, ${before.rating} star${before.rating === 1 ? '' : 's'}`,
+          changes: { isApproved: { from: previousApproved, to: target } },
+        });
+      }
       res.json({ updated: true });
     } catch (err) { next(err); }
   });
 
   router.delete('/reviews/:id', requireSection('reviews', 'manage'), async (req, res, next) => {
     try {
-      const ok = await repo().deleteReview(req.params.id);
+      const r = repo();
+      // The review's identifying fields for the audit summary —
+      // after the delete the row is gone, so read it first (same
+      // delete convention as menu items and coupons: summary-only,
+      // no changes payload, and never the comment text).
+      const before = await r.getReview(req.params.id);
+      if (!before) throw new ApiError(404, 'Review not found');
+      const ok = await r.deleteReview(req.params.id);
       if (!ok) throw new ApiError(404, 'Review not found');
+      await audit(deps, req, {
+        action: 'review.deleted',
+        entity: 'review',
+        entityId: req.params.id,
+        summary: `Review deleted — ${before.name}, ${before.rating} star${before.rating === 1 ? '' : 's'}`,
+      });
       res.json({ deleted: true });
     } catch (err) { next(err); }
   });

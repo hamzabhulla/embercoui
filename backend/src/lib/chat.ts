@@ -388,7 +388,7 @@ export function buildChatSystemPrompt(
     ? `- Reservations: booking a table carries a booking fee of ${price(fee.amount)} — it is charged online by card at the moment of booking, and the table is held once the fee is paid.`
     : '- Reservations: booking a table is free of charge — there is no booking fee, ever.';
   const feeExampleLine = fee
-    ? `- Visitor: "Do I pay to book a table?" — You: "There is a booking fee of ${price(fee.amount)} — it is taken by card on the Reservations page when you book, and your table is held the moment it is paid."`
+    ? `- Visitor: "Do I pay to book a table?" — You: "There is a booking fee of ${price(fee.amount)} — it is taken by card when you book, whether you book right here or on the Reservations page, and your table is held the moment it is paid."`
     : '- Visitor: "Do I pay to book a table?" — You: "Not a thing — a table with us is free to reserve, always. The Reservations page locks it in under a minute whenever you are ready."';
   const bookingOffer = fee ? 'the table booking' : 'the free table booking';
 
@@ -648,7 +648,12 @@ export function bookingConfirmationNote(r: ReservationDTO): string {
  * The note for a booking that EXISTS but whose fee is still unpaid:
  * created, not confirmed, table not held — stated without softening
  * the fact, in the concierge's register. The amount is the effective
- * fee the creation flow actually charged, in its own currency.
+ * fee the creation flow actually charged, in its own currency. The
+ * note asserts nothing about where the payment happens: the chat
+ * response carries the fee's payment handle alongside it, and the
+ * widget presents the payment step — or, when card payment cannot
+ * be taken in the browser, says so itself. Either way this note's
+ * claims stay true on screen.
  */
 export function bookingFeePendingNote(r: ReservationDTO, fee: ReservationFee): string {
   const amount = `${fee.currency} ${fee.amount.toFixed(currencyExponent(fee.currency))}`;

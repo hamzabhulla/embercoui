@@ -22,7 +22,21 @@ Supabase Dashboard → **SQL Editor** → paste and run, in this order:
 9. `supabase/migrations/0009_hero_bucket.sql` — creates the public `hero-portfolio-video` storage bucket + policies (same model as `menu-images` in 0002)
 10. `supabase/migrations/0010_site_locations.sql` — per-location website contacts: a `site_locations` JSON on the settings (footer / contact page / reservation section overrides of the global profile fields); settings saves degrade gracefully until it runs
 11. `supabase/migrations/0011_money_precision.sql` — money storage precision: widens every money column (menu prices, order totals, coupon values) to `numeric(12, 3)` so 3-decimal currencies (KWD, BHD…) store their smallest unit exactly instead of rounding to 2 places
-12. `supabase/seed.sql` — starter content: restaurant settings and the current menu (15 items)
+12. `supabase/migrations/0012_access_control.sql` — three-role access control (Owner / Manager / Staff): owner-controlled permissions per role and per person (`role_permissions`, `profiles.permissions`) plus the append-only `audit_events` log behind Security & Activity; the backend resolves built-in permission defaults until it runs
+13. `supabase/migrations/0013_mfa_required.sql` — per-person two-factor requirement flag (`profiles.mfa_required`): the owner's per-person MFA decision on top of the role defaults (Owner/Manager on, Staff off); MFA enforcement stays off until it runs
+14. `supabase/migrations/0014_reservation_fee.sql` — reservation fee: owner controls on the settings (`reservation_fee_enabled`, `reservation_fee_amount`) plus a per-booking fee record on reservations (amount, currency, payment status, PaymentIntent id); fees stay off until it runs
+15. `supabase/migrations/0015_reservation_requests.sql` — customer reservation change requests (`reservation_requests`): a signed-in customer's proposed date/time/guests plus a note, handled from the admin Reservations inbox; change requests return 503 until it runs
+16. `supabase/migrations/0016_profile_authority_guard.sql` — profile authority-column guard: revokes direct client writes on `profiles.permissions` and `profiles.mfa_required` and adds a guard trigger (the same treatment 0001 gave `role`), closing a hole where a signed-in staff or manager account could grant itself full admin permissions and switch off its own two-factor requirement (a customer account gained nothing from it: that role resolves to no permissions regardless of the stored values and never reaches the admin panel)
+17. `supabase/seed.sql` — starter content: restaurant settings and the current menu (15 items)
+
+**Running behind on migrations is safe but reduced — and 0016 is not optional.**
+Until a feature's migration runs, that feature stays in its reduced-but-honest
+mode: permissions resolve to the built-in defaults, MFA enforcement is off,
+reservation fees are off, change requests are unavailable (the API returns
+503), and settings saves partially degrade — nothing fails unexpectedly and nothing fakes
+success. Migration 0016 is different in kind: it closes a real
+privilege-escalation hole (see its entry above), so it belongs in every
+install's run list, not on a someday list.
 
 ## 2. Hero media files (manual, one minute)
 The `hero-portfolio-video` bucket itself is created by migration **0009** above — no manual bucket setup. Only the media files are uploaded by hand:
@@ -48,8 +62,11 @@ Vercel → your project → **Settings → Environment Variables** (Production):
   `SUPABASE_SERVICE_ROLE_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`,
   `GEMINI_API_KEY` (Ember AI chat — free key from Google AI Studio; without it
   `/api/v1/chat` returns 503), `CORS_ORIGIN` (your own site origin, e.g.
-  `https://embercoui.vercel.app`), `TRUST_PROXY=1` (one proxy hop in front of
-  the API — Vercel's edge in Option A, Railway's in Option B; the
+  `https://embercoui.vercel.app`), `SITE_URL` (your own site origin — it
+  drives the absolute URLs in `robots.txt`, `sitemap.xml`, `llms.txt` and
+  `llms-full.txt`; unset, it falls back to the demo's origin, so a real
+  install must set it to its own domain), `TRUST_PROXY=1` (one proxy hop
+  in front of the API — Vercel's edge in Option A, Railway's in Option B; the
   per-visitor rate limits key off it), `NODE_ENV=production`
 Then **Deployments → Redeploy** so the new vars apply.
 

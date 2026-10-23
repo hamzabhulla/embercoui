@@ -3,7 +3,10 @@ import { maskPii } from './pii';
 
 // Phase D — the one masking treatment the locked orders board uses.
 // Phone keeps only its last two digits; email and address are fully
-// masked with a fixed-length run so nothing (not even length) leaks.
+// masked with a fixed-length run so nothing (not even length) leaks;
+// a name keeps its first name and reduces the surname to an initial,
+// so the board can still match an order to the person at the counter
+// without the full name ever appearing on a locked screen.
 
 describe('maskPii', () => {
   it('phone: hides everything except the last two digits', () => {
@@ -24,5 +27,34 @@ describe('maskPii', () => {
 
   it('address: fully masked', () => {
     expect(maskPii('14-C Main Boulevard, Lahore', 'address')).toBe('••••••••');
+  });
+
+  it('name: first name in full, surname reduced to its initial', () => {
+    expect(maskPii('Ayesha Khan', 'name')).toBe('Ayesha K.');
+    // The surname itself never survives the mask.
+    expect(maskPii('Ayesha Khan', 'name')).not.toContain('Khan');
+  });
+
+  it('name: with more than two tokens, the initial comes from the LAST token', () => {
+    expect(maskPii('Mary Jane Watson', 'name')).toBe('Mary W.');
+  });
+
+  it('name: a single-token name has no surname to hide — the first name alone stands', () => {
+    expect(maskPii('Ayesha', 'name')).toBe('Ayesha');
+  });
+
+  it('name: a hyphenated surname contributes the initial of its first part', () => {
+    expect(maskPii('Ayesha Khan-Patel', 'name')).toBe('Ayesha K.');
+    expect(maskPii('Anne-Marie Dupont-Smith', 'name')).toBe('Anne-Marie D.');
+  });
+
+  it('name: stray whitespace is normalised and the initial is uppercased', () => {
+    expect(maskPii('  Ayesha   Khan  ', 'name')).toBe('Ayesha K.');
+    expect(maskPii('ayesha khan', 'name')).toBe('ayesha K.');
+  });
+
+  it('name: an empty or whitespace-only value falls back to the fixed mask', () => {
+    expect(maskPii('', 'name')).toBe('••••••••');
+    expect(maskPii('   ', 'name')).toBe('••••••••');
   });
 });

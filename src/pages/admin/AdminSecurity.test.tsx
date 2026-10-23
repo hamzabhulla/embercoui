@@ -182,6 +182,57 @@ describe('AdminSecurity — Phase G reservation events (final deep audit M2)', (
   });
 });
 
+describe('AdminSecurity — review moderation events (mega-audit High H1)', () => {
+  const REVIEW_ROW = (id: string, action: string) => ({
+    ...CHANGE_ROW,
+    id,
+    action,
+    entity: { type: 'review', id: 'rev-1', label: 'Review' },
+    summary: 'Review — Amélie Fontaine, 5 stars',
+    changes: { isApproved: { from: false, to: true } },
+  });
+
+  it('renders human labels for every review.* action — never the raw strings', async () => {
+    mockApi({
+      change: {
+        events: [
+          REVIEW_ROW('ev-r1', 'review.approved'),
+          REVIEW_ROW('ev-r2', 'review.unapproved'),
+          REVIEW_ROW('ev-r3', 'review.deleted'),
+        ],
+        total: 3,
+        degraded: false,
+      },
+    });
+    render(<AdminSecurity />);
+    await screen.findByText('Sign-in');
+    fireEvent.click(screen.getByRole('button', { name: 'Change History' }));
+    expect(await screen.findByText('Review approved')).toBeTruthy();
+    expect(screen.getByText('Review unapproved')).toBeTruthy();
+    expect(screen.getByText('Review deleted')).toBeTruthy();
+    for (const raw of ['review.approved', 'review.unapproved', 'review.deleted']) {
+      expect(screen.queryByText(raw)).toBeNull();
+    }
+  });
+
+  it('the Type filter offers the review. prefix, and selecting it is sent as the action prefix', async () => {
+    render(<AdminSecurity />);
+    await screen.findByText('Sign-in');
+    fireEvent.click(screen.getByRole('button', { name: 'Change History' }));
+    await screen.findByText('Menu item updated');
+    const select = screen.getByLabelText('Type') as HTMLSelectElement;
+    const values = [...select.options].map((o) => o.value);
+    expect(values).toContain('review.');
+    expect(screen.getByRole('option', { name: 'Reviews' })).toBeTruthy();
+
+    fireEvent.change(select, { target: { value: 'review.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }));
+    await waitFor(() => {
+      expect(h.adminGet).toHaveBeenCalledWith(expect.stringContaining('action=review.'));
+    });
+  });
+});
+
 describe('AdminSecurity — filters + export', () => {
   it('the CSV export carries the applied filters', async () => {
     render(<AdminSecurity />);
@@ -198,5 +249,39 @@ describe('AdminSecurity — filters + export', () => {
     expect(path).toContain('category=auth');
     expect(path).toContain('q=harvest');
     expect(filename).toBe('security-activity.csv');
+  });
+});
+
+describe('AdminSecurity — payment-on-cancelled marker events (mega-audit M1)', () => {
+  const MARKER_ROW = (id: string, action: string, entityType: string) => ({
+    ...CHANGE_ROW,
+    id,
+    action,
+    actor: { id: null, label: 'Stripe webhook', role: null },
+    entity: { type: entityType, id: 'x-1', label: entityType },
+    summary: 'Payment received for a cancelled booking — not counted as revenue. Refund the payment from the Stripe dashboard.',
+    changes: null,
+  });
+
+  it('renders human labels for both payment_on_cancelled actions — never the raw strings — and shows the webhook actor', async () => {
+    mockApi({
+      change: {
+        events: [
+          MARKER_ROW('ev-m1', 'order.payment_on_cancelled', 'order'),
+          MARKER_ROW('ev-m2', 'reservation.payment_on_cancelled', 'reservation'),
+        ],
+        total: 2,
+        degraded: false,
+      },
+    });
+    render(<AdminSecurity />);
+    await screen.findByText('Sign-in');
+    fireEvent.click(screen.getByRole('button', { name: 'Change History' }));
+    expect(await screen.findByText('Payment received for cancelled order')).toBeTruthy();
+    expect(screen.getByText('Booking fee received for cancelled reservation')).toBeTruthy();
+    expect(screen.getAllByText('Stripe webhook').length).toBeGreaterThan(0);
+    for (const raw of ['order.payment_on_cancelled', 'reservation.payment_on_cancelled']) {
+      expect(screen.queryByText(raw)).toBeNull();
+    }
   });
 });

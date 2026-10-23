@@ -5,12 +5,19 @@ import type { RetrievedPaymentIntent, StripeService } from '../lib/stripe';
 import { optionalAuth, type AuthedRequest, type TokenVerifier } from '../lib/auth';
 import { validateBody } from '../middleware/validate';
 import { cardMinimumMinorUnits, sanitizeCurrencyCode, toMinorUnits } from '../lib/currency';
-import type { OrderDTO, Repository } from '../repositories/types';
+import type { AuditEventInput, OrderDTO, Repository } from '../repositories/types';
 
 interface PaymentDeps {
   repo: Repository | null;
   stripe: StripeService | null;
   verifyToken: TokenVerifier;
+  /**
+   * The corrected configured flag (mega-audit M2: secret key AND
+   * webhook secret). When explicitly false, a raw service object
+   * must not mint or settle anything — the provider cannot settle.
+   * Unpassed preserves the historical service-presence behaviour.
+   */
+  stripeConfigured?: boolean;
 }
 
 const intentSchema = z.object({ orderId: z.string().min(1, 'Order id is required') });
@@ -30,7 +37,7 @@ export function paymentsRouter(deps: PaymentDeps) {
   router.post('/payments/create-intent', optionalAuth(deps), validateBody(intentSchema), async (req: AuthedRequest, res, next) => {
     try {
       if (!deps.repo) throw notConfigured();
-      if (!deps.stripe) throw stripeNotConfigured();
+      if (!deps.stripe || deps.stripeConfigured === false) throw stripeNotConfigured();
       const repo = deps.repo;
       const { orderId } = req.body as z.infer<typeof intentSchema>;
       const order = await repo.getOrder(orderId);
@@ -133,11 +140,36 @@ export function paymentsRouter(deps: PaymentDeps) {
   return router;
 }
 
+/**
+ * Honest handling for money that genuinely arrived on a CANCELLED
+ * order/reservation (mega-audit M1): the guarded repository
+ * transitions refuse to mark it paid (so it is never counted as
+ * revenue and never holds seats), but the charge is REAL — the owner
+ * must be able to see it and refund it. This records a server-side
+ * audit event in Security & Activity: no human actor (actorId null —
+ * audit_events.actor_id deliberately has no FK and null-actor rows
+ * are precedented), labelled truthfully as the Stripe webhook, with
+ * a `<entity>.<past-tense>` action that lands in the 'change'
+ * category (anything not auth.*). Best-effort by design, following
+ * lib/audit.ts's swallow-after-log philosophy: a failed marker write
+ * (including the pre-0012 database, where insertAuditEvent degrades
+ * to a no-op) must never fail the webhook response — Stripe still
+ * gets its 200 ack. The loud console trace fires either way.
+ */
+async function recordPaymentOnCancelled(repo: Repository, input: AuditEventInput): Promise<void> {
+  console.warn(`[payments] webhook payment_intent.succeeded settled a payment on cancelled ${input.entity} ${input.entityId} — not counted as revenue; the owner must refund it via the Stripe dashboard`);
+  try {
+    await repo.insertAuditEvent(input);
+  } catch (err) {
+    console.error('[payments] webhook payment-on-cancelled marker failed:', err instanceof Error ? err.message : err);
+  }
+}
+
 /** Mounted in app.ts BEFORE the JSON parser — Stripe needs the raw body. */
-export function createWebhookHandler(deps: Pick<PaymentDeps, 'repo' | 'stripe'>): RequestHandler {
+export function createWebhookHandler(deps: Pick<PaymentDeps, 'repo' | 'stripe' | 'stripeConfigured'>): RequestHandler {
   return async (req, res, next) => {
     try {
-      if (!deps.stripe) throw stripeNotConfigured();
+      if (!deps.stripe || deps.stripeConfigured === false) throw stripeNotConfigured();
       if (!deps.repo) throw notConfigured();
       const signature = req.header('stripe-signature');
       if (!signature) throw new ApiError(400, 'Missing Stripe signature');
@@ -161,6 +193,22 @@ export function createWebhookHandler(deps: Pick<PaymentDeps, 'repo' | 'stripe'>)
             // Stripe must not retry forever — but leave a trace so the
             // payment can be reconciled by hand.
             console.warn(`[payments] webhook ${event.type} referenced unknown reservation fee intent ${event.paymentIntentId}`);
+          } else if (event.type === 'payment_intent.succeeded' && reservation.status === 'cancelled' && reservation.feePaymentStatus !== 'paid') {
+            // The fee's money arrived but the booking is cancelled:
+            // the guarded transition refused to mark it paid. Record
+            // it for the owner (M1 analogue) — never silently.
+            await recordPaymentOnCancelled(deps.repo, {
+              actorId: null,
+              actorLabel: 'Stripe webhook',
+              actorRole: null,
+              action: 'reservation.payment_on_cancelled',
+              entity: 'reservation',
+              entityId: reservation.id,
+              summary: `Booking fee of ${reservation.feeCurrency ?? ''} ${reservation.feeAmount ?? ''} received for a cancelled reservation — not counted as revenue. Refund the payment from the Stripe dashboard.`,
+              changes: null,
+              ip: null,
+              userAgent: null,
+            });
           }
         } else if (!intentType) {
           let order: OrderDTO | null = null;
@@ -176,6 +224,24 @@ export function createWebhookHandler(deps: Pick<PaymentDeps, 'repo' | 'stripe'>)
             // not retry forever — but leave a server-side trace so the
             // payment can be reconciled by hand.
             console.warn(`[payments] webhook ${event.type} referenced unknown payment intent ${event.paymentIntentId}`);
+          } else if (event.type === 'payment_intent.succeeded' && order.status === 'cancelled' && order.paymentStatus !== 'paid') {
+            // The money genuinely arrived but the order is cancelled:
+            // the guarded transition refused to mark it paid, so it is
+            // NOT revenue. Record it for the owner instead of letting
+            // it vanish (mega-audit M1) — the refund path is the
+            // Stripe dashboard, exactly as the admin cancel copy says.
+            await recordPaymentOnCancelled(deps.repo, {
+              actorId: null,
+              actorLabel: 'Stripe webhook',
+              actorRole: null,
+              action: 'order.payment_on_cancelled',
+              entity: 'order',
+              entityId: order.id,
+              summary: `Payment of ${order.currency} ${order.total} received for a cancelled order — not counted as revenue. Refund the payment from the Stripe dashboard.`,
+              changes: null,
+              ip: null,
+              userAgent: null,
+            });
           }
         }
       }

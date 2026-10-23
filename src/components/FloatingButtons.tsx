@@ -1,9 +1,25 @@
 import { useState, useEffect, useRef } from 'react';
-import { apiRequest, fetchMenuItems, fetchPublicSettings } from '../services/api.ts';
+import { apiRequest, fetchMenuItems, fetchPublicSettings, type ReservationFeePayment } from '../services/api.ts';
+import { stripePromise } from '../lib/stripe.ts';
+import { ReservationFeePaymentPanel } from './ReservationFeePayment.tsx';
 import { useCart } from '../context/CartContext.tsx';
 
-interface ChatMsg { role: 'user' | 'assistant' | 'note'; content: string }
+interface ChatMsg {
+  role: 'user' | 'assistant' | 'note' | 'fee';
+  content: string;
+  /**
+   * A 'fee' message only: the booking-fee card step attached to the
+   * exchange that created the booking, carrying the payment handle
+   * the chat response returned for THAT booking. Display-only — fee
+   * messages never ride back to the API.
+   */
+  feePayment?: ReservationFeePayment;
+  /** Set when the guest has paid the fee through the panel. */
+  feePaid?: boolean;
+}
 interface CartAction { menuItemId: number; quantity: number }
+/** The booking summary a chat response may carry (server-written, from the created record). */
+interface ChatBooking { id: string; feePayment?: ReservationFeePayment }
 
 export default function FloatingButtons() {
   const [isOpen, setIsOpen] = useState(false);
@@ -52,12 +68,13 @@ export default function FloatingButtons() {
   }, [chatMessages, sending, isChatOpen]);
 
   const sendChat = async (text: string, history: ChatMsg[]) => {
-    // Notes are display-only — the API accepts just user/assistant turns.
-    const payload: ChatMsg[] = [...history.filter((m) => m.role !== 'note'), { role: 'user' as const, content: text }].slice(-12);
+    // Notes and fee panels are display-only — the API accepts just
+    // user/assistant turns, and a payment handle never rides back.
+    const payload: ChatMsg[] = [...history.filter((m) => m.role === 'user' || m.role === 'assistant'), { role: 'user' as const, content: text }].slice(-12);
     setChatMessages([...history, { role: 'user', content: text }]);
     setSending(true);
     setSendFailed(false);
-    const res = await apiRequest<{ reply: string; actions?: CartAction[] }>('/api/v1/chat', {
+    const res = await apiRequest<{ reply: string; actions?: CartAction[]; booking?: ChatBooking | null }>('/api/v1/chat', {
       method: 'POST',
       // The cart rides along as ids + quantities only — the server
       // resolves names, prices and the total against the live menu, so
@@ -70,6 +87,20 @@ export default function FloatingButtons() {
     setSending(false);
     if (res.ok && res.data?.reply) {
       setChatMessages((prev) => [...prev, { role: 'assistant', content: res.data!.reply }]);
+      // A booking created by THIS exchange that owes its fee: the
+      // card step renders right here in the conversation, attached
+      // to this exchange — the same shared panel the Reservations
+      // page uses. Without a publishable key the card cannot be
+      // taken here at all — say so honestly, exactly as the
+      // Reservations page does, instead of stranding the guest.
+      const feePayment = res.data.booking?.feePayment ?? null;
+      if (feePayment) {
+        if (stripePromise) {
+          setChatMessages((prev) => [...prev, { role: 'fee', content: '', feePayment }]);
+        } else {
+          setChatMessages((prev) => [...prev, { role: 'assistant', content: 'Card payment is unavailable right now — please call us to complete your booking.' }]);
+        }
+      }
       if (res.data.actions?.length) void applyCartActions(res.data.actions);
     } else if (res.status === 503) {
       setUnavailable(true);
@@ -164,7 +195,33 @@ export default function FloatingButtons() {
             </div>
           ) : (
             <div className="flex flex-col gap-3">
-              {chatMessages.map((m, i) => m.role === 'note' ? (
+              {chatMessages.map((m, i) => m.role === 'fee' && m.feePayment ? (
+                m.feePaid ? (
+                  // The factual outcome, in the Reservations page's own
+                  // register: the fee is paid (through Stripe), the
+                  // reservation is received, and confirmation still
+                  // follows the team's review — never more than that.
+                  <div key={i} className="self-stretch px-4 py-4" style={{ background: '#1C2B1E' }}>
+                    <p className="text-xl mb-2" style={{ fontFamily: 'Cormorant Garamond, serif', color: '#F5F0E8' }}>
+                      <span className="text-[#C17A3A]">✦</span> Booking Fee Paid
+                    </p>
+                    <p className="text-[12.5px] leading-relaxed" style={{ fontFamily: 'Jost, sans-serif', color: 'rgba(245,240,232,0.65)' }}>
+                      Your booking fee has been paid through Stripe, and we've received your reservation request. Our team will review it and call you to confirm — please keep your phone handy. We look forward to welcoming you.
+                    </p>
+                  </div>
+                ) : (
+                  // The fee card step on the site's dark green, like the
+                  // Reservations section — the shared panel (Stripe
+                  // night appearance included) renders unchanged inside.
+                  <div key={i} className="self-stretch px-4 py-4" style={{ background: '#1C2B1E' }}>
+                    <ReservationFeePaymentPanel
+                      fee={m.feePayment}
+                      variant="compact"
+                      onPaid={() => setChatMessages((prev) => prev.map((msg, idx) => (idx === i ? { ...msg, feePaid: true } : msg)))}
+                    />
+                  </div>
+                )
+              ) : m.role === 'note' ? (
                 <div key={i} className="self-center text-center px-3 py-1.5 rounded-full border border-[#C17A3A]/30 bg-[#C17A3A]/10 text-[11.5px] text-[#8A5A24]" style={{ fontFamily: 'Jost, sans-serif' }}>
                   ✓ {m.content}
                 </div>

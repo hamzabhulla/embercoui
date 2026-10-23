@@ -298,14 +298,19 @@ describe('locked shell', () => {
     expect(screen.queryByText('Admin Console')).toBeNull();
     expect(screen.queryByText('Reservations')).toBeNull();
     // The board kept working: it fetched again for the locked view
-    // and renders the order with name, items and total visible…
+    // and renders the order with items and total visible…
     await waitFor(() => {
       expect(h.adminGet.mock.calls.filter((c) => String(c[0]).includes('/admin/orders')).length).toBeGreaterThan(1);
     });
-    expect(screen.getByText('Ayesha Khan')).toBeTruthy();
     expect(screen.getByText(/Ember Classic/)).toBeTruthy();
     expect(screen.getByText('Total')).toBeTruthy();
-    // …while email and phone are masked…
+    // …while the customer name is reduced to first name + surname
+    // initial — the full name, and the surname in particular,
+    // appears NOWHERE in the rendered board…
+    expect(screen.getByText('Ayesha K.')).toBeTruthy();
+    expect(screen.queryByText('Ayesha Khan')).toBeNull();
+    expect(document.body.textContent).not.toContain('Khan');
+    // …and email and phone are masked…
     expect(screen.queryByText(/ayesha@example\.com/)).toBeNull();
     expect(screen.getByText(/••••••••/)).toBeTruthy();
     expect(screen.queryByText(/\+92 300 1234534/)).toBeNull();
@@ -321,8 +326,9 @@ describe('locked shell', () => {
     expect(await screen.findByRole('heading', { name: 'Screen locked' })).toBeTruthy();
     expect(screen.queryByText('Settings page')).toBeNull();
     expect(screen.queryByText('Admin Console')).toBeNull();
-    // The board is still the board — masked.
-    expect(await screen.findByText('Ayesha Khan')).toBeTruthy();
+    // The board is still the board — masked, name included.
+    expect(await screen.findByText('Ayesha K.')).toBeTruthy();
+    expect(screen.queryByText('Ayesha Khan')).toBeNull();
     expect(screen.queryByText(/ayesha@example\.com/)).toBeNull();
   });
 
@@ -374,8 +380,10 @@ describe('step-up unlock', () => {
     expect(await screen.findByRole('heading', { name: 'Screen locked' })).toBeTruthy();
     fireEvent.change(screen.getByLabelText('Your password'), { target: { value: 'correct-password' } });
     fireEvent.click(screen.getByRole('button', { name: 'Unlock' }));
-    // The shell is back — sidebar and the unmasked board.
+    // The shell is back — sidebar and the unmasked board, the full
+    // customer name rendering exactly as it does unlocked.
     expect(await screen.findByText('Admin Console')).toBeTruthy();
+    expect(await screen.findByText('Ayesha Khan')).toBeTruthy();
     expect(await screen.findByText(/ayesha@example\.com/)).toBeTruthy();
     expect(h.signIn).toHaveBeenCalledWith('owner@example.com', 'correct-password');
     expect(sessionStorage.getItem(LOCK_KEY)).toBeNull();
@@ -577,7 +585,8 @@ describe('Google unlock (OAuth re-auth)', () => {
     expect(screen.getByRole('button', { name: /Verify with Google/ })).toBeTruthy();
     expect(screen.queryByLabelText('Your password')).toBeNull();
     // The board is still live and masked behind the panel.
-    expect(await screen.findByText('Ayesha Khan')).toBeTruthy();
+    expect(await screen.findByText('Ayesha K.')).toBeTruthy();
+    expect(screen.queryByText('Ayesha Khan')).toBeNull();
     expect(screen.queryByText(/ayesha@example\.com/)).toBeNull();
   });
 
@@ -694,7 +703,8 @@ describe('Google unlock (OAuth re-auth)', () => {
     expect(await screen.findByRole('heading', { name: 'Screen locked' })).toBeTruthy();
     expect(screen.queryByText('Admin Console')).toBeNull();
     // Board still masked — no intermediate state unmasked anything.
-    expect(await screen.findByText('Ayesha Khan')).toBeTruthy();
+    expect(await screen.findByText('Ayesha K.')).toBeTruthy();
+    expect(screen.queryByText('Ayesha Khan')).toBeNull();
     expect(screen.queryByText(/ayesha@example\.com/)).toBeNull();
     expect(sessionStorage.getItem(UNLOCK_INTENT_KEY)).toBeNull();
     expect(sessionStorage.getItem(LOCK_KEY)).toBe(lockRecord(USER.id));
@@ -844,7 +854,8 @@ describe('OAuth return courier — the round-trip that lands on the customer sit
     expect(screen.getByRole('heading', { name: 'Screen locked' })).toBeTruthy();
     expect(screen.queryByText('Customer home')).toBeNull();
     // The board behind the panel stays masked while the step gates.
-    expect(screen.getByText('Ayesha Khan')).toBeTruthy();
+    expect(screen.getByText('Ayesha K.')).toBeTruthy();
+    expect(screen.queryByText('Ayesha Khan')).toBeNull();
     expect(screen.queryByText(/ayesha@example\.com/)).toBeNull();
 
     fireEvent.change(screen.getByLabelText('6-digit code'), { target: { value: '123456' } });

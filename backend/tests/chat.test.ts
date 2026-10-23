@@ -880,6 +880,15 @@ describe('POST /api/v1/chat — booking with a fee in force', () => {
     expect(note).not.toContain('is reserved');
     expect(note).not.toMatch(/\b(error|invalid|failed|required|please provide)\b/i);
     expect(res.body.booking).toMatchObject({ id: created.id, feePaymentStatus: 'pending' });
+    // Step 10 (M3): the fee's payment handle rides in THIS response's
+    // booking — the very intent the flow minted and stored — so the
+    // widget can render the card step in the conversation.
+    expect(res.body.booking.feePayment).toEqual({
+      clientSecret: `${intentId}_secret_test`,
+      paymentIntentId: intentId,
+      amount: 5,
+      currency: 'USD',
+    });
   });
 
   it('fee switched on but NO card provider connected: the booking is free — the effective-fee rule, through chat', async () => {
@@ -888,6 +897,29 @@ describe('POST /api/v1/chat — booking with a fee in force', () => {
     expect(res.status).toBe(200);
     const created = repo.reservations[0];
     expect(created).toMatchObject({ feeAmount: null, feePaymentStatus: 'none' });
+    expect(res.body.reply).toContain('is reserved, and your reference is');
+    expect(res.body.reply).not.toContain('not yet confirmed');
+    // No intent was created, so no payment handle exists to carry.
+    expect(res.body.booking.feePayment).toBeUndefined();
+  });
+
+  it('key-only card config (service present, provider cannot settle): the booking is free and carries no feePayment', async () => {
+    // Step 3 coherence, through chat: a raw Stripe service whose
+    // provider is not fully configured (no webhook secret) must mint
+    // no intent — the route gates the service on the configured
+    // flag, exactly as the form route does.
+    const stripe = new FakeStripeService();
+    const repo = feeRepo();
+    const fakeChat = new FakeChatService();
+    const target = createApp({
+      env: testEnv({ stripeConfigured: false, stripeSecretKey: 'sk_test_fake' }),
+      repo, verifyToken: fakeVerifyToken, chat: fakeChat, stripe,
+    });
+    const res = await askBooking(target, fakeChat, `Arranging that for you now. ${bookMarker()}`);
+    expect(res.status).toBe(200);
+    expect(repo.reservations[0]).toMatchObject({ feeAmount: null, feePaymentStatus: 'none' });
+    expect(stripe.intents.size).toBe(0);
+    expect(res.body.booking.feePayment).toBeUndefined();
     expect(res.body.reply).toContain('is reserved, and your reference is');
     expect(res.body.reply).not.toContain('not yet confirmed');
   });
@@ -938,5 +970,16 @@ describe('POST /api/v1/chat — the booking dialogue the prompt teaches', () => 
     const system = lastSystem(fakeChat);
     expect(system).toContain('A booking fee of USD 5.00 applies to reservations: mention it graciously before you take the booking');
     expect(system).toContain('until that fee is paid, never call the table held or the booking confirmed');
+    // Step 10 (M3) + audit correction: the fee IS payable by card
+    // when booking — but neither the prompt nor the note asserts a
+    // card step exists in this conversation, because in the guard
+    // configuration (server secrets set, no publishable key in the
+    // browser) the widget renders no card step at all. The location
+    // in the example attaches to the BOOKING (taken here, or on the
+    // Reservations page), never to the payment.
+    expect(system).toContain('taken by card when you book, whether you book right here or on the Reservations page');
+    expect(system).not.toContain('card step');
+    expect(system).not.toContain('right here in this conversation');
+    expect(system).not.toContain('it is taken by card on the Reservations page when you book');
   });
 });

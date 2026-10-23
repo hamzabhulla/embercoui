@@ -87,7 +87,13 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
     supabaseConfigured: Boolean(supabaseUrl && supabaseServiceRoleKey),
     stripeSecretKey,
     stripeWebhookSecret,
-    stripeConfigured: Boolean(stripeSecretKey),
+    // "Configured" means payments can actually SETTLE (mega-audit
+    // M2): a secret key alone can mint intents, but without the
+    // webhook secret the webhook 503s on verification, so no charge
+    // could ever be confirmed. Key-only therefore reads as NOT
+    // configured everywhere this flag is consumed (fee rule, public
+    // settings, admin provider flag, chat/GEO grounding, health).
+    stripeConfigured: Boolean(stripeSecretKey && stripeWebhookSecret),
     geminiApiKey,
     geminiConfigured: Boolean(geminiApiKey),
     geminiModel: source.GEMINI_MODEL?.trim() || null,

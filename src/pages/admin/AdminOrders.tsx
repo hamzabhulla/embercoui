@@ -31,7 +31,8 @@ export default function AdminOrders() {
   // Screen lock (Phase D): the locked view renders this same board —
   // same fetch, same refresh behaviour — but with every write
   // control removed and customer PII masked (the Pii component
-  // below). The name, items, totals and statuses stay fully visible
+  // below): the name reduced to first name + surname initial, email
+  // and phone hidden. Items, totals and statuses stay fully visible
   // so the board remains useful at the counter.
   const canManage = can('orders', 'manage') && !locked;
   const [orders, setOrders] = useState<Order[]>([]);
@@ -76,7 +77,7 @@ export default function AdminOrders() {
 
   return (
     <div>
-      <PageTitle sub={locked ? 'Screen locked — order details are masked.' : "Status changes save instantly and update the customer's tracking page"}>Orders</PageTitle>
+      <PageTitle sub={locked ? 'Screen locked — customer details are masked.' : "Status changes save instantly and update the customer's tracking page"}>Orders</PageTitle>
       <div className="flex flex-wrap gap-2 mb-5">
         {STATUSES.map((s) => (
           <FChip key={s} active={filter === s} onClick={() => setFilter(s)}>{chipLabel(s)}</FChip>
@@ -90,7 +91,7 @@ export default function AdminOrders() {
           <Card key={o.id} className="px-5 py-[18px]">
             <div className="flex flex-wrap justify-between gap-3 mb-2.5">
               <div>
-                <p className="font-bodytext text-[14.5px] font-semibold text-[#16241A]">{o.customerName} <span className="font-normal text-[#98A096] text-[12.5px]">· <Pii kind="email" value={o.customerEmail} />{o.customerPhone ? <> · <Pii kind="phone" value={o.customerPhone} /></> : ''}</span></p>
+                <p className="font-bodytext text-[14.5px] font-semibold text-[#16241A]"><Pii kind="name" value={o.customerName} /> <span className="font-normal text-[#98A096] text-[12.5px]">· <Pii kind="email" value={o.customerEmail} />{o.customerPhone ? <> · <Pii kind="phone" value={o.customerPhone} /></> : ''}</span></p>
                 <p className="font-bodytext text-[12px] text-[#98A096] mt-0.5">{fmtDate(o.createdAt)} · <span className="text-[#8A551F] font-semibold">#{o.id.slice(0, 8)}</span></p>
               </div>
               <div className="flex gap-1.5 items-start"><StatusPill status={o.status} /><StatusPill status={o.paymentStatus} /></div>

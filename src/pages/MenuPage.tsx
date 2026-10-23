@@ -6,6 +6,7 @@ import { useCart } from '../context/CartContext.tsx';
 import { useCurrency } from '../context/CurrencyContext.tsx';
 import { useNavigate } from 'react-router-dom';
 import FavoriteButton from '../components/FavoriteButton.tsx';
+import { itemMatchesDietaryFilter } from '../lib/dietaryTags.ts';
 
 const filters = ['All', 'Vegan', 'Spicy', 'Gluten Free'];
 
@@ -250,8 +251,11 @@ export default function MenuPage() {
       }
 
       if (activeFilter !== 'All') {
-        const wanted = activeFilter.toLowerCase();
-        if (!getDietaryTags(item).some((t) => t.toLowerCase() === wanted)) return false;
+        // Both sides go through the one canonical normaliser
+        // (src/lib/dietaryTags.ts): a tag the owner typed as
+        // "Gluten-Free" or "gluten_free" matches the "Gluten Free"
+        // filter, while "Gluten" alone never does.
+        if (!itemMatchesDietaryFilter(getDietaryTags(item), activeFilter)) return false;
       }
 
       return true;

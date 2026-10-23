@@ -58,6 +58,22 @@ describe('real Stripe webhook verification', () => {
     expect((await repo.getOrder(orderId))?.paymentStatus).toBe('paid');
   });
 
+  it('a correctly signed succeeded for a CANCELLED order never pays it — and records the owner marker (M1)', async () => {
+    const orderId = await seedOrderWithIntent('pi_real_cancelled');
+    await repo.updateOrderStatus(orderId, 'pending', 'cancelled');
+    const payload = eventPayload('payment_intent.succeeded', { id: 'pi_real_cancelled', object: 'payment_intent', status: 'succeeded' });
+    const res = await postWebhook(payload, sign(payload, WEBHOOK_SECRET));
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ received: true });
+    const after = await repo.getOrder(orderId);
+    expect(after?.status).toBe('cancelled');
+    expect(after?.paymentStatus).not.toBe('paid');
+    const markers = repo.auditEvents.filter((e) => e.action === 'order.payment_on_cancelled' && e.entityId === orderId);
+    expect(markers).toHaveLength(1);
+    expect(markers[0]).toMatchObject({ actorId: null, actorLabel: 'Stripe webhook', entity: 'order' });
+    expect(markers[0].summary).toContain('not counted as revenue');
+  });
+
   it('a correctly signed payment_intent.payment_failed marks the order failed', async () => {
     const orderId = await seedOrderWithIntent('pi_real_failed');
     const payload = eventPayload('payment_intent.payment_failed', { id: 'pi_real_failed', object: 'payment_intent', status: 'requires_payment_method' });
