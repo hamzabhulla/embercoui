@@ -163,8 +163,13 @@ function UnlockPanel() {
     setGoogleError('');
     // Plant the intent BEFORE leaving: the return landing needs it
     // to tell this round-trip apart from an ordinary locked visit,
-    // and it binds the proof to THIS account (see lib/screenLock).
-    persistUnlockIntent(user.id);
+    // it binds the proof to THIS account, and it carries the admin
+    // path the user is on — the OAuth redirect asks to come back
+    // here too, but the landing cannot be trusted to honour it (in
+    // practice it is the site root), so the intent's copy of the
+    // path is the one the return courier (UnlockReturnCourier)
+    // acts on, from wherever the browser actually comes down.
+    persistUnlockIntent(user.id, Date.now(), location.pathname);
     // The same OAuth sign-in the login pages use, returning to the
     // admin path the user was on when the screen locked.
     const res = await signInWithGoogle(location.pathname);

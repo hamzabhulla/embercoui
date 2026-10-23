@@ -47,12 +47,15 @@ vi.mock('../../lib/supabase', () => ({ supabase: { auth: { mfa: h.mfa } }, isSup
 import AdminLayout, { AdminGuard } from './AdminLayout';
 import AdminOrders from '../../pages/admin/AdminOrders';
 import { IDLE_LIMIT_MS, LockProvider, useLock } from './LockContext';
+import UnlockReturnCourier from './UnlockReturnCourier';
 import {
   UNLOCK_INTENT_KEY,
   UNLOCK_INTENT_TTL_MS,
   consumeUnlockIntent,
+  peekUnlockIntent,
   persistUnlockIntent,
   readUnlockIntent,
+  sanitizeUnlockReturnPath,
 } from '../../lib/screenLock';
 
 const LOCK_KEY = 'ember-admin-screen-lock';
@@ -73,6 +76,7 @@ const googleUser = (lastSignInAt: string) => ({
   last_sign_in_at: lastSignInAt,
 });
 const intentRecord = (userId: string, at: number) => JSON.stringify({ userId, at });
+const intentRecordAt = (userId: string, at: number, returnPath: string) => JSON.stringify({ userId, at, returnPath });
 
 function authState(over: Record<string, unknown> = {}) {
   return {
@@ -430,15 +434,19 @@ describe('unlock intent (lib/screenLock)', () => {
     expect(UNLOCK_INTENT_TTL_MS).toBe(5 * 60 * 1000);
   });
 
-  it('persist + read round-trips the record', () => {
+  it('persist + read round-trips the record — return path included, defaulting to the console root', () => {
     persistUnlockIntent('admin-1', NOW);
-    expect(readUnlockIntent()).toEqual({ userId: 'admin-1', at: NOW });
-    expect(sessionStorage.getItem(UNLOCK_INTENT_KEY)).toBe(intentRecord('admin-1', NOW));
+    expect(readUnlockIntent()).toEqual({ userId: 'admin-1', at: NOW, returnPath: '/admin' });
+    expect(sessionStorage.getItem(UNLOCK_INTENT_KEY)).toBe(
+      JSON.stringify({ userId: 'admin-1', at: NOW, returnPath: '/admin' }),
+    );
+    persistUnlockIntent('admin-1', NOW, '/admin/orders');
+    expect(readUnlockIntent()).toEqual({ userId: 'admin-1', at: NOW, returnPath: '/admin/orders' });
   });
 
   it('consume returns a fresh intent for its own account — and removes it', () => {
     persistUnlockIntent('admin-1', NOW - 60_000);
-    expect(consumeUnlockIntent('admin-1', NOW)).toEqual({ userId: 'admin-1', at: NOW - 60_000 });
+    expect(consumeUnlockIntent('admin-1', NOW)).toEqual({ userId: 'admin-1', at: NOW - 60_000, returnPath: '/admin' });
     expect(sessionStorage.getItem(UNLOCK_INTENT_KEY)).toBeNull();
   });
 
@@ -474,6 +482,85 @@ describe('unlock intent (lib/screenLock)', () => {
   });
 });
 
+describe('unlock return path (lib/screenLock)', () => {
+  const NOW = 1_700_000_000_000;
+
+  it('keeps plain admin paths — the console root and its sections', () => {
+    expect(sanitizeUnlockReturnPath('/admin')).toBe('/admin');
+    expect(sanitizeUnlockReturnPath('/admin/orders')).toBe('/admin/orders');
+    expect(sanitizeUnlockReturnPath('/admin/settings')).toBe('/admin/settings');
+  });
+
+  it('rejects anything that is not a plain admin path back to the console root', () => {
+    // Off-origin shapes — the stored record is never trusted as read.
+    expect(sanitizeUnlockReturnPath('https://evil.example')).toBe('/admin');
+    expect(sanitizeUnlockReturnPath('//evil.example')).toBe('/admin');
+    expect(sanitizeUnlockReturnPath('/\\evil.example')).toBe('/admin');
+    // Customer paths are not unlock destinations.
+    expect(sanitizeUnlockReturnPath('/menu')).toBe('/admin');
+    expect(sanitizeUnlockReturnPath('/')).toBe('/admin');
+    // A mere prefix is not the console.
+    expect(sanitizeUnlockReturnPath('/administrator')).toBe('/admin');
+    // The lock never lives on the sign-in page.
+    expect(sanitizeUnlockReturnPath('/admin/login')).toBe('/admin');
+    expect(sanitizeUnlockReturnPath('/admin/login/again')).toBe('/admin');
+    // Junk.
+    expect(sanitizeUnlockReturnPath('')).toBe('/admin');
+    expect(sanitizeUnlockReturnPath(undefined)).toBe('/admin');
+    expect(sanitizeUnlockReturnPath(null)).toBe('/admin');
+    expect(sanitizeUnlockReturnPath(42)).toBe('/admin');
+  });
+
+  it('a forged return path stored in the record is sanitised on the way out — and when planted', () => {
+    sessionStorage.setItem(UNLOCK_INTENT_KEY, intentRecordAt('admin-1', NOW, '//evil.example'));
+    expect(readUnlockIntent()?.returnPath).toBe('/admin');
+    persistUnlockIntent('admin-1', NOW, 'https://evil.example/phish');
+    expect(readUnlockIntent()?.returnPath).toBe('/admin');
+  });
+
+  it('a record with no return path at all (planted before the field existed) resolves to the console root', () => {
+    sessionStorage.setItem(UNLOCK_INTENT_KEY, intentRecord('admin-1', NOW));
+    expect(readUnlockIntent()).toEqual({ userId: 'admin-1', at: NOW, returnPath: '/admin' });
+  });
+});
+
+describe('peekUnlockIntent (the courier’s read)', () => {
+  const NOW = 1_700_000_000_000;
+
+  it('a fresh intent for the account is returned — and LEFT IN PLACE for the lock provider to consume', () => {
+    persistUnlockIntent('admin-1', NOW - 60_000, '/admin/orders');
+    expect(peekUnlockIntent('admin-1', NOW)).toEqual({ userId: 'admin-1', at: NOW - 60_000, returnPath: '/admin/orders' });
+    // Peeking is not consuming: the proof record survives for
+    // LockProvider, and a real consume still works afterwards.
+    expect(sessionStorage.getItem(UNLOCK_INTENT_KEY)).not.toBeNull();
+    expect(consumeUnlockIntent('admin-1', NOW)).not.toBeNull();
+    expect(sessionStorage.getItem(UNLOCK_INTENT_KEY)).toBeNull();
+  });
+
+  it('a stale intent is discarded on sight', () => {
+    persistUnlockIntent('admin-1', NOW - UNLOCK_INTENT_TTL_MS - 1);
+    expect(peekUnlockIntent('admin-1', NOW)).toBeNull();
+    expect(sessionStorage.getItem(UNLOCK_INTENT_KEY)).toBeNull();
+  });
+
+  it("another account's intent is discarded on sight", () => {
+    persistUnlockIntent('someone-else', NOW - 1000);
+    expect(peekUnlockIntent('admin-1', NOW)).toBeNull();
+    expect(sessionStorage.getItem(UNLOCK_INTENT_KEY)).toBeNull();
+  });
+
+  it('a malformed stored value is discarded on sight', () => {
+    sessionStorage.setItem(UNLOCK_INTENT_KEY, 'not json at all');
+    expect(peekUnlockIntent('admin-1', NOW)).toBeNull();
+    expect(sessionStorage.getItem(UNLOCK_INTENT_KEY)).toBeNull();
+  });
+
+  it('no intent — nothing to peek, nothing to clear', () => {
+    expect(peekUnlockIntent('admin-1', NOW)).toBeNull();
+    expect(sessionStorage.getItem(UNLOCK_INTENT_KEY)).toBeNull();
+  });
+});
+
 describe('Google unlock (OAuth re-auth)', () => {
   beforeEach(() => {
     sessionStorage.setItem(LOCK_KEY, lockRecord(USER.id));
@@ -504,10 +591,14 @@ describe('Google unlock (OAuth re-auth)', () => {
     expect(await screen.findByRole('heading', { name: 'Screen locked' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /Verify with Google/ }));
     await waitFor(() => expect(h.googleSignIn).toHaveBeenCalledWith('/admin/orders'));
-    const planted = JSON.parse(sessionStorage.getItem(UNLOCK_INTENT_KEY) ?? 'null') as { userId?: unknown; at?: unknown } | null;
+    const planted = JSON.parse(sessionStorage.getItem(UNLOCK_INTENT_KEY) ?? 'null') as { userId?: unknown; at?: unknown; returnPath?: unknown } | null;
     expect(planted?.userId).toBe(USER.id);
     expect(typeof planted?.at).toBe('number');
     expect(Math.abs(Date.now() - (planted?.at as number))).toBeLessThan(5000);
+    // The planted intent also carries the page the admin was locked
+    // on — the copy of the destination the return courier acts on
+    // when the OAuth landing puts the browser somewhere else.
+    expect(planted?.returnPath).toBe('/admin/orders');
     // Nothing unlocked by the click itself — the proof is the return.
     expect(screen.getByRole('heading', { name: 'Screen locked' })).toBeTruthy();
     expect(sessionStorage.getItem(LOCK_KEY)).toBe(lockRecord(USER.id));
@@ -679,5 +770,168 @@ describe('Google unlock (OAuth re-auth)', () => {
     expect(await screen.findByText('Admin Console')).toBeTruthy();
     expect(h.signIn).toHaveBeenCalledWith('owner@example.com', 'correct-password');
     expect(sessionStorage.getItem(LOCK_KEY)).toBeNull();
+  });
+});
+
+
+describe('OAuth return courier — the round-trip that lands on the customer site', () => {
+  // The app root as App renders it: the courier inside the router,
+  // the customer home at '/', and the admin shell under '/admin'.
+  function renderSite(initial = '/') {
+    return render(
+      <MemoryRouter initialEntries={[initial]}>
+        <UnlockReturnCourier />
+        <Routes>
+          <Route path="/" element={<div>Customer home</div>} />
+          <Route path="/admin/login" element={<div>Admin login page</div>} />
+          <Route path="/admin" element={<AdminGuard><AdminLayout /></AdminGuard>}>
+            <Route index element={<div>Dashboard page</div>} />
+            <Route path="orders" element={<AdminOrders />} />
+            <Route path="settings" element={<div>Settings page</div>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+  }
+
+  function asGoogleAdmin(lastSignInAt: string) {
+    h.auth.current = authState({
+      user: googleUser(lastSignInAt),
+      profile: profileFor('admin'),
+      canAccessAdmin: true,
+    });
+  }
+
+  it('carries a completed round-trip back to the locked admin page — and unlocks there', async () => {
+    // The state the owner actually came home to: browser on the
+    // customer home, lock persisted, fresh intent planted 60s ago
+    // naming /admin/orders, session signed in 30s ago (after the
+    // plant — a completed round-trip).
+    sessionStorage.setItem(LOCK_KEY, lockRecord(USER.id));
+    const t = Date.now();
+    sessionStorage.setItem(UNLOCK_INTENT_KEY, intentRecordAt(USER.id, t - 60_000, '/admin/orders'));
+    asGoogleAdmin(new Date(t - 30_000).toISOString());
+
+    renderSite('/');
+    // The courier navigated, the lock provider consumed the intent
+    // on the admin mount, the proof checked out, and the panel's
+    // pipeline finished: the console is open ON the orders page.
+    expect(await screen.findByText('Admin Console')).toBeTruthy();
+    expect(screen.queryByText('Customer home')).toBeNull();
+    expect(await screen.findByText(/ayesha@example\.com/)).toBeTruthy(); // unmasked board = unlocked shell
+    expect(sessionStorage.getItem(LOCK_KEY)).toBeNull();
+    expect(sessionStorage.getItem(UNLOCK_INTENT_KEY)).toBeNull();
+    // As on the direct landing: no factor, no event invented for the proof.
+    expect(h.reportEvent).not.toHaveBeenCalled();
+  });
+
+  it('the TOTP step still gates — in place, on the admin page the courier returned to', async () => {
+    sessionStorage.setItem(LOCK_KEY, lockRecord(USER.id));
+    const t = Date.now();
+    sessionStorage.setItem(UNLOCK_INTENT_KEY, intentRecordAt(USER.id, t - 60_000, '/admin/orders'));
+    asGoogleAdmin(new Date(t - 30_000).toISOString());
+    h.mfa.listFactors.mockResolvedValue({
+      data: { all: [{ id: 'fac-1', factor_type: 'totp', status: 'verified' }] },
+      error: null,
+    });
+
+    renderSite('/');
+    // Carried back to the admin page, identity proven — and still
+    // locked behind the code step, on that page. (The longer wait:
+    // the chain here is navigation → guard → layout → provider →
+    // panel pipeline, more hops than a direct admin landing.)
+    expect(await screen.findByText(/Identity verified\./, {}, { timeout: 3000 })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Screen locked' })).toBeTruthy();
+    expect(screen.queryByText('Customer home')).toBeNull();
+    // The board behind the panel stays masked while the step gates.
+    expect(screen.getByText('Ayesha Khan')).toBeTruthy();
+    expect(screen.queryByText(/ayesha@example\.com/)).toBeNull();
+
+    fireEvent.change(screen.getByLabelText('6-digit code'), { target: { value: '123456' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Verify and unlock' }));
+    expect(await screen.findByText('Admin Console')).toBeTruthy();
+    expect(sessionStorage.getItem(LOCK_KEY)).toBeNull();
+  });
+
+  it('an intent with no return path (planted by the previous build) returns to the console root', async () => {
+    sessionStorage.setItem(LOCK_KEY, lockRecord(USER.id));
+    const t = Date.now();
+    sessionStorage.setItem(UNLOCK_INTENT_KEY, intentRecord(USER.id, t - 60_000));
+    asGoogleAdmin(new Date(t - 30_000).toISOString());
+
+    renderSite('/');
+    expect(await screen.findByText('Dashboard page')).toBeTruthy();
+    expect(screen.queryByText('Customer home')).toBeNull();
+  });
+
+  it('a forged return path in the stored intent can only ever land on the console root', async () => {
+    sessionStorage.setItem(LOCK_KEY, lockRecord(USER.id));
+    const t = Date.now();
+    sessionStorage.setItem(UNLOCK_INTENT_KEY, intentRecordAt(USER.id, t - 60_000, '//evil.example/phish'));
+    asGoogleAdmin(new Date(t - 30_000).toISOString());
+
+    renderSite('/');
+    expect(await screen.findByText('Dashboard page')).toBeTruthy();
+    expect(screen.queryByText('Customer home')).toBeNull();
+  });
+
+  it('a slow round-trip (>5 min on the chooser): the stale intent is discarded, no navigation — and the lock honestly remains for the next /admin visit', async () => {
+    sessionStorage.setItem(LOCK_KEY, lockRecord(USER.id));
+    const t = Date.now();
+    sessionStorage.setItem(
+      UNLOCK_INTENT_KEY,
+      intentRecordAt(USER.id, t - UNLOCK_INTENT_TTL_MS - 60_000, '/admin/orders'),
+    );
+    asGoogleAdmin(new Date(t - 30_000).toISOString());
+
+    renderSite('/');
+    await waitFor(() => expect(sessionStorage.getItem(UNLOCK_INTENT_KEY)).toBeNull());
+    expect(screen.getByText('Customer home')).toBeTruthy();
+    expect(screen.queryByText('Admin Console')).toBeNull();
+    // Nothing was unlocked or forgiven: the persisted lock is
+    // exactly as it was, so opening /admin shows the locked board
+    // with the panel offering Verify with Google again.
+    expect(sessionStorage.getItem(LOCK_KEY)).toBe(lockRecord(USER.id));
+  });
+
+  it("another account's intent on the landing is discarded, not acted on", async () => {
+    sessionStorage.setItem(LOCK_KEY, lockRecord(USER.id));
+    const t = Date.now();
+    sessionStorage.setItem(UNLOCK_INTENT_KEY, intentRecordAt('someone-else', t - 60_000, '/admin/orders'));
+    asGoogleAdmin(new Date(t - 30_000).toISOString());
+
+    renderSite('/');
+    await waitFor(() => expect(sessionStorage.getItem(UNLOCK_INTENT_KEY)).toBeNull());
+    expect(screen.getByText('Customer home')).toBeTruthy();
+    expect(screen.queryByText('Admin Console')).toBeNull();
+  });
+
+  it('an ordinary signed-in visit to the site navigates nowhere', async () => {
+    asGoogleAdmin(new Date().toISOString());
+    renderSite('/');
+    expect(await screen.findByText('Customer home')).toBeTruthy();
+    expect(screen.queryByText('Admin Console')).toBeNull();
+  });
+
+  it('the courier never consumes the intent itself — without a lock provider at the destination, the record is still there', async () => {
+    // Rendered against a bare route (no AdminLayout, so no
+    // LockProvider): the courier must still navigate — and must
+    // leave the intent in place, because consuming it is the lock
+    // provider's proof, not the courier's.
+    const t = Date.now();
+    sessionStorage.setItem(UNLOCK_INTENT_KEY, intentRecordAt(USER.id, t - 60_000, '/admin/orders'));
+    asGoogleAdmin(new Date(t - 30_000).toISOString());
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <UnlockReturnCourier />
+        <Routes>
+          <Route path="/" element={<div>Customer home</div>} />
+          <Route path="/admin/orders" element={<div>Bare admin page</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText('Bare admin page')).toBeTruthy();
+    expect(sessionStorage.getItem(UNLOCK_INTENT_KEY)).not.toBeNull();
+    expect(readUnlockIntent()?.returnPath).toBe('/admin/orders');
   });
 });

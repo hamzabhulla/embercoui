@@ -13,6 +13,8 @@ const h = vi.hoisted(() => ({
   auth: { current: null as unknown },
   adminGet: vi.fn(),
   signIn: vi.fn(),
+  googleSignIn: vi.fn(),
+  reportEvent: vi.fn(async () => {}),
   mfa: {
     listFactors: vi.fn(),
     enroll: vi.fn(),
@@ -24,10 +26,15 @@ const h = vi.hoisted(() => ({
 
 vi.mock('../../context/AuthContext', () => ({ useAuth: () => h.auth.current }));
 vi.mock('../../services/adminApi', () => ({ adminGet: h.adminGet }));
-vi.mock('../../services/auth', () => ({ signInWithEmail: h.signIn, isSupabaseConfigured: true }));
+vi.mock('../../services/auth', () => ({ signInWithEmail: h.signIn, signInWithGoogle: h.googleSignIn, isSupabaseConfigured: true }));
+vi.mock('../../services/sessionEvents', () => ({
+  reportAdminSessionEvent: h.reportEvent,
+  reportAdminLoginFailed: vi.fn(async () => {}),
+}));
 vi.mock('../../lib/supabase', () => ({ supabase: { auth: { mfa: h.mfa } }, isSupabaseConfigured: true }));
 
 import AdminLogin from './AdminLogin';
+import { ADMIN_LOGIN_RETURN_KEY, plantAdminLoginReturn } from '../../lib/adminLoginReturn';
 
 function authState(over: Record<string, unknown> = {}) {
   return {
@@ -60,8 +67,10 @@ function renderPage(withPanelRoute = false) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  sessionStorage.clear();
   h.auth.current = authState();
   h.signIn.mockResolvedValue({ error: null });
+  h.googleSignIn.mockResolvedValue({ error: null });
   h.adminGet.mockResolvedValue(meFor({ required: false, satisfied: true }));
   h.mfa.listFactors.mockResolvedValue({ data: { all: [] }, error: null });
   h.mfa.enroll.mockResolvedValue({
@@ -179,5 +188,102 @@ describe('AdminLogin — privileged, MFA driven by the mocked /me', () => {
     expect(await screen.findByText("We couldn't verify your access")).toBeTruthy();
     expect(screen.getByText('Network unreachable')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+  });
+});
+
+
+describe('AdminLogin — Google sign-in (accounts created with Google hold no password)', () => {
+  // A session user as the OAuth return delivers it: a Google
+  // identity, and a last_sign_in_at stamped by the round-trip.
+  const googleAdmin = (lastSignInAt: string) => ({
+    ...USER,
+    app_metadata: { provider: 'google', providers: ['google'] },
+    identities: [{ provider: 'google' }],
+    last_sign_in_at: lastSignInAt,
+  });
+
+  it('offers Continue with Google beside the form — no sign-up, no explainer note', () => {
+    renderPage();
+    expect(screen.getByRole('button', { name: /Continue with Google/ })).toBeTruthy();
+    // Owner decision 2026-10-23: the "This page is sign-in only…"
+    // explainer note was removed from the page — keep it gone.
+    expect(screen.queryByText(/This page is sign-in only/)).toBeNull();
+    expect(screen.queryByText(/create account/i)).toBeNull();
+  });
+
+  it('clicking it plants the return record and starts OAuth back to THIS page — never the customer home', async () => {
+    renderPage();
+    fireEvent.click(screen.getByRole('button', { name: /Continue with Google/ }));
+    await waitFor(() => expect(h.googleSignIn).toHaveBeenCalledWith('/admin/login'));
+    const planted = JSON.parse(sessionStorage.getItem(ADMIN_LOGIN_RETURN_KEY) ?? 'null') as { returnPath?: unknown; at?: unknown } | null;
+    expect(planted?.returnPath).toBe('/admin/login');
+    expect(typeof planted?.at).toBe('number');
+    expect(Math.abs(Date.now() - (planted?.at as number))).toBeLessThan(5000);
+  });
+
+  it('an OAuth start failure surfaces the service wording in the page alert — and leaves no record behind', async () => {
+    h.googleSignIn.mockResolvedValue({ error: "Google sign-in isn't available yet — an admin will need to enable it." });
+    renderPage();
+    fireEvent.click(screen.getByRole('button', { name: /Continue with Google/ }));
+    expect((await screen.findByRole('alert')).textContent).toContain("Google sign-in isn't available yet");
+    expect(sessionStorage.getItem(ADMIN_LOGIN_RETURN_KEY)).toBeNull();
+  });
+
+  it('the return landing: fresh Google session + planted record → the login is reported and the panel opens', async () => {
+    plantAdminLoginReturn('/admin/login', Date.now() - 60_000);
+    h.auth.current = authState({
+      user: googleAdmin(new Date(Date.now() - 30_000).toISOString()),
+      profile: profileFor('admin'),
+    });
+    renderPage(true);
+    expect(await screen.findByText('Panel home')).toBeTruthy();
+    // The session this page started counts as a sign-in performed
+    // here — the same Login Activity entry the password path writes.
+    expect(h.reportEvent).toHaveBeenCalledWith('login');
+    // The record is single-use: consumed by the landing.
+    expect(sessionStorage.getItem(ADMIN_LOGIN_RETURN_KEY)).toBeNull();
+  });
+
+  it('the return landing with MFA due enters the same MfaFlow the password path reaches — no bypass', async () => {
+    plantAdminLoginReturn('/admin/login', Date.now() - 60_000);
+    h.auth.current = authState({
+      user: googleAdmin(new Date(Date.now() - 30_000).toISOString()),
+      profile: profileFor('admin'),
+    });
+    h.adminGet.mockResolvedValue(meFor({ required: true, satisfied: false }));
+    renderPage(true);
+    expect(await screen.findByText('Set up two-factor authentication')).toBeTruthy();
+    expect(screen.queryByText('Panel home')).toBeNull();
+  });
+
+  it('a Google account without an admin role gets the identical no-access state as a password account', async () => {
+    plantAdminLoginReturn('/admin/login', Date.now() - 60_000);
+    const signOut = vi.fn(async () => {});
+    h.auth.current = authState({
+      user: googleAdmin(new Date(Date.now() - 30_000).toISOString()),
+      profile: profileFor('customer'),
+      signOut,
+    });
+    renderPage();
+    expect(await screen.findByText(/doesn't\s+have admin access/)).toBeTruthy();
+    expect(screen.getByText('owner@example.com')).toBeTruthy();
+    expect(h.adminGet).not.toHaveBeenCalled();
+    expect(h.reportEvent).not.toHaveBeenCalledWith('login');
+  });
+
+  it('a pre-existing session merely visiting with a record in the window is NOT logged as a fresh login', async () => {
+    // The record is fresh, but this session was signed in two hours
+    // ago — long before the plant. The freshness binding refuses to
+    // credit it as the sign-in this page started; routing is
+    // unaffected (a live privileged session still opens the panel).
+    plantAdminLoginReturn('/admin/login', Date.now() - 60_000);
+    h.auth.current = authState({
+      user: googleAdmin(new Date(Date.now() - 2 * 3_600_000).toISOString()),
+      profile: profileFor('admin'),
+    });
+    renderPage(true);
+    expect(await screen.findByText('Panel home')).toBeTruthy();
+    expect(h.reportEvent).not.toHaveBeenCalledWith('login');
+    expect(sessionStorage.getItem(ADMIN_LOGIN_RETURN_KEY)).toBeNull();
   });
 });

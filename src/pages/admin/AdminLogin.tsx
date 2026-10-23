@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { signInWithEmail } from '../../services/auth';
+import { signInWithEmail, signInWithGoogle } from '../../services/auth';
 import { adminGet } from '../../services/adminApi';
 import { reportAdminLoginFailed, reportAdminSessionEvent } from '../../services/sessionEvents';
+import { clearAdminLoginReturn, consumeAdminLoginReturn, plantAdminLoginReturn } from '../../lib/adminLoginReturn';
 import type { AdminMe } from '../../components/admin/PermissionsContext';
 import MfaFlow from '../../components/admin/MfaFlow';
+import { GoogleIcon } from '../../components/auth/GoogleButton';
 import { ghostBtn, inputCls, labelCls, primaryBtn } from '../../components/admin/ui';
 
 /**
@@ -66,6 +68,7 @@ export default function AdminLogin() {
   const [password, setPassword] = useState('');
   const [signInError, setSignInError] = useState('');
   const [signingIn, setSigningIn] = useState(false);
+  const [googleBusy, setGoogleBusy] = useState(false);
   const [me, setMe] = useState<AdminMe | null>(null);
   const [meError, setMeError] = useState('');
   const [meTick, setMeTick] = useState(0);
@@ -73,6 +76,29 @@ export default function AdminLogin() {
   // password sign-in — a returning admin who lands here with a live
   // session did not just sign in, and must not be logged as one.
   const signedInHere = useRef(false);
+
+  // The Google sign-in's return: the button below plants a return
+  // record before leaving (lib/adminLoginReturn), and the return
+  // courier brings the browser back to this page from wherever the
+  // OAuth landing put it. When a session is present, consume the
+  // record: it counts as a sign-in performed HERE — the same status
+  // the password submit gives it — only when the session in hand
+  // was actually signed in after the record was planted (its own
+  // last_sign_in_at stamp, the freshness binding the screen-lock
+  // intent uses). A pre-existing session that merely visits this
+  // page within the record's window signed in somewhere else, at
+  // some earlier time, and is not logged as a fresh login.
+  const loginReturnChecked = useRef(false);
+  useEffect(() => {
+    if (!user || loginReturnChecked.current) return;
+    loginReturnChecked.current = true;
+    const record = consumeAdminLoginReturn();
+    if (!record) return;
+    const signedInAt = user.last_sign_in_at ? Date.parse(user.last_sign_in_at) : NaN;
+    if (Number.isFinite(signedInAt) && signedInAt >= record.at - 60_000) {
+      signedInHere.current = true;
+    }
+  }, [user]);
 
   const privileged = !!profile && PRIVILEGED_ROLES.includes(profile.role);
 
@@ -130,6 +156,37 @@ export default function AdminLogin() {
       // On success the AuthContext picks the session up and this page
       // advances on its own — nothing to navigate to manually.
     };
+    // Google sign-in for accounts that were created with Google and
+    // hold no password (the owner's own shape). The return record is
+    // planted BEFORE leaving: the OAuth redirect asks to come back
+    // to this page, but the provider's landing cannot be trusted to
+    // honour it — the record is what the return courier acts on to
+    // bring the browser back here from wherever it comes down, and
+    // what this page consumes on the return to recognise the login
+    // (see the effect above). From the return on, this page's own
+    // state machine decides — /me, the MFA flow when due, the
+    // no-access state for a non-admin account — exactly as it does
+    // for a password sign-in; the button changes how the session
+    // arrives, never what it is allowed to do.
+    const startGoogle = async () => {
+      if (googleBusy) return;
+      setGoogleBusy(true);
+      setSignInError('');
+      plantAdminLoginReturn('/admin/login');
+      const res = await signInWithGoogle('/admin/login');
+      if (res.error) {
+        // The round-trip never started (e.g. the provider is not
+        // enabled yet): no landing is coming, so no record may
+        // linger for one. The error is the sign-in service's own
+        // friendly wording, surfaced in the same alert as the
+        // password path's failures.
+        clearAdminLoginReturn();
+        setSignInError(res.error);
+        setGoogleBusy(false);
+      }
+      // On success the browser is already navigating to Google; the
+      // busy state simply stands until the page goes away.
+    };
     return (
       <Page>
         <Card>
@@ -150,6 +207,20 @@ export default function AdminLogin() {
               {signingIn ? 'Signing in…' : 'Sign in'}
             </button>
           </form>
+          <div className="flex items-center gap-3 mt-5" aria-hidden="true">
+            <span className="h-px flex-1 bg-[#EFE9DB]" />
+            <span className="font-bodytext text-[11px] tracking-[0.14em] uppercase text-[#98A096]">or</span>
+            <span className="h-px flex-1 bg-[#EFE9DB]" />
+          </div>
+          <button
+            type="button"
+            onClick={() => void startGoogle()}
+            disabled={googleBusy}
+            className="w-full mt-4 inline-flex items-center justify-center gap-2.5 h-[42px] rounded-[10px] bg-white border border-[#EAE3D3] text-[#16241A] font-bodytext text-[13px] font-medium hover:bg-[#FBF8F1] transition disabled:opacity-50 cursor-pointer"
+          >
+            <GoogleIcon />
+            {googleBusy ? 'Redirecting to Google…' : 'Continue with Google'}
+          </button>
           <div className="mt-5 flex items-center justify-between gap-3">
             <button type="button" onClick={() => navigate('/forgot-password')} className="font-bodytext text-[12.5px] font-medium text-[#8A551F] underline underline-offset-2">
               Forgot your password?
@@ -158,9 +229,6 @@ export default function AdminLogin() {
               Back to website
             </button>
           </div>
-          <p className="font-bodytext text-[12px] text-[#98A096] mt-5 pt-4 border-t border-[#EFE9DB]">
-            This page is sign-in only. Accounts are created on the main website, and admin access is granted by the owner.
-          </p>
         </Card>
       </Page>
     );

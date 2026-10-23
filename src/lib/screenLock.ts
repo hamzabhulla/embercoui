@@ -17,6 +17,12 @@
  * short-lived record the unlock panel plants before starting an
  * OAuth round-trip, so the return landing can tell a completed
  * re-authentication from a visit that merely happens to be locked.
+ * The intent also carries the admin path the panel was on: the
+ * OAuth return landing cannot be trusted to be that path (the
+ * provider's redirect lands wherever its own configuration says,
+ * in practice the site root), and sessionStorage — scoped to the
+ * origin, not the path — is the one channel that survives the
+ * round-trip regardless of where the browser comes down.
  *
  * This module is deliberately dependency-free: the auth service
  * clears the records on every sign-out, and it must be able to do so
@@ -101,12 +107,41 @@ export interface UnlockIntent {
   userId: string;
   /** When the intent was planted (epoch milliseconds, client clock). */
   at: number;
+  /** The admin path the panel was on when the round-trip started —
+   *  where the return landing must bring the admin back to. Always
+   *  a validated admin path (see sanitizeUnlockReturnPath); a
+   *  record carrying anything else — or, from before this field
+   *  existed, nothing — resolves to the console root. */
+  returnPath: string;
+}
+
+/**
+ * Validate an unlock return target. The intent lives in
+ * sessionStorage, which anything running on the origin can write,
+ * so the stored path is never trusted as read: only a plain
+ * same-origin path under the admin console is honoured — it must
+ * be exactly '/admin' or start with '/admin/', contain no backslash
+ * (some URL parsers read '/\evil' as a host) and not be the admin
+ * sign-in page itself (the lock never lives there; bouncing a
+ * freshly proven admin back to a sign-in form would be a dead end).
+ * Everything else — absolute URLs, protocol-relative URLs, customer
+ * paths, junk — falls back to '/admin'.
+ */
+export function sanitizeUnlockReturnPath(path: unknown): string {
+  if (typeof path !== 'string') return '/admin';
+  if (path !== '/admin' && !path.startsWith('/admin/')) return '/admin';
+  if (path.includes('\\')) return '/admin';
+  if (path === '/admin/login' || path.startsWith('/admin/login/')) return '/admin';
+  return path;
 }
 
 /** Plant the intent for `userId` just before the OAuth redirect. */
-export function persistUnlockIntent(userId: string, now: number = Date.now()): void {
+export function persistUnlockIntent(userId: string, now: number = Date.now(), returnPath?: string): void {
   try {
-    sessionStorage.setItem(UNLOCK_INTENT_KEY, JSON.stringify({ userId, at: now }));
+    sessionStorage.setItem(
+      UNLOCK_INTENT_KEY,
+      JSON.stringify({ userId, at: now, returnPath: sanitizeUnlockReturnPath(returnPath) }),
+    );
   } catch {
     // Storage unavailable — the return landing then finds no intent
     // and the lock simply stays up; the panel remains fully usable.
@@ -115,7 +150,8 @@ export function persistUnlockIntent(userId: string, now: number = Date.now()): v
 
 /**
  * Read the planted intent, or null when there is none (or the stored
- * value is malformed — a malformed record proves nothing).
+ * value is malformed — a malformed record proves nothing). The
+ * return path is validated on the way out, never trusted as stored.
  */
 export function readUnlockIntent(): UnlockIntent | null {
   try {
@@ -123,9 +159,9 @@ export function readUnlockIntent(): UnlockIntent | null {
     if (raw === null) return null;
     const parsed: unknown = JSON.parse(raw);
     if (parsed !== null && typeof parsed === 'object') {
-      const { userId, at } = parsed as { userId?: unknown; at?: unknown };
+      const { userId, at, returnPath } = parsed as { userId?: unknown; at?: unknown; returnPath?: unknown };
       if (typeof userId === 'string' && userId !== '' && typeof at === 'number' && Number.isFinite(at)) {
-        return { userId, at };
+        return { userId, at, returnPath: sanitizeUnlockReturnPath(returnPath) };
       }
     }
     return null;
@@ -158,5 +194,42 @@ export function consumeUnlockIntent(userId: string, now: number = Date.now()): U
   if (intent.userId !== userId) return null;
   const age = now - intent.at;
   if (age < 0 || age > UNLOCK_INTENT_TTL_MS) return null;
+  return intent;
+}
+
+/**
+ * Peek at the planted intent for `userId` WITHOUT consuming it as
+ * proof: a fresh intent that names this account is returned with the
+ * record LEFT IN PLACE — LockProvider's consumption is the proof,
+ * and destroying the record here would destroy the proof before the
+ * lock screen ever sees it. Anything that could never count as
+ * proof — a malformed record, another account's intent, a stale or
+ * future timestamp — is discarded on sight (the same hygiene
+ * consumeUnlockIntent applies), so junk never lingers for a later
+ * lock. Used by the return courier (UnlockReturnCourier), which
+ * needs the intent's return path on landings where the lock
+ * provider is not even mounted (the site root, above all).
+ */
+export function peekUnlockIntent(userId: string, now: number = Date.now()): UnlockIntent | null {
+  const intent = readUnlockIntent();
+  if (!intent) {
+    // A stored value that did not parse as an intent is junk by the
+    // read rules; if one is physically present, drop it.
+    try {
+      if (sessionStorage.getItem(UNLOCK_INTENT_KEY) !== null) clearUnlockIntent();
+    } catch {
+      // Storage unavailable — nothing was planted in the first place.
+    }
+    return null;
+  }
+  if (intent.userId !== userId) {
+    clearUnlockIntent();
+    return null;
+  }
+  const age = now - intent.at;
+  if (age < 0 || age > UNLOCK_INTENT_TTL_MS) {
+    clearUnlockIntent();
+    return null;
+  }
   return intent;
 }

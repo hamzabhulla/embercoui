@@ -1,5 +1,6 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabase.ts';
 import { clearPersistedScreenLock, clearUnlockIntent } from '../lib/screenLock.ts';
+import { clearAdminLoginReturn } from '../lib/adminLoginReturn.ts';
 
 export { isSupabaseConfigured };
 
@@ -69,6 +70,7 @@ export async function signOut(): Promise<void> {
   // session's round-trip and must never outlive it.
   clearPersistedScreenLock();
   clearUnlockIntent();
+  clearAdminLoginReturn();
   if (!supabase) return;
   await supabase.auth.signOut();
 }

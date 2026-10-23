@@ -25,6 +25,7 @@ import Contact from './pages/Contact.tsx';
 import ResetPassword from './pages/ResetPassword.tsx';
 import AdminLayout, { AdminGuard } from './components/admin/AdminLayout';
 import { SectionGate } from './components/admin/PermissionsContext';
+import UnlockReturnCourier from './components/admin/UnlockReturnCourier';
 
 // Route-level code splitting (audit fix 16): the heavy customer pages
 // (checkout pulls in Stripe, account and order tracking are large) and
@@ -116,6 +117,12 @@ function App() {
   return (
     <CurrencyProvider>
     <CartProvider>
+      {/* Brings a completed admin Google round-trip (sign-in or
+          screen-lock step-up) back to the admin page it started
+          from when the OAuth provider landed the browser somewhere
+          else — see components/admin/UnlockReturnCourier. Renders
+          nothing. */}
+      <UnlockReturnCourier />
       <div className="min-h-screen" style={{ background: '#F5F0E8' }}>
         {!isAdmin && <Navbar forceDark={canonicalPath === '/menu' || canonicalPath === '/our-story' || canonicalPath === '/contact' || canonicalPath === '/account' || canonicalPath === '/reset-password' || canonicalPath === '/checkout' || canonicalPath.startsWith('/track-order')} />}
         {!isAdmin && <StructuredData />}

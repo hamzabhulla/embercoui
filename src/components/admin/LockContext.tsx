@@ -40,7 +40,13 @@ import {
  * Accounts that signed in with Google hold no password, so for them
  * the unlock step-up is a Google OAuth round-trip (see LockedView):
  * the panel plants an unlock intent (lib/screenLock), leaves for
- * Google, and lands back here. This provider consumes the intent at
+ * Google, and the browser lands wherever the provider sends it —
+ * in practice the site root, where this provider is not even
+ * mounted. The return courier (UnlockReturnCourier, at the app
+ * root) reads the intent's stored return path on that landing and
+ * navigates back here; the intent itself it leaves untouched,
+ * because consuming it is this provider's proof. This provider
+ * consumes the intent at
  * the same reconciliation that restores the lock, and exposes the
  * outcome as `googleProof` ONLY when all three hold: the persisted
  * lock is this account's, the intent names this account and is
