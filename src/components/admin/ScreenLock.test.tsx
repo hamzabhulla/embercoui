@@ -20,6 +20,7 @@ const h = vi.hoisted(() => ({
   adminGet: vi.fn(),
   adminSend: vi.fn(),
   signIn: vi.fn(),
+  googleSignIn: vi.fn(),
   reportEvent: vi.fn(async () => {}),
   mfa: { listFactors: vi.fn(), challenge: vi.fn(), verify: vi.fn() },
 }));
@@ -32,7 +33,11 @@ vi.mock('./PermissionsContext', () => ({
   AccessRestricted: () => null,
 }));
 vi.mock('../../services/adminApi', () => ({ adminGet: h.adminGet, adminSend: h.adminSend }));
-vi.mock('../../services/auth', () => ({ signInWithEmail: h.signIn, isSupabaseConfigured: true }));
+vi.mock('../../services/auth', () => ({
+  signInWithEmail: h.signIn,
+  signInWithGoogle: h.googleSignIn,
+  isSupabaseConfigured: true,
+}));
 vi.mock('../../services/sessionEvents', () => ({
   reportAdminSessionEvent: h.reportEvent,
   reportAdminLoginFailed: vi.fn(async () => {}),
@@ -42,12 +47,32 @@ vi.mock('../../lib/supabase', () => ({ supabase: { auth: { mfa: h.mfa } }, isSup
 import AdminLayout, { AdminGuard } from './AdminLayout';
 import AdminOrders from '../../pages/admin/AdminOrders';
 import { IDLE_LIMIT_MS, LockProvider, useLock } from './LockContext';
+import {
+  UNLOCK_INTENT_KEY,
+  UNLOCK_INTENT_TTL_MS,
+  consumeUnlockIntent,
+  persistUnlockIntent,
+  readUnlockIntent,
+} from '../../lib/screenLock';
 
 const LOCK_KEY = 'ember-admin-screen-lock';
 // The persisted record names the account that set the lock; a cold
 // mount honours it only for that account (Phase D audit M1).
 const lockRecord = (userId: string) => JSON.stringify({ userId });
 const USER = { id: 'admin-1', email: 'owner@example.com' };
+// A Google-only account (the owner's shape): the session user
+// carries a Google identity and NO email/password provider — the
+// account has no password to re-enter. `lastSignInAt` is when the
+// session in hand was signed in; a completed unlock round-trip is
+// recognised by it postdating the planted intent.
+const googleUser = (lastSignInAt: string) => ({
+  id: 'admin-1',
+  email: 'owner@example.com',
+  app_metadata: { provider: 'google', providers: ['google'] },
+  identities: [{ provider: 'google' }],
+  last_sign_in_at: lastSignInAt,
+});
+const intentRecord = (userId: string, at: number) => JSON.stringify({ userId, at });
 
 function authState(over: Record<string, unknown> = {}) {
   return {
@@ -130,6 +155,7 @@ beforeEach(() => {
   });
   h.adminSend.mockResolvedValue({});
   h.signIn.mockResolvedValue({ error: null });
+  h.googleSignIn.mockResolvedValue({ error: null });
   h.mfa.listFactors.mockResolvedValue({ data: { all: [] }, error: null });
   h.mfa.challenge.mockResolvedValue({ data: { id: 'ch-1' }, error: null });
   h.mfa.verify.mockResolvedValue({ data: {}, error: null });
@@ -394,5 +420,264 @@ describe('step-up unlock', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Unlock' }));
     expect(await screen.findByText('Admin Console')).toBeTruthy();
     expect(screen.queryByLabelText('6-digit code')).toBeNull();
+  });
+});
+
+describe('unlock intent (lib/screenLock)', () => {
+  const NOW = 1_700_000_000_000;
+
+  it('the freshness window is literally 5 minutes', () => {
+    expect(UNLOCK_INTENT_TTL_MS).toBe(5 * 60 * 1000);
+  });
+
+  it('persist + read round-trips the record', () => {
+    persistUnlockIntent('admin-1', NOW);
+    expect(readUnlockIntent()).toEqual({ userId: 'admin-1', at: NOW });
+    expect(sessionStorage.getItem(UNLOCK_INTENT_KEY)).toBe(intentRecord('admin-1', NOW));
+  });
+
+  it('consume returns a fresh intent for its own account — and removes it', () => {
+    persistUnlockIntent('admin-1', NOW - 60_000);
+    expect(consumeUnlockIntent('admin-1', NOW)).toEqual({ userId: 'admin-1', at: NOW - 60_000 });
+    expect(sessionStorage.getItem(UNLOCK_INTENT_KEY)).toBeNull();
+  });
+
+  it('an intent exactly at the TTL boundary still counts', () => {
+    persistUnlockIntent('admin-1', NOW - UNLOCK_INTENT_TTL_MS);
+    expect(consumeUnlockIntent('admin-1', NOW)).not.toBeNull();
+    expect(sessionStorage.getItem(UNLOCK_INTENT_KEY)).toBeNull();
+  });
+
+  it('a stale intent proves nothing — and is discarded', () => {
+    persistUnlockIntent('admin-1', NOW - UNLOCK_INTENT_TTL_MS - 1);
+    expect(consumeUnlockIntent('admin-1', NOW)).toBeNull();
+    expect(sessionStorage.getItem(UNLOCK_INTENT_KEY)).toBeNull();
+  });
+
+  it("another account's intent proves nothing — and is discarded", () => {
+    persistUnlockIntent('someone-else', NOW - 1000);
+    expect(consumeUnlockIntent('admin-1', NOW)).toBeNull();
+    expect(sessionStorage.getItem(UNLOCK_INTENT_KEY)).toBeNull();
+  });
+
+  it('an intent timestamped in the future proves nothing', () => {
+    persistUnlockIntent('admin-1', NOW + 60_000);
+    expect(consumeUnlockIntent('admin-1', NOW)).toBeNull();
+    expect(sessionStorage.getItem(UNLOCK_INTENT_KEY)).toBeNull();
+  });
+
+  it('a malformed stored value proves nothing — and is discarded', () => {
+    sessionStorage.setItem(UNLOCK_INTENT_KEY, '{"userId":42}');
+    expect(readUnlockIntent()).toBeNull();
+    expect(consumeUnlockIntent('admin-1', NOW)).toBeNull();
+    expect(sessionStorage.getItem(UNLOCK_INTENT_KEY)).toBeNull();
+  });
+});
+
+describe('Google unlock (OAuth re-auth)', () => {
+  beforeEach(() => {
+    sessionStorage.setItem(LOCK_KEY, lockRecord(USER.id));
+  });
+
+  it('a Google-only account is offered Verify with Google — never a password form it cannot satisfy', async () => {
+    h.auth.current = authState({
+      user: googleUser(new Date(Date.now() - 3_600_000).toISOString()),
+      profile: profileFor('admin'),
+      canAccessAdmin: true,
+    });
+    renderShell('/admin/orders');
+    expect(await screen.findByRole('heading', { name: 'Screen locked' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Verify with Google/ })).toBeTruthy();
+    expect(screen.queryByLabelText('Your password')).toBeNull();
+    // The board is still live and masked behind the panel.
+    expect(await screen.findByText('Ayesha Khan')).toBeTruthy();
+    expect(screen.queryByText(/ayesha@example\.com/)).toBeNull();
+  });
+
+  it('clicking Verify with Google plants the account-bound intent and starts OAuth back to the locked path', async () => {
+    h.auth.current = authState({
+      user: googleUser(new Date(Date.now() - 3_600_000).toISOString()),
+      profile: profileFor('admin'),
+      canAccessAdmin: true,
+    });
+    renderShell('/admin/orders');
+    expect(await screen.findByRole('heading', { name: 'Screen locked' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Verify with Google/ }));
+    await waitFor(() => expect(h.googleSignIn).toHaveBeenCalledWith('/admin/orders'));
+    const planted = JSON.parse(sessionStorage.getItem(UNLOCK_INTENT_KEY) ?? 'null') as { userId?: unknown; at?: unknown } | null;
+    expect(planted?.userId).toBe(USER.id);
+    expect(typeof planted?.at).toBe('number');
+    expect(Math.abs(Date.now() - (planted?.at as number))).toBeLessThan(5000);
+    // Nothing unlocked by the click itself — the proof is the return.
+    expect(screen.getByRole('heading', { name: 'Screen locked' })).toBeTruthy();
+    expect(sessionStorage.getItem(LOCK_KEY)).toBe(lockRecord(USER.id));
+  });
+
+  it('a completed round-trip unlocks: fresh intent, same account, sign-in after the intent, no factor', async () => {
+    const t0 = Date.now();
+    sessionStorage.setItem(UNLOCK_INTENT_KEY, intentRecord(USER.id, t0 - 60_000));
+    h.auth.current = authState({
+      user: googleUser(new Date(t0 - 30_000).toISOString()),
+      profile: profileFor('admin'),
+      canAccessAdmin: true,
+    });
+    renderShell('/admin/orders');
+    expect(await screen.findByText('Admin Console')).toBeTruthy();
+    expect(await screen.findByText(/ayesha@example\.com/)).toBeTruthy();
+    expect(sessionStorage.getItem(LOCK_KEY)).toBeNull();
+    expect(sessionStorage.getItem(UNLOCK_INTENT_KEY)).toBeNull();
+    // No password was involved, and no event was invented for the proof.
+    expect(h.signIn).not.toHaveBeenCalled();
+    expect(h.reportEvent).not.toHaveBeenCalled();
+  });
+
+  it('the TOTP step still gates after a Google re-auth when a verified factor exists', async () => {
+    const t0 = Date.now();
+    sessionStorage.setItem(UNLOCK_INTENT_KEY, intentRecord(USER.id, t0 - 60_000));
+    h.auth.current = authState({
+      user: googleUser(new Date(t0 - 30_000).toISOString()),
+      profile: profileFor('admin'),
+      canAccessAdmin: true,
+    });
+    h.mfa.listFactors.mockResolvedValue({
+      data: { all: [{ id: 'fac-1', factor_type: 'totp', status: 'verified' }] },
+      error: null,
+    });
+    renderShell('/admin/orders');
+    const codeInput = await screen.findByLabelText('6-digit code');
+    // Still locked, and the code step credits the right proof.
+    expect(screen.getByRole('heading', { name: 'Screen locked' })).toBeTruthy();
+    expect(screen.queryByText('Admin Console')).toBeNull();
+    expect(screen.getByText(/Identity verified\./)).toBeTruthy();
+    expect(sessionStorage.getItem(LOCK_KEY)).toBe(lockRecord(USER.id));
+    expect(sessionStorage.getItem(UNLOCK_INTENT_KEY)).toBeNull();
+
+    fireEvent.change(codeInput, { target: { value: '123456' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Verify and unlock' }));
+    expect(await screen.findByText('Admin Console')).toBeTruthy();
+    expect(sessionStorage.getItem(LOCK_KEY)).toBeNull();
+    expect(h.reportEvent).toHaveBeenCalledWith('mfa_verified');
+  });
+
+  it('a stale intent unlocks nothing — and is discarded', async () => {
+    const t0 = Date.now();
+    sessionStorage.setItem(UNLOCK_INTENT_KEY, intentRecord(USER.id, t0 - 10 * 60_000));
+    h.auth.current = authState({
+      user: googleUser(new Date(t0 - 60_000).toISOString()),
+      profile: profileFor('admin'),
+      canAccessAdmin: true,
+    });
+    renderShell('/admin/orders');
+    expect(await screen.findByRole('heading', { name: 'Screen locked' })).toBeTruthy();
+    expect(sessionStorage.getItem(UNLOCK_INTENT_KEY)).toBeNull();
+    expect(sessionStorage.getItem(LOCK_KEY)).toBe(lockRecord(USER.id));
+    // The Google path remains on offer for a fresh attempt.
+    expect(screen.getByRole('button', { name: /Verify with Google/ })).toBeTruthy();
+  });
+
+  it("a different account's intent unlocks nothing — and is discarded", async () => {
+    const t0 = Date.now();
+    sessionStorage.setItem(UNLOCK_INTENT_KEY, intentRecord('someone-else', t0 - 60_000));
+    h.auth.current = authState({
+      user: googleUser(new Date(t0 - 30_000).toISOString()),
+      profile: profileFor('admin'),
+      canAccessAdmin: true,
+    });
+    renderShell('/admin/orders');
+    expect(await screen.findByRole('heading', { name: 'Screen locked' })).toBeTruthy();
+    expect(sessionStorage.getItem(UNLOCK_INTENT_KEY)).toBeNull();
+    expect(sessionStorage.getItem(LOCK_KEY)).toBe(lockRecord(USER.id));
+  });
+
+  it('a cancelled round-trip unlocks nothing: the intent is fresh but no new sign-in stands behind it', async () => {
+    const t0 = Date.now();
+    sessionStorage.setItem(UNLOCK_INTENT_KEY, intentRecord(USER.id, t0 - 60_000));
+    h.auth.current = authState({
+      // Backing out at Google lands with the OLD session — signed in
+      // two hours ago, long before the intent was planted.
+      user: googleUser(new Date(t0 - 2 * 3_600_000).toISOString()),
+      profile: profileFor('admin'),
+      canAccessAdmin: true,
+    });
+    renderShell('/admin/orders');
+    expect(await screen.findByRole('heading', { name: 'Screen locked' })).toBeTruthy();
+    expect(screen.queryByText('Admin Console')).toBeNull();
+    // Board still masked — no intermediate state unmasked anything.
+    expect(await screen.findByText('Ayesha Khan')).toBeTruthy();
+    expect(screen.queryByText(/ayesha@example\.com/)).toBeNull();
+    expect(sessionStorage.getItem(UNLOCK_INTENT_KEY)).toBeNull();
+    expect(sessionStorage.getItem(LOCK_KEY)).toBe(lockRecord(USER.id));
+  });
+
+  it('an intent found with no session is discarded and locks nothing', () => {
+    sessionStorage.setItem(UNLOCK_INTENT_KEY, intentRecord(USER.id, Date.now() - 1000));
+    h.auth.current = authState({ user: null, profile: null });
+    renderProbe();
+    expect(screen.getByText('OPEN')).toBeTruthy();
+    expect(sessionStorage.getItem(UNLOCK_INTENT_KEY)).toBeNull();
+  });
+
+  it('a consumed intent cannot replay: a later manual lock demands proof again', async () => {
+    const t0 = Date.now();
+    sessionStorage.setItem(UNLOCK_INTENT_KEY, intentRecord(USER.id, t0 - 60_000));
+    h.auth.current = authState({
+      user: googleUser(new Date(t0 - 30_000).toISOString()),
+      profile: profileFor('admin'),
+      canAccessAdmin: true,
+    });
+    renderShell('/admin/orders');
+    expect(await screen.findByText('Admin Console')).toBeTruthy();
+    expect(sessionStorage.getItem(UNLOCK_INTENT_KEY)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Lock screen' }));
+    expect(await screen.findByRole('heading', { name: 'Screen locked' })).toBeTruthy();
+    // No new round-trip happened, so nothing re-opens the screen.
+    expect(screen.queryByText('Admin Console')).toBeNull();
+    expect(screen.getByRole('button', { name: /Verify with Google/ })).toBeTruthy();
+    expect(sessionStorage.getItem(UNLOCK_INTENT_KEY)).toBeNull();
+  });
+
+  it('an OAuth start failure speaks in the panel voice, keeps the lock, and leaves no intent behind', async () => {
+    h.googleSignIn.mockResolvedValue({ error: "Google sign-in isn't available yet — please use email and password for now." });
+    h.auth.current = authState({
+      user: googleUser(new Date(Date.now() - 3_600_000).toISOString()),
+      profile: profileFor('admin'),
+      canAccessAdmin: true,
+    });
+    renderShell('/admin/orders');
+    expect(await screen.findByRole('heading', { name: 'Screen locked' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Verify with Google/ }));
+    const alert = await screen.findByRole('alert');
+    // The panel's own sentence — not the provider's email-and-
+    // password advice, which this account could never act on.
+    expect(alert.textContent).toContain("Google verification isn't available right now");
+    expect(alert.textContent).toContain('sign out below and sign back in');
+    expect(alert.textContent).not.toContain('email and password');
+    expect(screen.getByRole('heading', { name: 'Screen locked' })).toBeTruthy();
+    expect(sessionStorage.getItem(UNLOCK_INTENT_KEY)).toBeNull();
+    expect(sessionStorage.getItem(LOCK_KEY)).toBe(lockRecord(USER.id));
+  });
+
+  it('an account with both password and Google keeps its password path — and gains the Google alternative', async () => {
+    h.auth.current = authState({
+      user: {
+        id: 'admin-1',
+        email: 'owner@example.com',
+        app_metadata: { provider: 'email', providers: ['email', 'google'] },
+        identities: [{ provider: 'email' }, { provider: 'google' }],
+      },
+      profile: profileFor('admin'),
+      canAccessAdmin: true,
+    });
+    renderShell('/admin/orders');
+    expect(await screen.findByRole('heading', { name: 'Screen locked' })).toBeTruthy();
+    expect(screen.getByLabelText('Your password')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Verify with Google/ })).toBeTruthy();
+    // The password path itself is untouched.
+    fireEvent.change(screen.getByLabelText('Your password'), { target: { value: 'correct-password' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Unlock' }));
+    expect(await screen.findByText('Admin Console')).toBeTruthy();
+    expect(h.signIn).toHaveBeenCalledWith('owner@example.com', 'correct-password');
+    expect(sessionStorage.getItem(LOCK_KEY)).toBeNull();
   });
 });

@@ -1,11 +1,15 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useLocation } from 'react-router-dom';
+import type { User } from '@supabase/supabase-js';
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../lib/supabase';
-import { signInWithEmail } from '../../services/auth';
+import { signInWithEmail, signInWithGoogle } from '../../services/auth';
 import { reportAdminSessionEvent } from '../../services/sessionEvents';
 import AdminOrders from '../../pages/admin/AdminOrders';
 import { usePermissions } from './PermissionsContext';
 import { clearPersistedScreenLock, useLock } from './LockContext';
+import { clearUnlockIntent, persistUnlockIntent } from '../../lib/screenLock';
+import { GoogleIcon } from '../auth/GoogleButton';
 import { friendlyMfaError } from '../../lib/mfa';
 import { ghostBtn, inputCls, labelCls, primaryBtn } from './ui';
 
@@ -19,20 +23,59 @@ import { ghostBtn, inputCls, labelCls, primaryBtn } from './ui';
  *     as unlocked; the lock state masks its customer PII (via the
  *     Pii component) and removes its write controls;
  *   - the Unlock panel: a step-up verification for the signed-in
- *     account — password re-entry, plus a current TOTP code when
- *     the account holds a verified factor.
+ *     account — re-proving ownership of the account by the method
+ *     the account actually has: password re-entry for password
+ *     accounts, a Google OAuth round-trip for Google accounts —
+ *     plus a current TOTP code when the account holds a verified
+ *     factor.
  */
+
+/**
+ * The account's sign-in providers, read off the Supabase user the
+ * session carries: `app_metadata.providers` is the authoritative
+ * list (with `app_metadata.provider` as its original single entry
+ * and the user's identities as a fallback). A user object that
+ * exposes none of these is treated as an email/password account —
+ * the pre-OAuth default, so nothing about the password path changes
+ * for accounts that carry no provider metadata.
+ */
+function accountProviders(user: User | null): string[] {
+  const meta = (user?.app_metadata ?? {}) as { provider?: unknown; providers?: unknown };
+  if (Array.isArray(meta.providers)) {
+    const list = meta.providers.filter((p): p is string => typeof p === 'string' && p !== '');
+    if (list.length > 0) return list;
+  }
+  if (typeof meta.provider === 'string' && meta.provider !== '') return [meta.provider];
+  const fromIdentities = (user?.identities ?? [])
+    .map((identity) => identity?.provider)
+    .filter((p): p is string => typeof p === 'string' && p !== '');
+  if (fromIdentities.length > 0) return [...new Set(fromIdentities)];
+  return ['email'];
+}
+
+type ProofKind = 'password' | 'google';
 
 function UnlockPanel() {
   const { user, profile, signOut } = useAuth();
-  const { unlock } = useLock();
+  const { unlock, googleProof } = useLock();
   const { refresh } = usePermissions();
+  const location = useLocation();
   const email = user?.email ?? profile?.email ?? '';
+  // Which proofs this account can offer decides the panel's shape:
+  // the password form only ever renders for an account that HAS a
+  // password (a Google-only account could never satisfy it — showing
+  // it as the sole path was the lockout this fixes); the Google
+  // button renders whenever the account holds a Google identity.
+  const providers = accountProviders(user);
+  const hasPassword = providers.includes('email');
+  const hasGoogle = providers.includes('google');
   const [step, setStep] = useState<'password' | 'totp'>('password');
   const [password, setPassword] = useState('');
   const [code, setCode] = useState('');
   const [factorId, setFactorId] = useState('');
+  const [proofKind, setProofKind] = useState<ProofKind>('password');
   const [error, setError] = useState('');
+  const [googleError, setGoogleError] = useState('');
   const [busy, setBusy] = useState(false);
 
   const finish = () => {
@@ -42,6 +85,55 @@ function UnlockPanel() {
     refresh();
     unlock();
   };
+
+  /**
+   * The one post-proof pipeline, shared by every identity proof —
+   * password re-entry and the Google round-trip alike. If the
+   * account holds a VERIFIED TOTP factor, a current code is also
+   * required before unlocking — the factor, not the backend's
+   * mfa_required flag, is what makes the second step apply to this
+   * screen. `kind` only names how identity was proven, so the code
+   * step's wording never credits the wrong method.
+   */
+  const continueAfterProof = async (kind: ProofKind) => {
+    if (!supabase) {
+      finish();
+      return;
+    }
+    const { data, error: listError } = await supabase.auth.mfa.listFactors();
+    if (listError) {
+      setError(friendlyMfaError(listError.message));
+      setBusy(false);
+      return;
+    }
+    const verified = (data?.all ?? []).find((f) => f.factor_type === 'totp' && f.status === 'verified');
+    setBusy(false);
+    if (!verified) {
+      finish();
+      return;
+    }
+    setProofKind(kind);
+    setFactorId(verified.id);
+    setStep('totp');
+  };
+
+  // Returning from the Google round-trip: LockProvider has already
+  // consumed and validated the planted intent (this account, fresh,
+  // and a sign-in that postdates it) and exposed it as googleProof.
+  // That IS the identity proof — run the same post-proof pipeline
+  // the password path runs, exactly once per panel mount. Nothing
+  // here unmasks or unlocks by itself: the pipeline decides (code
+  // step or finish) precisely as it does after a password.
+  const proofHandled = useRef(false);
+  const pipelineRef = useRef(continueAfterProof);
+  pipelineRef.current = continueAfterProof;
+  useEffect(() => {
+    if (!googleProof || proofHandled.current) return;
+    proofHandled.current = true;
+    setBusy(true);
+    setError('');
+    void pipelineRef.current('google');
+  }, [googleProof]);
 
   const submitPassword = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -60,28 +152,35 @@ function UnlockPanel() {
       return;
     }
     setPassword('');
-    // Password accepted. If the account holds a VERIFIED TOTP
-    // factor, a current code is also required before unlocking —
-    // the factor, not the backend's mfa_required flag, is what makes
-    // the second step apply to this screen.
-    if (!supabase) {
-      finish();
-      return;
-    }
-    const { data, error: listError } = await supabase.auth.mfa.listFactors();
-    if (listError) {
-      setError(friendlyMfaError(listError.message));
+    // Password accepted — the shared post-proof pipeline takes it
+    // from here (code step only when a verified factor exists).
+    await continueAfterProof('password');
+  };
+
+  const startGoogleUnlock = async () => {
+    if (busy || !user) return;
+    setBusy(true);
+    setGoogleError('');
+    // Plant the intent BEFORE leaving: the return landing needs it
+    // to tell this round-trip apart from an ordinary locked visit,
+    // and it binds the proof to THIS account (see lib/screenLock).
+    persistUnlockIntent(user.id);
+    // The same OAuth sign-in the login pages use, returning to the
+    // admin path the user was on when the screen locked.
+    const res = await signInWithGoogle(location.pathname);
+    if (res.error) {
+      // The round-trip never started (e.g. the provider is not
+      // enabled yet): no landing is coming, so no intent may linger
+      // for one — and the message stays in the panel's own voice,
+      // never the provider's raw wording.
+      clearUnlockIntent();
+      setGoogleError(hasPassword
+        ? "Google verification isn't available right now — please use your password instead."
+        : "Google verification isn't available right now — please sign out below and sign back in to continue.");
       setBusy(false);
-      return;
     }
-    const verified = (data?.all ?? []).find((f) => f.factor_type === 'totp' && f.status === 'verified');
-    setBusy(false);
-    if (!verified) {
-      finish();
-      return;
-    }
-    setFactorId(verified.id);
-    setStep('totp');
+    // On success the browser is already navigating to Google; the
+    // busy state simply stands until the page goes away.
   };
 
   const submitCode = async (e: React.FormEvent) => {
@@ -129,7 +228,9 @@ function UnlockPanel() {
       </span>
       <h1 className="font-display text-[26px] font-semibold text-[#16241A] mb-2">Screen locked</h1>
       <p className="font-bodytext text-[#5C665C] text-sm">
-        This screen locked to protect customer details. Orders keep updating below — enter your password to pick up where you left off.
+        {hasPassword
+          ? 'This screen locked to protect customer details. Orders keep updating below — enter your password to pick up where you left off.'
+          : "This screen locked to protect customer details. Orders keep updating below — verify it's you with Google to pick up where you left off."}
       </p>
       {email && (
         <p className="font-bodytext text-[13px] text-[#16241A] mt-3">
@@ -138,29 +239,56 @@ function UnlockPanel() {
       )}
 
       {step === 'password' && (
-        <form onSubmit={(e) => void submitPassword(e)} className="mt-5 text-left">
-          <label className={labelCls} htmlFor="unlock-password">Your password</label>
-          <input
-            id="unlock-password"
-            type="password"
-            required
-            autoComplete="current-password"
-            className={inputCls}
-            placeholder="Your password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-          />
-          {error && <p role="alert" className="font-bodytext text-[13px] text-[#B0492F] mt-3 text-center">{error}</p>}
-          <button type="submit" className={`${primaryBtn} w-full mt-4`} disabled={busy || !password}>
-            {busy ? 'Checking…' : 'Unlock'}
-          </button>
-        </form>
+        <>
+          {hasPassword && (
+            <form onSubmit={(e) => void submitPassword(e)} className="mt-5 text-left">
+              <label className={labelCls} htmlFor="unlock-password">Your password</label>
+              <input
+                id="unlock-password"
+                type="password"
+                required
+                autoComplete="current-password"
+                className={inputCls}
+                placeholder="Your password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+              {error && <p role="alert" className="font-bodytext text-[13px] text-[#B0492F] mt-3 text-center">{error}</p>}
+              <button type="submit" className={`${primaryBtn} w-full mt-4`} disabled={busy || !password}>
+                {busy ? 'Checking…' : 'Unlock'}
+              </button>
+            </form>
+          )}
+          {hasGoogle && (
+            <div className="mt-5">
+              {hasPassword && (
+                <div className="flex items-center gap-3 mb-4" aria-hidden="true">
+                  <span className="h-px flex-1 bg-[#EFE9DB]" />
+                  <span className="font-bodytext text-[11px] tracking-[0.14em] uppercase text-[#98A096]">or</span>
+                  <span className="h-px flex-1 bg-[#EFE9DB]" />
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={() => void startGoogleUnlock()}
+                disabled={busy}
+                className="w-full inline-flex items-center justify-center gap-2.5 h-[42px] rounded-[10px] bg-white border border-[#EAE3D3] text-[#16241A] font-bodytext text-[13px] font-medium hover:bg-[#FBF8F1] transition disabled:opacity-50 cursor-pointer"
+              >
+                <GoogleIcon />
+                {busy ? 'Redirecting to Google…' : 'Verify with Google'}
+              </button>
+              {googleError && <p role="alert" className="font-bodytext text-[13px] text-[#B0492F] mt-3 text-center">{googleError}</p>}
+            </div>
+          )}
+        </>
       )}
 
       {step === 'totp' && (
         <form onSubmit={(e) => void submitCode(e)} className="mt-5 text-left">
           <p className="font-bodytext text-[#5C665C] text-sm text-center mb-4">
-            Password accepted. Enter the 6-digit code from your authenticator app to finish unlocking.
+            {proofKind === 'google'
+              ? 'Identity verified. Enter the 6-digit code from your authenticator app to finish unlocking.'
+              : 'Password accepted. Enter the 6-digit code from your authenticator app to finish unlocking.'}
           </p>
           <label className={labelCls} htmlFor="unlock-code">6-digit code</label>
           <input

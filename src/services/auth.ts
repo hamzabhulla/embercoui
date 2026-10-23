@@ -1,5 +1,5 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabase.ts';
-import { clearPersistedScreenLock } from '../lib/screenLock.ts';
+import { clearPersistedScreenLock, clearUnlockIntent } from '../lib/screenLock.ts';
 
 export { isSupabaseConfigured };
 
@@ -64,8 +64,11 @@ export async function signOut(): Promise<void> {
   // funnels through this one function (via AuthContext), so the
   // persisted admin screen lock (Phase D) is dropped HERE, by
   // construction: whatever account signs in next in this tab can
-  // never inherit a lock the previous session left behind.
+  // never inherit a lock the previous session left behind. A planted
+  // Google unlock intent dies the same death: it was proof for THIS
+  // session's round-trip and must never outlive it.
   clearPersistedScreenLock();
+  clearUnlockIntent();
   if (!supabase) return;
   await supabase.auth.signOut();
 }

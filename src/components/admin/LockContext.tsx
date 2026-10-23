@@ -4,8 +4,11 @@ import { useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import {
   clearPersistedScreenLock,
+  clearUnlockIntent,
+  consumeUnlockIntent,
   persistScreenLock,
   readPersistedScreenLock,
+  type UnlockIntent,
 } from '../../lib/screenLock';
 
 /**
@@ -33,6 +36,20 @@ import {
  * the profile — so a rightful owner's lock is never discarded for
  * arriving a tick before their identity, and no account ever sees
  * a locked screen flash for a lock that isn't theirs.
+ *
+ * Accounts that signed in with Google hold no password, so for them
+ * the unlock step-up is a Google OAuth round-trip (see LockedView):
+ * the panel plants an unlock intent (lib/screenLock), leaves for
+ * Google, and lands back here. This provider consumes the intent at
+ * the same reconciliation that restores the lock, and exposes the
+ * outcome as `googleProof` ONLY when all three hold: the persisted
+ * lock is this account's, the intent names this account and is
+ * fresh, and the session in hand was signed in AFTER the intent
+ * was planted (`last_sign_in_at`, allowing a minute of clock skew).
+ * The third condition is what separates a completed round-trip from
+ * a cancelled one: backing out at Google returns with the OLD
+ * session, whose sign-in predates the intent, and proves nothing.
+ * A consumed intent is gone in every case — never replayable.
  */
 
 export { clearPersistedScreenLock };
@@ -45,6 +62,33 @@ interface LockContextType {
   /** Clear the lock — called by the unlock panel ONLY after the
    *  password (and TOTP, when applicable) step-up has succeeded. */
   unlock: () => void;
+  /** True only on the landing from a completed Google unlock
+   *  round-trip whose intent this provider consumed and validated
+   *  (see the header note). The unlock panel treats it as the
+   *  identity proof and runs its post-proof pipeline; it is never
+   *  set by anything the panel itself does. */
+  googleProof: boolean;
+}
+
+/**
+ * The sign-in half of the Google-proof check: the session in hand
+ * must have been signed in after the intent was planted. Supabase
+ * stamps `last_sign_in_at` on every completed sign-in (password or
+ * OAuth) and never on a token refresh, so a cancelled round-trip —
+ * which returns with the previous session untouched — fails this,
+ * while a completed one passes. A minute of skew is allowed between
+ * the browser clock that stamped the intent and the server clock
+ * that stamped the sign-in; anything older is the old session.
+ */
+const REAUTH_SKEW_MS = 60 * 1000;
+function intentProvesReauth(
+  user: { last_sign_in_at?: string } | null,
+  intent: UnlockIntent | null,
+): boolean {
+  if (!user || !intent) return false;
+  const signedInAt = user.last_sign_in_at ? Date.parse(user.last_sign_in_at) : NaN;
+  if (!Number.isFinite(signedInAt)) return false;
+  return signedInAt >= intent.at - REAUTH_SKEW_MS;
 }
 
 const LockContext = createContext<LockContextType | null>(null);
@@ -67,6 +111,20 @@ export function LockProvider({ children }: { children: ReactNode }) {
     clearPersistedScreenLock();
     return false;
   });
+  // The Google-proof decision for a cold mount with the account
+  // already known, made in the FIRST render alongside the lock
+  // restore above: the intent is consumed (and so discarded whatever
+  // the outcome) and counts as proof only when the lock being
+  // restored is this account's AND the session was signed in after
+  // the intent was planted. When the account is not yet known, the
+  // reconcile effect below makes the same decision instead.
+  const [googleProof, setGoogleProof] = useState<boolean>(() => {
+    if (loading || !user) return false;
+    const persisted = readPersistedScreenLock();
+    const honoured = !!persisted && persisted.userId === user.id;
+    const intent = consumeUnlockIntent(user.id);
+    return honoured && intentProvesReauth(user, intent);
+  });
   const timer = useRef<number | null>(null);
   // The account the restore/account-change check last ran for. When
   // the initialiser above already decided the cold mount (account
@@ -79,6 +137,9 @@ export function LockProvider({ children }: { children: ReactNode }) {
 
   const lock = useCallback(() => {
     setLocked(true);
+    // A proof belongs to the landing that earned it; engaging the
+    // lock again (idle or manual) always starts the step-up fresh.
+    setGoogleProof(false);
     // The lock is recorded against the account that set it; with no
     // account there is nothing truthful to record, and the in-memory
     // lock alone holds for this mount.
@@ -87,6 +148,7 @@ export function LockProvider({ children }: { children: ReactNode }) {
 
   const unlock = useCallback(() => {
     setLocked(false);
+    setGoogleProof(false);
     clearPersistedScreenLock();
   }, []);
 
@@ -100,17 +162,32 @@ export function LockProvider({ children }: { children: ReactNode }) {
     if (reconciledFor.current === id) return;
     const coldMount = reconciledFor.current === undefined;
     reconciledFor.current = id;
-    if (!id) return; // Signed out: the central sign-out already
-    // cleared the persisted record; the shell unmounts with it.
+    if (!id) {
+      // Signed out: the central sign-out already cleared the
+      // persisted record; the shell unmounts with it. A planted
+      // unlock intent is discarded too — with no session it can
+      // prove nothing, and it must not linger for a later sign-in.
+      clearUnlockIntent();
+      return;
+    }
     if (coldMount) {
       const persisted = readPersistedScreenLock();
-      if (persisted && persisted.userId === id) {
+      const honoured = !!persisted && persisted.userId === id;
+      if (honoured) {
         setLocked(true);
       } else if (persisted) {
         // A lock persisted by a different account (or an older,
         // ownerless record): not this account's lock — drop it and
         // start open.
         clearPersistedScreenLock();
+      }
+      // The Google-proof decision, mirroring the cold-mount
+      // initialiser: consume the intent either way (discarded on
+      // every outcome), and count it only behind an honoured lock
+      // and a sign-in that postdates it.
+      const intent = consumeUnlockIntent(id);
+      if (honoured && intentProvesReauth(user, intent)) {
+        setGoogleProof(true);
       }
     } else {
       // A DIFFERENT account signing in on this tab never inherits
@@ -119,8 +196,9 @@ export function LockProvider({ children }: { children: ReactNode }) {
       // that was replaced without going through them).
       setLocked(false);
       clearPersistedScreenLock();
+      clearUnlockIntent();
     }
-  }, [user?.id, loading]);
+  }, [user, loading]);
 
   // Idle timer. While unlocked, pointer / keyboard / touch activity
   // — and in-app navigation (the pathname dep re-arms the effect) —
@@ -144,7 +222,7 @@ export function LockProvider({ children }: { children: ReactNode }) {
     };
   }, [locked, lock, location.pathname]);
 
-  return <LockContext.Provider value={{ locked, lock, unlock }}>{children}</LockContext.Provider>;
+  return <LockContext.Provider value={{ locked, lock, unlock, googleProof }}>{children}</LockContext.Provider>;
 }
 
 export function useLock(): LockContextType {
