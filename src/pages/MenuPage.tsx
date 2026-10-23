@@ -314,13 +314,7 @@ export default function MenuPage() {
             >
               Seasonal Creations
             </h1>
-            <div className="w-[48px] h-[1px] bg-[#C17A3A] my-[20px]" />
-            <p
-              className="text-[14px] tracking-[0.05em]"
-              style={{ fontFamily: 'Jost, sans-serif', color: 'rgba(245,240,232,0.6)', fontWeight: 300 }}
-            >
-              Crafted from nature's finest ingredients
-            </p>
+            <div className="w-[48px] h-[1px] bg-[#C17A3A] mt-[20px]" />
           </div>
 
           {/* Smooth Fade to Bottom */}

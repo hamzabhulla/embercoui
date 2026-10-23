@@ -18,6 +18,7 @@ import { loadEnv } from '../backend/src/config/env.js';
 import { createApp } from '../backend/src/app.js';
 import { createSupabaseRepository } from '../backend/src/repositories/supabaseRepository.js';
 import { createSupabaseTokenVerifier, type TokenVerifier } from '../backend/src/lib/auth.js';
+import { createSupabaseAuthAdminService, type AuthAdminService } from '../backend/src/lib/authAdmin.js';
 import { createStripeService, type StripeService } from '../backend/src/lib/stripe.js';
 import { createGeminiChatService, type ChatService } from '../backend/src/lib/chat.js';
 import { createStorageService, type StorageService } from '../backend/src/lib/storage.js';
@@ -27,9 +28,11 @@ const env = loadEnv();
 
 let repo: Repository | null = null;
 let verifyToken: TokenVerifier = async () => null;
+let authAdmin: AuthAdminService | null = null;
 if (env.supabaseConfigured && env.supabaseUrl && env.supabaseServiceRoleKey) {
   repo = createSupabaseRepository(env.supabaseUrl, env.supabaseServiceRoleKey);
   verifyToken = createSupabaseTokenVerifier(env.supabaseUrl, env.supabaseServiceRoleKey);
+  authAdmin = createSupabaseAuthAdminService(env.supabaseUrl, env.supabaseServiceRoleKey);
 }
 
 const stripe: StripeService | null = env.stripeSecretKey
@@ -42,6 +45,6 @@ const storage: StorageService | null =
     : null;
 
 const chat: ChatService | null = env.geminiApiKey ? createGeminiChatService(env.geminiApiKey, env.geminiModel) : null;
-const app = createApp({ env, repo, verifyToken, stripe, storage, chat });
+const app = createApp({ env, repo, verifyToken, stripe, storage, chat, authAdmin });
 
 export default app;

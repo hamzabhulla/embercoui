@@ -37,6 +37,47 @@
 
 export type Row = Record<string, unknown>;
 export type StubError = { code: string; message: string };
+
+/**
+ * SQL LIKE → RegExp, with Postgres semantics: `%` matches any run,
+ * `_` exactly one character, and a backslash escapes the next
+ * character into a literal. LIKE is case-sensitive, ILIKE is not;
+ * both anchor to the whole value.
+ */
+export function likeToRegExp(pattern: string, caseInsensitive: boolean): RegExp {
+  let src = '^';
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i];
+    if (c === '\\' && i + 1 < pattern.length) {
+      src += pattern[++i].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    } else if (c === '%') {
+      src += '[\\s\\S]*';
+    } else if (c === '_') {
+      src += '[\\s\\S]';
+    } else {
+      src += c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+  }
+  return new RegExp(`${src}$`, caseInsensitive ? 'i' : '');
+}
+
+/** Split a PostgREST or() filter string on top-level commas only. */
+function splitOrTerms(filters: string): string[] {
+  const out: string[] = [];
+  let current = '';
+  let quoted = false;
+  for (const c of filters) {
+    if (c === '"') quoted = !quoted;
+    if (c === ',' && !quoted) {
+      out.push(current);
+      current = '';
+    } else {
+      current += c;
+    }
+  }
+  if (current) out.push(current);
+  return out;
+}
 type StubResult = { data: unknown; error: StubError | null; count: number | null };
 
 const CAP = 1000;
@@ -51,6 +92,9 @@ export interface StubSupabase {
   setMissingColumns: (table: string, columns: string[]) => void;
   beforeInsert: (table: string, hook: (tables: Map<string, Row[]>, rows: Row[]) => StubError | null) => void;
   seedAuthUsers: (users: { id: string; email?: string }[]) => void;
+  /** MFA factors per auth user, served by auth.admin.mfa (Phase B). */
+  authFactors: Map<string, { id: string; factor_type: string; status: string }[]>;
+  seedAuthFactors: (userId: string, factors: { id: string; factor_type: string; status: string }[]) => void;
 }
 
 export function createStubSupabase(): StubSupabase {
@@ -59,6 +103,7 @@ export function createStubSupabase(): StubSupabase {
   const uniques = new Map<string, Set<string>>();
   const missing = new Map<string, Set<string>>();
   const insertHooks = new Map<string, ((tables: Map<string, Row[]>, rows: Row[]) => StubError | null)[]>();
+  const authFactors = new Map<string, { id: string; factor_type: string; status: string }[]>();
   let authUsers: { id: string; email?: string }[] = [];
   let idSeq = 0;
   let clockSeq = 0;
@@ -113,6 +158,63 @@ export function createStubSupabase(): StubSupabase {
     gte(col: string, v: unknown) {
       this.filters.push((r) => (r[col] as string | number) >= (v as string | number));
       this.filterCols.push(col);
+      return this;
+    }
+    lte(col: string, v: unknown) {
+      this.filters.push((r) => (r[col] as string | number) <= (v as string | number));
+      this.filterCols.push(col);
+      return this;
+    }
+    like(col: string, pattern: string) {
+      const re = likeToRegExp(pattern, false);
+      this.filters.push((r) => typeof r[col] === 'string' && re.test(r[col] as string));
+      this.filterCols.push(col);
+      return this;
+    }
+    ilike(col: string, pattern: string) {
+      const re = likeToRegExp(pattern, true);
+      this.filters.push((r) => typeof r[col] === 'string' && re.test(r[col] as string));
+      this.filterCols.push(col);
+      return this;
+    }
+    not(col: string, operator: string, v: unknown) {
+      if (operator === 'like') {
+        const re = likeToRegExp(String(v), false);
+        this.filters.push((r) => !(typeof r[col] === 'string' && re.test(r[col] as string)));
+      } else if (operator === 'ilike') {
+        const re = likeToRegExp(String(v), true);
+        this.filters.push((r) => !(typeof r[col] === 'string' && re.test(r[col] as string)));
+      } else if (operator === 'eq') {
+        this.filters.push((r) => r[col] !== v);
+      } else {
+        throw new Error(`stub .not() does not model operator '${operator}'`);
+      }
+      this.filterCols.push(col);
+      return this;
+    }
+    or(filters: string) {
+      // PostgREST or-syntax: comma-separated `col.op.value` terms at
+      // the top level (commas inside a double-quoted value do not
+      // split). Only the operators the repository actually generates
+      // are modelled: ilike / like / eq.
+      const terms = splitOrTerms(filters).map((term) => {
+        const m = /^([A-Za-z0-9_]+)\.([a-z]+)\.([\s\S]*)$/.exec(term);
+        if (!m) throw new Error(`stub .or() cannot parse term '${term}'`);
+        const [, col, op, raw] = m;
+        const value = raw.startsWith('"') && raw.endsWith('"') ? raw.slice(1, -1) : raw;
+        this.filterCols.push(col);
+        if (op === 'ilike') {
+          const re = likeToRegExp(value, true);
+          return (r: Row) => typeof r[col] === 'string' && re.test(r[col] as string);
+        }
+        if (op === 'like') {
+          const re = likeToRegExp(value, false);
+          return (r: Row) => typeof r[col] === 'string' && re.test(r[col] as string);
+        }
+        if (op === 'eq') return (r: Row) => r[col] === value;
+        throw new Error(`stub .or() does not model operator '${op}'`);
+      });
+      this.filters.push((r) => terms.some((f) => f(r)));
       return this;
     }
     order(col: string, opts?: { ascending?: boolean }) { this.orders.push({ col, asc: opts?.ascending !== false }); return this; }
@@ -254,11 +356,14 @@ export function createStubSupabase(): StubSupabase {
           stored.push(conflictTarget);
           continue;
         }
-        // Column defaults from migration 0001 that inserts rely on
-        // the RETURNING row carrying (profiles.role, reservations.status).
+        // Column defaults from the migrations that inserts rely on
+        // the RETURNING row carrying (profiles.role from 0001,
+        // reservations.status from 0001, reservation_requests.status
+        // from 0015).
         const COLUMN_DEFAULTS: Record<string, Row> = {
           profiles: { role: 'customer' },
           reservations: { status: 'pending' },
+          reservation_requests: { status: 'pending' },
         };
         for (const [col, value] of Object.entries(COLUMN_DEFAULTS[this.table] ?? {})) {
           if (row[col] === undefined) row[col] = value;
@@ -331,15 +436,31 @@ export function createStubSupabase(): StubSupabase {
           const start = (page - 1) * perPage;
           return { data: { users: authUsers.slice(start, start + perPage) }, error: null };
         },
+        // The Admin API's MFA surface: listFactors returns the user's
+        // factors verbatim; deleteFactor removes exactly one factor
+        // of exactly that user (a factor id belonging to someone else
+        // matches nothing — the delete is scoped by userId first).
+        mfa: {
+          listFactors: async (input: { userId: string }) => ({
+            data: { factors: [...(authFactors.get(input.userId) ?? [])] }, error: null,
+          }),
+          deleteFactor: async (input: { userId: string; id: string }) => {
+            const list = authFactors.get(input.userId) ?? [];
+            authFactors.set(input.userId, list.filter((f) => f.id !== input.id));
+            return { data: {}, error: null };
+          },
+        },
       },
     },
   };
 
   return {
     tables,
+    authFactors,
     createClient: () => client,
     reset() {
       tables.clear(); querySeq.clear(); uniques.clear(); missing.clear(); insertHooks.clear();
+      authFactors.clear();
       authUsers = []; idSeq = 0; clockSeq = 0;
     },
     seed(table: string, rows: Row[]) { tables.set(table, rows); },
@@ -355,6 +476,7 @@ export function createStubSupabase(): StubSupabase {
       insertHooks.set(table, list);
     },
     seedAuthUsers(users) { authUsers = users; },
+    seedAuthFactors(userId, factors) { authFactors.set(userId, [...factors]); },
   };
 }
 

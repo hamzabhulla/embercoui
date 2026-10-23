@@ -35,7 +35,13 @@ describe('admin guards', () => {
   });
   it('allows staff to read but not destructive admin actions', async () => {
     expect((await as(request(app).get('/api/v1/admin/orders'), 'token-staff')).status).toBe(200);
-    expect((await as(request(app).delete('/api/v1/admin/menu/1'), 'token-staff')).status).toBe(403);
+    // Phase A policy change: the three-level section model cannot
+    // express the old "mutate but not delete" menu gate, so staff's
+    // built-in menu default is 'manage' and DELETE /admin/menu/:id is
+    // governed by it (200, was admin-only 403). The owner can pull
+    // staff back to menu 'view'. The full matrix is pinned in
+    // access-control.test.ts.
+    expect((await as(request(app).delete('/api/v1/admin/menu/1'), 'token-staff')).status).toBe(200);
     expect((await as(request(app).post('/api/v1/admin/coupons').send({ code: 'NEW10', type: 'percent', value: 10 }), 'token-staff')).status).toBe(403);
     expect((await as(request(app).patch('/api/v1/admin/staff/user-1/role').send({ role: 'admin' }), 'token-staff')).status).toBe(403);
   });
@@ -118,6 +124,23 @@ describe('admin reservations, reviews, newsletter, coupons, finance, staff, sett
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toContain('text/csv');
     expect(res.text).toContain('fan@example.com');
+  });
+  it('newsletter CSV defuses formulas behind leading whitespace or a pipe — and leaves ordinary values untouched', async () => {
+    // OWASP CSV-injection posture (final deep audit L2): spreadsheet
+    // apps strip leading spaces/tabs/newlines before evaluating a
+    // cell, so a formula trigger hiding behind them is still a
+    // formula. Seeded directly at the repository seam — the export
+    // must be safe for whatever a stored value contains.
+    await repo.addNewsletterSubscriber(' =cmd@example.com');
+    await repo.addNewsletterSubscriber('|pipes@example.com');
+    await repo.addNewsletterSubscriber(' spaced@example.com');
+    const res = await as(request(app).get('/api/v1/admin/newsletter.csv'), 'token-admin');
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('"\' =cmd@example.com"');
+    expect(res.text).toContain('"\'|pipes@example.com"');
+    // A leading-space value that is NOT a formula stays byte-identical.
+    expect(res.text).toContain('" spaced@example.com"');
+    expect(res.text).not.toContain("' spaced@example.com");
   });
   it('manages coupons (admin only)', async () => {
     const created = await as(request(app).post('/api/v1/admin/coupons').send({ code: 'feast25', type: 'percent', value: 25 }), 'token-admin');

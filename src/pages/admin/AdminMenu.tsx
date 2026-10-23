@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { adminGet, adminSend } from '../../services/adminApi';
-import { useAuth } from '../../context/AuthContext';
+import { usePermissions } from '../../components/admin/PermissionsContext';
 import { useCurrency } from '../../context/CurrencyContext';
 import { currencyExponent } from '../../lib/currency';
 import { Card, DeleteButton, EmptyNote, ErrorNote, FChip, LoadingNote, NoticeNote, PageTitle, SearchInput, Toggle, chipGhostBtn, ghostBtn, inputCls, labelCls, money, primaryBtn, tableCls, tdCls, thCls } from '../../components/admin/ui';
@@ -75,8 +75,8 @@ async function prepareImageUpload(file: File): Promise<PreparedImage> {
 }
 
 export default function AdminMenu() {
-  const { profile } = useAuth();
-  const isAdmin = profile?.role === 'admin';
+  const { can } = usePermissions();
+  const canManage = can('menu', 'manage');
   const [items, setItems] = useState<Item[]>([]);
   const [form, setForm] = useState<Omit<Item, 'id'> & { id?: number }>(EMPTY);
   const [tagsText, setTagsText] = useState('');
@@ -140,7 +140,7 @@ export default function AdminMenu() {
     <div>
       <PageTitle sub="Changes appear on the public menu immediately" actions={<>
         <SearchInput value={query} onChange={setQuery} placeholder="Search dishes…" />
-        <button className={primaryBtn} onClick={startAdd}>+ Add dish</button>
+        {canManage && <button className={primaryBtn} onClick={startAdd}>+ Add dish</button>}
       </>}>Menu</PageTitle>
       {error && <ErrorNote message={error} />}
       {notice && <NoticeNote message={notice} />}
@@ -174,12 +174,16 @@ export default function AdminMenu() {
                       {item.tags.length ? <span className="flex gap-1 flex-wrap">{item.tags.map((t) => <span key={t} className="px-2 py-[2px] rounded-full bg-[#EFE9DB] text-[#5C665C] text-[11px] font-medium whitespace-nowrap">{t}</span>)}</span> : <span className="text-[#98A096]">—</span>}
                     </td>
                     <td className={`${tdCls} font-semibold text-[#8A551F] whitespace-nowrap`}>{money(item.price, currency)}</td>
-                    <td className={tdCls}><Toggle on={item.isAvailable} onClick={() => void toggleAvailable(item)} label={`${item.isAvailable ? 'Hide' : 'Show'} ${item.name} on the public menu`} /></td>
+                    <td className={tdCls}>{canManage
+                      ? <Toggle on={item.isAvailable} onClick={() => void toggleAvailable(item)} label={`${item.isAvailable ? 'Hide' : 'Show'} ${item.name} on the public menu`} />
+                      : <span className="font-bodytext text-[12.5px] text-[#98A096]">{item.isAvailable ? 'Available' : 'Hidden'}</span>}</td>
                     <td className={tdCls}>
-                      <span className="flex gap-2 justify-end">
-                        <button className={chipGhostBtn} onClick={() => { setForm(item); setTagsText(item.tags.join(', ')); scrollToForm(); }}>Edit</button>
-                        {isAdmin && <DeleteButton name={`"${item.name}"`} disabled={busy} onDelete={() => void remove(item.id)} />}
-                      </span>
+                      {canManage && (
+                        <span className="flex gap-2 justify-end">
+                          <button className={chipGhostBtn} onClick={() => { setForm(item); setTagsText(item.tags.join(', ')); scrollToForm(); }}>Edit</button>
+                          <DeleteButton name={`"${item.name}"`} disabled={busy} onDelete={() => void remove(item.id)} />
+                        </span>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -193,6 +197,8 @@ export default function AdminMenu() {
           </>
         )}
       </Card>
+      {!canManage && <p className="font-bodytext text-[13.5px] text-[#5C665C]">You have view-only access to the menu.</p>}
+      {canManage && (
       <form ref={formRef} onSubmit={save} className="bg-white border border-[#EAE3D3] rounded-[14px] shadow-[0_1px_2px_rgba(22,36,26,0.03),0_10px_24px_-18px_rgba(22,36,26,0.18)] p-6 grid md:grid-cols-2 gap-4 scroll-mt-24">
         <h2 className="font-display text-[22px] font-semibold text-[#16241A] md:col-span-2">{form.id ? 'Edit dish' : 'Add a dish'}</h2>
         <div><label className={labelCls} htmlFor="m-name">Name</label><input id="m-name" className={inputCls} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required /></div>
@@ -217,6 +223,7 @@ export default function AdminMenu() {
           {form.id && <button type="button" className={ghostBtn} onClick={() => { setForm(EMPTY); setTagsText(''); }}>Cancel edit</button>}
         </div>
       </form>
+      )}
     </div>
   );
 }

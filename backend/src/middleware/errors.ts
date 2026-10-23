@@ -18,7 +18,7 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
     return;
   }
   if (err instanceof ApiError) {
-    res.status(err.status).json({ error: err.message });
+    res.status(err.status).json(err.code ? { error: err.message, code: err.code } : { error: err.message });
     return;
   }
   if (err instanceof ZodError) {

@@ -14,8 +14,17 @@ interface Order {
   id: string; status: string; paymentStatus: string; total: number; currency: string; createdAt: string; items: OrderItem[];
 }
 interface Address { label?: string; line1: string; city: string; postalCode?: string; phone?: string; isDefault?: boolean }
+interface MyReservationRequest {
+  id: string; proposedDate: string | null; proposedTime: string | null; proposedGuests: number | null;
+  message: string; status: string; adminReply: string | null; createdAt: string;
+}
+interface MyReservation {
+  id: string; name: string; date: string; time: string; guests: number; status: string;
+  feeAmount: number | null; feeCurrency: string | null; feePaymentStatus: string;
+  requests: MyReservationRequest[];
+}
 
-const TABS = ['Orders', 'Favorites', 'Addresses', 'Profile', 'Leave a Review'] as const;
+const TABS = ['Orders', 'Reservations', 'Favorites', 'Addresses', 'Profile', 'Leave a Review'] as const;
 type Tab = (typeof TABS)[number];
 
 const ACTIVE_STATUSES = ['pending', 'confirmed', 'preparing', 'ready', 'out_for_delivery'];
@@ -31,6 +40,27 @@ const chipColor: Record<string, string> = {
   pending: '#C17A3A', confirmed: '#D9A45B', preparing: '#E3B959', ready: '#9DBE9C',
   out_for_delivery: '#D9A45B', delivered: '#9DBE9C', cancelled: '#D9907E',
 };
+const reservationChipColor: Record<string, string> = {
+  pending: '#C17A3A', confirmed: '#9DBE9C', cancelled: '#D9907E', completed: 'rgba(245,240,232,0.5)',
+};
+const requestStatusLabel: Record<string, string> = {
+  pending: 'Pending — with our team', approved: 'Approved', declined: 'Declined', handled: 'Handled',
+};
+const requestStatusColor: Record<string, string> = {
+  pending: '#D9A45B', approved: '#9DBE9C', declined: '#D9907E', handled: 'rgba(245,240,232,0.55)',
+};
+// Noon-anchored so the calendar day never shifts with the reader's timezone.
+const fmtReservationDate = (date: string) =>
+  new Date(`${date}T12:00:00`).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+const fmtReservationDateShort = (date: string) =>
+  new Date(`${date}T12:00:00`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+function proposalSummary(q: MyReservationRequest): string {
+  const parts: string[] = [];
+  if (q.proposedDate) parts.push(fmtReservationDateShort(q.proposedDate));
+  if (q.proposedTime) parts.push(q.proposedTime.slice(0, 5));
+  if (q.proposedGuests != null) parts.push(`${q.proposedGuests} guest${q.proposedGuests === 1 ? '' : 's'}`);
+  return parts.join(' · ');
+}
 const TITLES = new Set(['ch', 'ch.', 'mr', 'mr.', 'mrs', 'mrs.', 'ms', 'dr', 'dr.', 'mian']);
 
 function nameParts(fullName: string | null | undefined): { first: string; initials: string } {
@@ -69,6 +99,16 @@ export default function Account() {
   const [tab, setTab] = useState<Tab>('Orders');
   const [orders, setOrders] = useState<Order[]>([]);
   const [ordersError, setOrdersError] = useState<string | null>(null);
+  const [reservations, setReservations] = useState<MyReservation[]>([]);
+  const [reservationsError, setReservationsError] = useState<string | null>(null);
+  const [reservationsLoading, setReservationsLoading] = useState(false);
+  // True until migration 0015 runs: the bookings list is complete,
+  // only change requests are not available online yet.
+  const [requestsDegraded, setRequestsDegraded] = useState(false);
+  const [changeFor, setChangeFor] = useState<string | null>(null);
+  const [changeForm, setChangeForm] = useState({ date: '', time: '', guests: '', message: '' });
+  const [changeBusy, setChangeBusy] = useState(false);
+  const [changeError, setChangeError] = useState<string | null>(null);
   const [favorites, setFavorites] = useState<MenuItem[]>([]);
   const [favoritesError, setFavoritesError] = useState<string | null>(null);
   const [settings, setSettings] = useState<PublicSettings | null>(null);
@@ -124,6 +164,58 @@ export default function Account() {
     else setFavoritesError(res.error ?? 'We could not load your saved dishes.');
   }, []);
 
+  // Same honesty rule as the orders list: a failed load is an error
+  // state with a Retry, never an empty list dressed up as fact.
+  const loadReservations = useCallback(async () => {
+    setReservationsLoading(true);
+    setReservationsError(null);
+    const res = await apiRequest<{ reservations: MyReservation[]; requestsDegraded: boolean }>('/api/v1/account/reservations');
+    if (res.ok && res.data) {
+      setReservations(res.data.reservations);
+      setRequestsDegraded(res.data.requestsDegraded);
+    } else setReservationsError(res.error ?? 'We could not load your reservations.');
+    setReservationsLoading(false);
+  }, []);
+
+  const openChangeForm = (r: MyReservation) => {
+    setChangeError(null);
+    setChangeForm({ date: '', time: '', guests: '', message: '' });
+    setChangeFor(r.id);
+  };
+
+  const submitChange = async (r: MyReservation) => {
+    const body: Record<string, unknown> = {};
+    if (changeForm.date) body.proposedDate = changeForm.date;
+    if (changeForm.time) body.proposedTime = changeForm.time;
+    if (changeForm.guests) {
+      const g = Number(changeForm.guests);
+      if (!Number.isInteger(g) || g < 1 || g > 20) {
+        setChangeError('Guests must be between 1 and 20 — for larger parties, please call us.');
+        return;
+      }
+      body.proposedGuests = g;
+    }
+    if (changeForm.message.trim()) body.message = changeForm.message.trim();
+    if (Object.keys(body).length === 0) {
+      setChangeError('Tell us what you would like to change — a new date, time or party size, or a short note.');
+      return;
+    }
+    setChangeBusy(true);
+    setChangeError(null);
+    const res = await apiRequest(`/api/v1/account/reservations/${r.id}/requests`, {
+      method: 'POST', body: JSON.stringify(body),
+    });
+    setChangeBusy(false);
+    if (res.ok) {
+      setChangeFor(null);
+      setChangeForm({ date: '', time: '', guests: '', message: '' });
+      await loadReservations();
+      flash('Your change request was sent — our reply will appear here.');
+    } else {
+      setChangeError(res.error ?? 'Something went wrong — please try again');
+    }
+  };
+
   useEffect(() => { window.scrollTo(0, 0); }, []);
   // An armed delete confirmation belongs to the card that armed it —
   // never let it survive a tab switch onto a different list.
@@ -132,13 +224,15 @@ export default function Account() {
     if (!user) return;
     void loadOrders();
     void loadFavorites();
+    void loadReservations();
     void fetchPublicSettings().then(setSettings);
-  }, [user, loadOrders, loadFavorites]);
+  }, [user, loadOrders, loadFavorites, loadReservations]);
   useEffect(() => {
     if (!user) return;
     if (tab === 'Orders') void loadOrders();
     if (tab === 'Favorites') void loadFavorites();
-  }, [user, tab, loadOrders, loadFavorites]);
+    if (tab === 'Reservations') void loadReservations();
+  }, [user, tab, loadOrders, loadFavorites, loadReservations]);
 
   const flash = (msg: string) => { setNotice(msg); setError(null); setTimeout(() => setNotice(null), 4000); };
   const fail = (msg: string | null) => setError(msg ?? 'Something went wrong — please try again');
@@ -501,6 +595,119 @@ export default function Account() {
                     </div>
                   </>
                 )}
+              </div>
+            )}
+
+            {tab === 'Reservations' && (
+              <div style={{ paddingTop: '30px' }}>
+                <p style={{ fontFamily: JOST, fontSize: '10.5px', letterSpacing: '0.3em', color: 'rgba(245,240,232,0.38)', marginBottom: '14px' }}>YOUR RESERVATIONS</p>
+                {reservationsError && reservations.length === 0 ? (
+                  <div className="flex flex-wrap items-center" style={{ gap: '18px' }}>
+                    <p style={{ fontFamily: JOST, fontSize: '13px', color: '#D9907E' }}>{reservationsError}</p>
+                    <button onClick={() => void loadReservations()} style={{ ...ghostButton, padding: '10px 18px', fontSize: '10.5px' }} className="transition-colors">Retry</button>
+                  </div>
+                ) : (
+                  <>
+                    {reservationsLoading && reservations.length === 0 && <p style={{ fontFamily: JOST, fontSize: '13px', color: 'rgba(245,240,232,0.4)' }}>Loading your reservations…</p>}
+                    {!reservationsLoading && reservations.length === 0 && (
+                      <p style={{ fontFamily: JOST, fontSize: '13px', color: 'rgba(245,240,232,0.4)' }}>
+                        No reservations yet — when you book a table it will appear here, and you can ask us to change it right from this page.
+                      </p>
+                    )}
+                  </>
+                )}
+                <div className="flex flex-col gap-4">
+                  {reservations.map((r) => {
+                    const pendingRequest = r.requests.find((q) => q.status === 'pending');
+                    const canRequest = r.status === 'pending' || r.status === 'confirmed';
+                    return (
+                      <div key={r.id} style={{ background: cardBg, border: '1px solid rgba(245,240,232,0.1)', padding: '26px 28px' }}>
+                        <div className="flex flex-wrap items-start justify-between gap-4">
+                          <div>
+                            <p style={{ fontFamily: SERIF, fontSize: '21px', fontWeight: 600, color: '#F5F0E8', lineHeight: 1.2 }}>{fmtReservationDate(r.date)}</p>
+                            <p style={{ fontFamily: JOST, fontSize: '12.5px', color: 'rgba(245,240,232,0.38)', marginTop: '4px' }}>
+                              {r.time.slice(0, 5)} · Table for {r.guests} guest{r.guests === 1 ? '' : 's'} · Booked for {r.name}
+                            </p>
+                          </div>
+                          <span className="uppercase" style={{ fontFamily: JOST, fontSize: '10px', letterSpacing: '0.22em', padding: '6px 13px 5px', color: reservationChipColor[r.status] ?? '#F5F0E8', border: `1px solid ${reservationChipColor[r.status] ?? '#888'}88` }}>
+                            {r.status}
+                          </span>
+                        </div>
+                        {r.feeAmount != null && (
+                          <p style={{ fontFamily: JOST, fontSize: '12.5px', color: 'rgba(245,240,232,0.58)', marginTop: '10px' }}>
+                            Booking fee {format(r.feeAmount, r.feeCurrency ?? 'USD')} — {r.feePaymentStatus === 'paid'
+                              ? 'paid'
+                              : r.feePaymentStatus === 'failed'
+                                ? 'the payment did not go through'
+                                : 'awaiting payment; your table is held once the fee is paid'}
+                          </p>
+                        )}
+
+                        {r.requests.length > 0 && (
+                          <div style={{ marginTop: '18px', borderTop: '1px solid rgba(245,240,232,0.08)', paddingTop: '16px' }}>
+                            <p style={{ fontFamily: JOST, fontSize: '10px', letterSpacing: '0.26em', color: 'rgba(245,240,232,0.38)', marginBottom: '10px' }}>CHANGE REQUESTS</p>
+                            <div className="flex flex-col" style={{ gap: '14px' }}>
+                              {r.requests.map((q) => (
+                                <div key={q.id}>
+                                  <span className="uppercase" style={{ fontFamily: JOST, fontSize: '9.5px', letterSpacing: '0.2em', padding: '4px 10px 3px', color: requestStatusColor[q.status] ?? '#F5F0E8', border: `1px solid ${requestStatusColor[q.status] ?? '#888'}66` }}>
+                                    {requestStatusLabel[q.status] ?? q.status}
+                                  </span>
+                                  {proposalSummary(q) && (
+                                    <p style={{ fontFamily: JOST, fontSize: '13px', color: 'rgba(245,240,232,0.75)', marginTop: '8px' }}>Asked for: {proposalSummary(q)}</p>
+                                  )}
+                                  {q.message && (
+                                    <p style={{ fontFamily: JOST, fontSize: '13px', color: 'rgba(245,240,232,0.5)', marginTop: '4px', fontStyle: 'italic' }}>“{q.message}”</p>
+                                  )}
+                                  {q.adminReply && (
+                                    <p style={{ fontFamily: JOST, fontSize: '13px', color: '#D9A45B', marginTop: '6px' }}>Our reply: {q.adminReply}</p>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {canRequest && (
+                          <div style={{ marginTop: '18px' }}>
+                            {requestsDegraded ? (
+                              <p style={{ fontFamily: JOST, fontSize: '12.5px', color: 'rgba(245,240,232,0.45)' }}>
+                                To change this booking, please call us — online change requests are not available just yet.
+                              </p>
+                            ) : pendingRequest ? (
+                              <p style={{ fontFamily: JOST, fontSize: '12.5px', color: '#D9A45B' }}>
+                                Your change request is with our team — the reply will appear here.
+                              </p>
+                            ) : changeFor === r.id ? (
+                              <form onSubmit={(e) => { e.preventDefault(); void submitChange(r); }} style={{ border: '1px solid rgba(245,240,232,0.12)', padding: '20px' }}>
+                                <p style={{ fontFamily: JOST, fontSize: '12.5px', color: 'rgba(245,240,232,0.55)', marginBottom: '14px' }}>
+                                  Leave anything you want to keep as it is blank — only what you fill in will be proposed.
+                                </p>
+                                <div className="grid sm:grid-cols-3 gap-4">
+                                  <div><label style={labelStyle}>New date</label><input type="date" value={changeForm.date} onChange={(e) => setChangeForm({ ...changeForm, date: e.target.value })} style={inputStyle} /></div>
+                                  <div><label style={labelStyle}>New time</label><input type="time" value={changeForm.time} onChange={(e) => setChangeForm({ ...changeForm, time: e.target.value })} style={inputStyle} /></div>
+                                  <div><label style={labelStyle}>Guests</label><input type="number" min={1} max={20} value={changeForm.guests} onChange={(e) => setChangeForm({ ...changeForm, guests: e.target.value })} style={inputStyle} placeholder={String(r.guests)} /></div>
+                                </div>
+                                <div style={{ marginTop: '14px' }}>
+                                  <label style={labelStyle}>Note for our team (optional)</label>
+                                  <textarea rows={3} maxLength={1000} value={changeForm.message} onChange={(e) => setChangeForm({ ...changeForm, message: e.target.value })} style={inputStyle} placeholder="Anything we should know — a window seat, a celebration, running late…" />
+                                </div>
+                                {changeError && <p style={{ fontFamily: JOST, fontSize: '12.5px', color: '#D9907E', marginTop: '10px' }}>{changeError}</p>}
+                                <div className="flex flex-wrap gap-2.5" style={{ marginTop: '16px' }}>
+                                  <button type="submit" disabled={changeBusy} style={{ ...emberButton, padding: '11px 20px', fontSize: '10.5px' }} className="transition-all hover:brightness-110 disabled:opacity-60">
+                                    {changeBusy ? 'Sending…' : 'Send Request'}
+                                  </button>
+                                  <button type="button" onClick={() => { setChangeFor(null); setChangeError(null); }} style={{ ...ghostButton, padding: '11px 20px', fontSize: '10.5px' }} className="transition-colors">Cancel</button>
+                                </div>
+                              </form>
+                            ) : (
+                              <button onClick={() => openChangeForm(r)} style={{ ...ghostButton, padding: '10px 18px', fontSize: '10.5px' }} className="transition-colors">Request a Change</button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
 

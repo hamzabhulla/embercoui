@@ -10,9 +10,11 @@ import { publicRouter } from './routes/public';
 import { ordersRouter } from './routes/orders';
 import { paymentsRouter, createWebhookHandler } from './routes/payments';
 import { adminRouter } from './routes/admin';
+import type { AuthAdminService } from './lib/authAdmin';
 import type { StorageService } from './lib/storage';
 import type { StripeService } from './lib/stripe';
 import { formsRouter } from './routes/forms';
+import { authEventsRouter } from './routes/authEvents';
 import { accountRouter } from './routes/account';
 import { chatRouter } from './routes/chat';
 import type { ChatService } from './lib/chat';
@@ -24,6 +26,8 @@ export interface AppDeps {
   stripe?: StripeService | null;
   storage?: StorageService | null;
   chat?: ChatService | null;
+  // Supabase Auth Admin API (owner's MFA factor reset, Phase B).
+  authAdmin?: AuthAdminService | null;
   // Test-only override for the global limiter budget (same pattern as the
   // chat/orders routers' rateLimitMax). Production always uses 600.
   globalRateLimitMax?: number;
@@ -97,8 +101,9 @@ export function createApp(deps: AppDeps): Express {
     });
   });
 
-  app.use('/api/v1', publicRouter(deps));
+  app.use('/api/v1', publicRouter({ repo: deps.repo, stripeConfigured: deps.env.stripeConfigured }));
   app.use('/api/v1', formsRouter(deps));
+  app.use('/api/v1', authEventsRouter({ repo: deps.repo }));
   app.use('/api/v1/account', accountRouter(deps));
   app.use('/api/v1', ordersRouter({
     repo: deps.repo,
@@ -110,9 +115,9 @@ export function createApp(deps: AppDeps): Express {
     rateLimitMax: deps.env.nodeEnv === 'test' ? 1000 : undefined,
     couponRateLimitMax: deps.couponRateLimitMax,
   }));
-  app.use('/api/v1', chatRouter({ repo: deps.repo, chat: deps.chat ?? null, verifyToken: deps.verifyToken }));
+  app.use('/api/v1', chatRouter({ repo: deps.repo, chat: deps.chat ?? null, verifyToken: deps.verifyToken, stripeConfigured: deps.env.stripeConfigured }));
   app.use('/api/v1', paymentsRouter({ repo: deps.repo, stripe: deps.stripe ?? null, verifyToken: deps.verifyToken }));
-  app.use('/api/v1/admin', adminRouter({ repo: deps.repo, verifyToken: deps.verifyToken, storage: deps.storage ?? null }));
+  app.use('/api/v1/admin', adminRouter({ repo: deps.repo, verifyToken: deps.verifyToken, storage: deps.storage ?? null, authAdmin: deps.authAdmin ?? null, stripeConfigured: deps.env.stripeConfigured }));
 
   app.use(notFound);
   app.use(errorHandler);

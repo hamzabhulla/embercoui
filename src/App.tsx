@@ -23,6 +23,7 @@ import OurStory from './pages/OurStory.tsx';
 import Contact from './pages/Contact.tsx';
 import ResetPassword from './pages/ResetPassword.tsx';
 import AdminLayout, { AdminGuard } from './components/admin/AdminLayout';
+import { SectionGate } from './components/admin/PermissionsContext';
 
 // Route-level code splitting (audit fix 16): the heavy customer pages
 // (checkout pulls in Stripe, account and order tracking are large) and
@@ -47,6 +48,7 @@ const AdminMarketing = lazy(() => import('./pages/admin/AdminMarketing'));
 const AdminFinance = lazy(() => import('./pages/admin/AdminFinance'));
 const AdminStaff = lazy(() => import('./pages/admin/AdminStaff'));
 const AdminSettings = lazy(() => import('./pages/admin/AdminSettings'));
+const AdminSecurity = lazy(() => import('./pages/admin/AdminSecurity'));
 
 function RouteFallback() {
   return (
@@ -128,17 +130,18 @@ function App() {
           <Route path="/track-order/:id" element={<TrackOrder />} />
         <Route path="/admin/login" element={<AdminLogin />} />
         <Route path="/admin" element={<AdminGuard><AdminLayout /></AdminGuard>}>
-          <Route index element={<AdminDashboard />} />
-          <Route path="orders" element={<AdminOrders />} />
-          <Route path="menu" element={<AdminMenu />} />
-          <Route path="reservations" element={<AdminReservations />} />
-          <Route path="customers" element={<AdminCustomers />} />
-          <Route path="reviews" element={<AdminReviews />} />
-          <Route path="newsletter" element={<AdminNewsletter />} />
-          <Route path="marketing" element={<AdminMarketing />} />
-          <Route path="finance" element={<AdminFinance />} />
-          <Route path="staff" element={<AdminStaff />} />
-          <Route path="settings" element={<AdminSettings />} />
+          <Route index element={<SectionGate section="dashboard"><AdminDashboard /></SectionGate>} />
+          <Route path="orders" element={<SectionGate section="orders"><AdminOrders /></SectionGate>} />
+          <Route path="menu" element={<SectionGate section="menu"><AdminMenu /></SectionGate>} />
+          <Route path="reservations" element={<SectionGate section="reservations"><AdminReservations /></SectionGate>} />
+          <Route path="customers" element={<SectionGate section="customers"><AdminCustomers /></SectionGate>} />
+          <Route path="reviews" element={<SectionGate section="reviews"><AdminReviews /></SectionGate>} />
+          <Route path="newsletter" element={<SectionGate section="newsletter"><AdminNewsletter /></SectionGate>} />
+          <Route path="marketing" element={<SectionGate section="coupons"><AdminMarketing /></SectionGate>} />
+          <Route path="finance" element={<SectionGate section="finance"><AdminFinance /></SectionGate>} />
+          <Route path="staff" element={<SectionGate section="staff"><AdminStaff /></SectionGate>} />
+          <Route path="settings" element={<SectionGate section="settings"><AdminSettings /></SectionGate>} />
+          <Route path="security" element={<SectionGate section="security"><AdminSecurity /></SectionGate>} />
         </Route>
           {/* The auth screens are modals rendered by the second <Routes>
               below — here they render null so the page behind a login

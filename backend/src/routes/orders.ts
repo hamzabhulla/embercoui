@@ -199,7 +199,7 @@ export function ordersRouter(deps: { repo: Repository | null; verifyToken: Token
       // Account orders are visible only to their owner or staff/admin.
       if (order.userId) {
         const isOwner = req.user?.id === order.userId;
-        const isStaff = req.user?.role === 'admin' || req.user?.role === 'staff';
+        const isStaff = req.user?.role === 'admin' || req.user?.role === 'staff' || req.user?.role === 'manager';
         if (!isOwner && !isStaff) throw new ApiError(404, 'Order not found');
       }
       res.json({ order });

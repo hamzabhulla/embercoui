@@ -8,6 +8,7 @@ import {
   buildChatSystemPrompt, resolveCartActions, resolveCartSnapshot, summarizeOrderForChat, summarizeReservationDay,
   type ChatMessage, type ChatOrderSummary, type ChatService, type ReservationDayAvailability,
 } from '../lib/chat';
+import { effectiveReservationFee } from '../lib/reservationFee';
 import { validateBody } from '../middleware/validate';
 
 const chatBodySchema = z.object({
@@ -107,7 +108,7 @@ async function resolveChatUser(
 function orderVisibleTo(order: OrderDTO, user: ChatUser | null): boolean {
   if (!order.userId) return true;
   if (!user) return false;
-  return user.id === order.userId || user.role === 'admin' || user.role === 'staff';
+  return user.id === order.userId || user.role === 'admin' || user.role === 'staff' || user.role === 'manager';
 }
 
 /**
@@ -170,7 +171,7 @@ async function fetchFocusOrder(
   }
 }
 
-export function chatRouter(deps: { repo: Repository | null; chat: ChatService | null; verifyToken?: TokenVerifier; rateLimitMax?: number }) {
+export function chatRouter(deps: { repo: Repository | null; chat: ChatService | null; verifyToken?: TokenVerifier; rateLimitMax?: number; stripeConfigured?: boolean }) {
   const router = Router();
   // Stricter than the global limiter: every message spends API money.
   const limiter = rateLimit({
@@ -232,6 +233,9 @@ export function chatRouter(deps: { repo: Repository | null; chat: ChatService | 
           // fact; 'unavailable' (guest or failed fetch) must not.
           signedInNoOrders: recentOrdersOutcome.kind === 'none',
           focusOrder,
+          // The booking-fee fact reads the LIVE effective fee — the
+          // prompt promises "free" only when no charge can happen.
+          reservationFee: effectiveReservationFee(settings, deps.stripeConfigured ?? false),
         }),
         messages: cleanMessages,
       });

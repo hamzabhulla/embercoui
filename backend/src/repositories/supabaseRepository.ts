@@ -1,10 +1,11 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { currencyExponent, sanitizeCurrencyCode } from '../lib/currency';
 import { ApiError } from '../lib/errors';
+import { sanitizePermissionMap } from '../lib/permissions';
 import type {
-  AdminReservationInput, CouponDTO, CreateOrderData, CustomerDTO, MenuItemDTO, NewsletterSubscriberDTO,
-  OrderDTO, Page, PageParams, ProfileDTO, PublicSettingsDTO, ReservationDTO, ReservationInput,
-  Repository, ReservationListFilter, ReviewDTO, SettingsPatch, SiteLocations, StaffDTO,
+  AdminReservationInput, AuditEventDTO, AuditEventFilter, AuditEventInput, AuditEventPage, CouponDTO, CreateOrderData, CustomerDTO, MenuItemDTO, NewsletterSubscriberDTO,
+  OrderDTO, Page, PageParams, PartialPermissionMap, ProfileDTO, PublicSettingsDTO, ReservationDTO, ReservationInput,
+  Repository, ReservationListFilter, ReservationRequestDTO, ReviewDTO, SettingsPatch, SiteLocations, StaffDTO,
 } from './types';
 
 type Row = Record<string, unknown>;
@@ -145,6 +146,66 @@ export function isMissingSiteLocationsError(error: { code?: string; message?: st
   if (error.code === '42703' || error.code === 'PGRST204') return true;
   return typeof error.message === 'string' && error.message.includes('site_locations');
 }
+// Migration 0012's access-control objects (role_permissions table,
+// profiles.permissions column, audit_events table): same degradation
+// contract as site_locations — until the owner runs 0012 these do not
+// exist. PostgREST reports a missing TABLE as PGRST205 (or PG 42P01
+// behind a stale cache), a missing column in a payload as PGRST204 and
+// in a filter/select as 42703; the object name in the message counts
+// too. Callers treat any of these as "not migrated yet" and fall back
+// to the built-in permission defaults — never a 500.
+export function isMissingAccessControlError(
+  error: { code?: string; message?: string } | null | undefined,
+  objectName: 'role_permissions' | 'permissions' | 'audit_events',
+): boolean {
+  if (!error) return false;
+  if (error.code === '42703' || error.code === 'PGRST204' || error.code === 'PGRST205' || error.code === '42P01') return true;
+  return typeof error.message === 'string' && error.message.includes(objectName);
+}
+// Migration 0013's profiles.mfa_required column: the same degradation
+// contract as 0012's objects — until the owner runs 0013 the column
+// does not exist. A write naming it fails with PGRST204 (payload) or
+// 42703 (filter/select) and the column name in the message counts too;
+// callers treat any of these as "not migrated yet" and fall back to
+// the profile as it stands — never a 500, never a lockout.
+export function isMissingMfaRequiredError(
+  error: { code?: string; message?: string } | null | undefined,
+): boolean {
+  if (!error) return false;
+  if (error.code === '42703' || error.code === 'PGRST204') return true;
+  return typeof error.message === 'string' && error.message.includes('mfa_required');
+}
+// Migration 0014's columns (restaurant_settings.reservation_fee_*,
+// reservations.fee_*): the same degradation contract as 0010/0012/
+// 0013 — until the owner runs 0014 these do not exist. A write naming
+// one fails with PGRST204 (payload) or 42703 (filter/select) and the
+// column-family name in the message counts too; callers treat any of
+// these as "not migrated yet" and fall back to the pre-fee behaviour
+// (fee off, bookings exactly as before) — never a 500.
+export function isMissingReservationFeeError(
+  error: { code?: string; message?: string } | null | undefined,
+): boolean {
+  if (!error) return false;
+  if (error.code === '42703' || error.code === 'PGRST204') return true;
+  return typeof error.message === 'string' && (error.message.includes('reservation_fee') || error.message.includes('fee_'));
+}
+// Migration 0015's reservation_requests table: the same degradation
+// contract as 0012's objects — until the owner runs 0015 the table
+// does not exist. PostgREST reports a missing TABLE as PGRST205 (or
+// PG 42P01 behind a stale cache), a missing column in a payload as
+// PGRST204 and in a filter/select as 42703; the table name in the
+// message counts too. Callers treat any of these as "not migrated
+// yet": the account reservations list degrades to requests=null (the
+// bookings themselves read exactly as before), creation resolves
+// null (an honest 503 at the route), and the admin inbox answers an
+// empty page flagged degraded — never a 500, never a fake row.
+export function isMissingReservationRequestsError(
+  error: { code?: string; message?: string } | null | undefined,
+): boolean {
+  if (!error) return false;
+  if (error.code === '42703' || error.code === 'PGRST204' || error.code === 'PGRST205' || error.code === '42P01') return true;
+  return typeof error.message === 'string' && error.message.includes('reservation_requests');
+}
 function settingsDTO(r: Row): PublicSettingsDTO {
   return {
     kitchenOpen: r.kitchen_open !== false,
@@ -161,13 +222,21 @@ function settingsDTO(r: Row): PublicSettingsDTO {
     address: strOrNull(r.address),
     whatsappNumber: strOrNull(r.whatsapp_number),
     reservationSlotCapacity: num(r.reservation_slot_capacity) || 40,
+    // Reservation fee controls (0014): absent columns (pre-migration)
+    // read as the migration's own defaults — fee OFF, amount 0 — so
+    // the effective-fee rule can never fire before 0014 runs. A
+    // stored amount is clamped at 0 from below: negative is not a
+    // charge in any currency.
+    reservationFeeEnabled: r.reservation_fee_enabled === true,
+    reservationFeeAmount: Math.max(0, numOrFallback(r.reservation_fee_amount, 0)),
     openingHours: sanitizeOpeningHours(r.opening_hours),
     siteLocations: sanitizeSiteLocations(r.site_locations),
   };
 }
 export const DEFAULT_SETTINGS: PublicSettingsDTO = {
   kitchenOpen: true, waitMin: 20, waitMax: 30, currency: 'USD', restaurantName: 'Ember & Co.',
-  phone: null, email: null, address: null, whatsappNumber: null, reservationSlotCapacity: 40, openingHours: {},
+  phone: null, email: null, address: null, whatsappNumber: null, reservationSlotCapacity: 40,
+  reservationFeeEnabled: false, reservationFeeAmount: 0, openingHours: {},
   siteLocations: emptySiteLocations(),
 };
 // Inverse of settingsDTO: a full settings DTO as a restaurant_settings
@@ -185,6 +254,8 @@ function settingsRow(s: PublicSettingsDTO): Row {
     address: s.address,
     whatsapp_number: s.whatsappNumber,
     reservation_slot_capacity: s.reservationSlotCapacity,
+    reservation_fee_enabled: s.reservationFeeEnabled,
+    reservation_fee_amount: s.reservationFeeAmount,
     opening_hours: s.openingHours,
     site_locations: s.siteLocations,
   };
@@ -194,13 +265,28 @@ function reviewDTO(r: Row): ReviewDTO {
 }
 function profileDTO(r: Row): ProfileDTO {
   const favorites = Array.isArray(r.favorites) ? (r.favorites as unknown[]).filter((f): f is number => typeof f === 'number') : [];
+  // Per-person permission overrides (0012): sanitised on the way out —
+  // unknown sections/levels planted directly in the column are dropped;
+  // an empty/absent map normalizes to null ("no overrides").
+  const permissions = sanitizePermissionMap(r.permissions);
+  // Two-factor requirement (0013): profiles are read with select('*'),
+  // so BEFORE 0013 runs the row simply has no mfa_required key — that
+  // ABSENCE is itself the signal (enforcement off entirely; see
+  // lib/mfa.ts), so it must survive as undefined rather than collapsing
+  // into null, which means "column exists, follow the role default".
+  // A present-but-garbage value reads as null, never as a requirement.
+  const mfaRequired: boolean | null | undefined = !('mfa_required' in r)
+    ? undefined
+    : typeof r.mfa_required === 'boolean' ? r.mfa_required : null;
   return {
     id: str(r.id),
-    role: (['customer', 'admin', 'staff'].includes(str(r.role)) ? str(r.role) : 'customer') as ProfileDTO['role'],
+    role: (['customer', 'admin', 'staff', 'manager'].includes(str(r.role)) ? str(r.role) : 'customer') as ProfileDTO['role'],
     fullName: strOrNull(r.full_name),
     phone: strOrNull(r.phone),
     addresses: Array.isArray(r.addresses) ? (r.addresses as unknown[]) : [],
     favorites,
+    permissions: permissions && Object.keys(permissions).length > 0 ? permissions : null,
+    mfaRequired,
     createdAt: str(r.created_at),
   };
 }
@@ -215,7 +301,40 @@ function reservationDTO(r: Row): ReservationDTO {
     source: r.source === 'admin' ? 'admin' : 'website',
     notes: strOrNull(r.notes),
     status: str(r.status) as ReservationDTO['status'],
+    // Fee record (0014): absent columns (pre-migration rows) read as
+    // no fee at all. An out-of-vocabulary stored status — only
+    // reachable by hand-editing the column past its check constraint
+    // — also reads as 'none', never as a state the capacity math
+    // might miscount as paid.
+    feeAmount: r.fee_amount == null ? null : num(r.fee_amount),
+    feeCurrency: strOrNull(r.fee_currency),
+    feePaymentStatus: (['pending', 'paid', 'failed'].includes(str(r.fee_payment_status))
+      ? str(r.fee_payment_status)
+      : 'none') as ReservationDTO['feePaymentStatus'],
     createdAt: str(r.created_at),
+  };
+}
+function reservationRequestDTO(r: Row): ReservationRequestDTO {
+  return {
+    id: str(r.id),
+    reservationId: str(r.reservation_id),
+    requesterUserId: strOrNull(r.requester_user_id),
+    requesterEmail: strOrNull(r.requester_email),
+    proposedDate: strOrNull(r.proposed_date),
+    proposedTime: strOrNull(r.proposed_time),
+    proposedGuests: r.proposed_guests == null ? null : num(r.proposed_guests),
+    message: str(r.message),
+    // The status vocabulary is closed at the database; a value
+    // outside it (only reachable by hand-editing past the CHECK)
+    // reads as 'pending' — the one state that claims nothing has
+    // been decided yet.
+    status: (['approved', 'declined', 'handled'].includes(str(r.status))
+      ? str(r.status)
+      : 'pending') as ReservationRequestDTO['status'],
+    adminReply: strOrNull(r.admin_reply),
+    handledBy: strOrNull(r.handled_by),
+    createdAt: str(r.created_at),
+    updatedAt: str(r.updated_at),
   };
 }
 function couponDTO(r: Row): CouponDTO {
@@ -224,6 +343,22 @@ function couponDTO(r: Row): CouponDTO {
     type: str(r.type) === 'fixed' ? 'fixed' : 'percent',
     value: num(r.value), isActive: r.is_active !== false,
     expiresAt: strOrNull(r.expires_at),
+  };
+}
+function auditEventDTO(r: Row): AuditEventDTO {
+  return {
+    id: str(r.id),
+    createdAt: str(r.created_at),
+    actorId: strOrNull(r.actor_id),
+    actorLabel: strOrNull(r.actor_label),
+    actorRole: strOrNull(r.actor_role),
+    action: str(r.action),
+    entity: strOrNull(r.entity),
+    entityId: strOrNull(r.entity_id),
+    summary: strOrNull(r.summary),
+    changes: (r.changes as AuditEventDTO['changes'] | null) ?? null,
+    ip: strOrNull(r.ip),
+    userAgent: strOrNull(r.user_agent),
   };
 }
 function orderDTO(r: Row, items: OrderDTO['items']): OrderDTO {
@@ -319,6 +454,48 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
     const { data, error, count } = await query.range(page.offset, page.offset + page.limit - 1);
     if (error) throw new Error(`orders query failed: ${error.message}`);
     return { items: await attachItems((data ?? []) as Row[]), total: count ?? 0 };
+  }
+
+  /**
+   * The fee webhook transitions, mirroring the order pair
+   * (markOrderPaidByPaymentIntent / …Failed…): a first-row lookup by
+   * intent id (the column is not unique — limit(1) keeps a duplicate
+   * from ever wedging the webhook on PGRST116), then a GUARDED
+   * update. 'paid' may be set from pending/failed (a succeeded event
+   * after a failed attempt is a legitimate card retry) and is
+   * terminal; 'failed' may be set from pending only, so an
+   * out-of-order failure can never un-pay a booking. Returns the
+   * reservation as it stands, or null when no reservation references
+   * the intent. Pre-0014 the fee columns do not exist: the lookup's
+   * missing-column error reads as "no such reservation" (null), so
+   * a stray fee event degrades to the webhook's unknown-intent ack
+   * instead of a 500 Stripe would retry forever.
+   */
+  async function transitionReservationFeeByIntent(
+    paymentIntentId: string,
+    target: 'paid' | 'failed',
+  ): Promise<ReservationDTO | null> {
+    const { data, error } = await db
+      .from('reservations')
+      .select('id')
+      .eq('fee_payment_intent_id', paymentIntentId)
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true })
+      .limit(1);
+    if (error) {
+      if (isMissingReservationFeeError(error)) return null;
+      throw new Error(`reservation fee lookup failed: ${error.message}`);
+    }
+    if (!data || data.length === 0) return null;
+    const reservationId = str((data[0] as Row).id);
+    const fromStates = target === 'paid' ? ['pending', 'failed'] : ['pending'];
+    const { error: updError } = await db
+      .from('reservations')
+      .update({ fee_payment_status: target })
+      .eq('id', reservationId)
+      .in('fee_payment_status', fromStates);
+    if (updError) throw new Error(`reservation fee update failed: ${updError.message}`);
+    return repo.getReservation(reservationId);
   }
 
   async function adminListReservations(): Promise<ReservationDTO[]>;
@@ -574,11 +751,65 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
         .insert({
           user_id: input.userId, name: input.name, email: input.email, phone: input.phone,
           reservation_date: input.date, reservation_time: input.time, guests: input.guests,
+          // A fee booking is born owing its fee ('pending' — the route
+          // mints the intent next and stores it conditionally). A free
+          // booking names no fee columns at all: its insert is
+          // byte-identical to the pre-0014 one, so bookings keep
+          // working before the migration runs.
+          ...(input.fee
+            ? { fee_amount: input.fee.amount, fee_currency: input.fee.currency, fee_payment_status: 'pending' }
+            : {}),
         })
         .select('*')
         .single();
       if (error) throw new Error(`reservation insert failed: ${error.message}`);
       return reservationDTO(data as Row);
+    },
+    async setReservationFeePaymentIntent(reservationId, paymentIntentId) {
+      // Conditional twin of setOrderPaymentIntent: the intent may be
+      // stored only while the fee is still 'pending', so a late store
+      // can never move the pointer on a booking the webhook already
+      // settled (or one whose setup already failed).
+      const { data, error } = await db
+        .from('reservations')
+        .update({ fee_payment_intent_id: paymentIntentId })
+        .eq('id', reservationId)
+        .eq('fee_payment_status', 'pending')
+        .select('id');
+      if (error) {
+        if (isInvalidUuidError(error)) return false;
+        // Pre-0014 the fee columns do not exist — "not stored" is the
+        // honest degradation (unreachable in practice: a fee can only
+        // be effective once 0014's settings columns exist, and the
+        // reservation columns ship in the same migration).
+        if (isMissingReservationFeeError(error)) return false;
+        throw new Error(`reservation fee intent update failed: ${error.message}`);
+      }
+      return !!data && data.length > 0;
+    },
+    async markReservationFeePaidByPaymentIntent(paymentIntentId) {
+      return transitionReservationFeeByIntent(paymentIntentId, 'paid');
+    },
+    async markReservationFeeFailedByPaymentIntent(paymentIntentId) {
+      return transitionReservationFeeByIntent(paymentIntentId, 'failed');
+    },
+    async failReservationFee(reservationId) {
+      // Guarded like every payment transition: only a still-'pending'
+      // fee may be failed by setup compensation — a webhook landing
+      // first (paid) is never overwritten.
+      const { error } = await db
+        .from('reservations')
+        .update({ fee_payment_status: 'failed' })
+        .eq('id', reservationId)
+        .eq('fee_payment_status', 'pending');
+      if (error) {
+        if (isInvalidUuidError(error)) return;
+        // Best-effort compensation: a pre-0014 schema (or any failure
+        // here) must never mask the original setup error behind a
+        // second one.
+        if (isMissingReservationFeeError(error)) return;
+        throw new Error(`reservation fee failure update failed: ${error.message}`);
+      }
     },
     async addNewsletterSubscriber(email) {
       const { data: existing } = await db.from('newsletter_subscribers').select('id').eq('email', email).maybeSingle();
@@ -911,6 +1142,206 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
       if (error) throw new Error(`admin reservation insert failed: ${error.message}`);
       return reservationDTO(data as Row);
     },
+    async adminUpdateReservation(id, patch) {
+      const update: Row = {};
+      if (patch.date !== undefined) update.reservation_date = patch.date;
+      if (patch.time !== undefined) update.reservation_time = patch.time;
+      if (patch.guests !== undefined) update.guests = patch.guests;
+      // An Apply save whose proposal matches the booking as it stands
+      // changes no column — the reservation as it stands IS the answer
+      // (and the linked request still gets its approval from the route).
+      if (Object.keys(update).length === 0) return repo.getReservation(id);
+      const { data, error } = await db.from('reservations').update(update).eq('id', id).select('*').maybeSingle();
+      if (error) {
+        if (isInvalidUuidError(error)) return null;
+        throw new Error(`reservation update failed: ${error.message}`);
+      }
+      return data ? reservationDTO(data as Row) : null;
+    },
+    async listReservationsForUser(userId, email) {
+      // Visibility (Phase G): the account's own bookings — linked by
+      // user_id — PLUS guest bookings whose email matches the
+      // account's email. Two bounded reads (the account page is a
+      // recent-history view, like listOrdersForUser's cap), merged
+      // and de-duplicated by id: a booking that is BOTH linked and
+      // email-matching appears exactly once.
+      const byAccount = await db
+        .from('reservations')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+        .limit(100);
+      if (byAccount.error) throw new Error(`account reservations query failed: ${byAccount.error.message}`);
+      const merged = new Map<string, ReservationDTO>();
+      for (const row of (byAccount.data ?? []) as Row[]) {
+        const dto = reservationDTO(row);
+        merged.set(dto.id, dto);
+      }
+      const accountEmail = (email ?? '').trim();
+      if (accountEmail) {
+        // ILIKE with the LIKE wildcards escaped to literals is a
+        // case-insensitive EXACT match (the audit-log search's
+        // likeLiteral treatment): an address containing % or _ must
+        // match only itself, never a pattern-neighbour's booking.
+        const literal = accountEmail.replace(/[%_\\]/g, (c) => `\\${c}`);
+        const byEmail = await db
+          .from('reservations')
+          .select('*')
+          .ilike('email', literal)
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: false })
+          .limit(100);
+        if (byEmail.error) throw new Error(`account reservations query failed: ${byEmail.error.message}`);
+        for (const row of (byEmail.data ?? []) as Row[]) {
+          const dto = reservationDTO(row);
+          if (!merged.has(dto.id)) merged.set(dto.id, dto);
+        }
+      }
+      // Upcoming first (soonest first), then the past (most recent
+      // first); created_at/id break ties so the order is total.
+      const today = new Date().toISOString().slice(0, 10);
+      const tiebreak = (a: ReservationDTO, b: ReservationDTO): number =>
+        (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0) ||
+        (a.id < b.id ? 1 : a.id > b.id ? -1 : 0);
+      const all = [...merged.values()];
+      const upcoming = all
+        .filter((r) => r.date >= today)
+        .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0) || (a.time < b.time ? -1 : a.time > b.time ? 1 : 0) || tiebreak(a, b));
+      const past = all
+        .filter((r) => r.date < today)
+        .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0) || (a.time < b.time ? 1 : a.time > b.time ? -1 : 0) || tiebreak(a, b));
+      const reservations = [...upcoming, ...past];
+      if (reservations.length === 0) return { reservations, requests: [] };
+      // The booking's change requests ride along. Pre-0015 the table
+      // does not exist: requests degrade to null (the route flags it)
+      // while the bookings above read exactly as they always have.
+      const { data, error } = await db
+        .from('reservation_requests')
+        .select('*')
+        .in('reservation_id', reservations.map((r) => r.id))
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false });
+      if (error) {
+        if (isMissingReservationRequestsError(error)) return { reservations, requests: null };
+        throw new Error(`reservation requests query failed: ${error.message}`);
+      }
+      return { reservations, requests: ((data ?? []) as Row[]).map(reservationRequestDTO) };
+    },
+    async createReservationRequest(input) {
+      // One pending request per reservation (the spam guard): the
+      // friendly check first — the partial unique index in migration
+      // 0015 is the race-proof backstop, and its 23505 lands on the
+      // same 409 below.
+      const { data: pending, error: pendingError } = await db
+        .from('reservation_requests')
+        .select('id')
+        .eq('reservation_id', input.reservationId)
+        .eq('status', 'pending')
+        .limit(1);
+      if (pendingError) {
+        if (isMissingReservationRequestsError(pendingError)) return null;
+        throw new Error(`reservation request check failed: ${pendingError.message}`);
+      }
+      if (pending && pending.length > 0) {
+        throw new ApiError(409, 'A change request is already pending for this reservation — our team will answer that one first');
+      }
+      const { data, error } = await db
+        .from('reservation_requests')
+        .insert({
+          reservation_id: input.reservationId,
+          requester_user_id: input.requesterUserId,
+          requester_email: input.requesterEmail,
+          proposed_date: input.proposedDate,
+          proposed_time: input.proposedTime,
+          proposed_guests: input.proposedGuests,
+          message: input.message,
+        })
+        .select('*')
+        .single();
+      if (error) {
+        if ((error as { code?: string }).code === '23505') {
+          throw new ApiError(409, 'A change request is already pending for this reservation — our team will answer that one first');
+        }
+        if (isMissingReservationRequestsError(error)) return null;
+        throw new Error(`reservation request insert failed: ${error.message}`);
+      }
+      return reservationRequestDTO(data as Row);
+    },
+    async getReservationRequest(id) {
+      const { data, error } = await db.from('reservation_requests').select('*').eq('id', id).maybeSingle();
+      if (error) {
+        if (isInvalidUuidError(error)) return null;
+        if (isMissingReservationRequestsError(error)) return null;
+        throw new Error(`reservation request query failed: ${error.message}`);
+      }
+      return data ? reservationRequestDTO(data as Row) : null;
+    },
+    async adminListReservationRequests(filter, page) {
+      let query = db
+        .from('reservation_requests')
+        .select('*', { count: 'exact' })
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false });
+      if (filter.status) query = query.eq('status', filter.status);
+      const { data, error, count } = await query.range(page.offset, page.offset + page.limit - 1);
+      if (error) {
+        // Pre-0015: the inbox is an empty page flagged degraded —
+        // never a 500, and the badge reads the same pendingTotal.
+        if (isMissingReservationRequestsError(error)) return { items: [], total: 0, pendingTotal: 0, degraded: true };
+        throw new Error(`reservation requests query failed: ${error.message}`);
+      }
+      // The badge's number is the EXACT pending count, independent of
+      // the filter being browsed (a limit=1 count read, the stat-chip
+      // pattern from the reservations board).
+      const { count: pendingCount, error: pendingError } = await db
+        .from('reservation_requests')
+        .select('id', { count: 'exact' })
+        .eq('status', 'pending')
+        .limit(1);
+      if (pendingError) {
+        if (isMissingReservationRequestsError(pendingError)) return { items: [], total: 0, pendingTotal: 0, degraded: true };
+        throw new Error(`reservation requests count failed: ${pendingError.message}`);
+      }
+      const requests = ((data ?? []) as Row[]).map(reservationRequestDTO);
+      // Join the bookings these requests refer to in ONE read.
+      const byId = new Map<string, ReservationDTO>();
+      const ids = [...new Set(requests.map((r) => r.reservationId))];
+      if (ids.length > 0) {
+        const { data: rows, error: resError } = await db.from('reservations').select('*').in('id', ids);
+        if (resError) throw new Error(`reservation requests context failed: ${resError.message}`);
+        for (const row of (rows ?? []) as Row[]) {
+          const dto = reservationDTO(row);
+          byId.set(dto.id, dto);
+        }
+      }
+      return {
+        items: requests.map((r) => ({ ...r, reservation: byId.get(r.reservationId) ?? null })),
+        total: count ?? 0,
+        pendingTotal: pendingCount ?? 0,
+        degraded: false,
+      };
+    },
+    async updateReservationRequest(id, patch) {
+      const update: Row = { status: patch.status, handled_by: patch.handledBy };
+      if (patch.adminReply !== undefined) update.admin_reply = patch.adminReply;
+      // Conditional: only a still-pending request can be closed, so
+      // two handlers racing the same request produce exactly one
+      // outcome — the loser reads null and answers 409.
+      const { data, error } = await db
+        .from('reservation_requests')
+        .update(update)
+        .eq('id', id)
+        .eq('status', 'pending')
+        .select('*')
+        .maybeSingle();
+      if (error) {
+        if (isInvalidUuidError(error)) return null;
+        if (isMissingReservationRequestsError(error)) return null;
+        throw new Error(`reservation request update failed: ${error.message}`);
+      }
+      return data ? reservationRequestDTO(data as Row) : null;
+    },
     adminListCustomers,
     adminListReviews,
     async setReviewApproved(id, approved) {
@@ -982,6 +1413,155 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
       }
       return data ? profileDTO(data as Row) : null;
     },
+    // -- Access control (migration 0012) --------------------------------
+    // Every method degrades to the pre-0012 world: reads return null
+    // (built-in defaults apply), writes no-op, audit inserts drop. The
+    // moment 0012 runs, the same code paths persist for real — the same
+    // activation pattern as site_locations (0010).
+    async getRolePermissions(role) {
+      const { data, error } = await db.from('role_permissions').select('permissions').eq('role', role).maybeSingle();
+      if (error) {
+        if (isMissingAccessControlError(error, 'role_permissions')) return null;
+        throw new Error(`role permissions read failed: ${error.message}`);
+      }
+      if (!data) return null;
+      return sanitizePermissionMap((data as Row).permissions);
+    },
+    async setRolePermissions(role, permissions) {
+      const clean: PartialPermissionMap = sanitizePermissionMap(permissions) ?? {};
+      const { error } = await db.from('role_permissions').upsert(
+        { role, permissions: clean },
+        { onConflict: 'role' },
+      );
+      if (error) {
+        if (isMissingAccessControlError(error, 'role_permissions')) return;
+        throw new Error(`role permissions write failed: ${error.message}`);
+      }
+    },
+    async setUserPermissions(userId, permissions) {
+      const clean = sanitizePermissionMap(permissions);
+      // An empty map clears the overrides entirely (NULL), so "reset to
+      // role default" is a real state, not an empty-jsonb residue.
+      const value = clean && Object.keys(clean).length > 0 ? clean : null;
+      const { data, error } = await db.from('profiles').update({ permissions: value }).eq('id', userId).select('*').maybeSingle();
+      if (error) {
+        if (isInvalidUuidError(error)) return null;
+        if (isMissingAccessControlError(error, 'permissions')) {
+          // Pre-0012: nothing can persist yet — hand back the profile
+          // as it actually stands so the caller shows real state.
+          return repo.getProfile(userId);
+        }
+        throw new Error(`user permissions write failed: ${error.message}`);
+      }
+      return data ? profileDTO(data as Row) : null;
+    },
+    async setUserMfaRequired(userId, required) {
+      const { data, error } = await db.from('profiles').update({ mfa_required: required }).eq('id', userId).select('*').maybeSingle();
+      if (error) {
+        if (isInvalidUuidError(error)) return null;
+        if (isMissingMfaRequiredError(error)) {
+          // Pre-0013: nothing can persist yet — hand back the profile
+          // as it actually stands so the caller shows real state (and
+          // the endpoint's audit diff correctly sees no change).
+          return repo.getProfile(userId);
+        }
+        throw new Error(`user MFA requirement write failed: ${error.message}`);
+      }
+      return data ? profileDTO(data as Row) : null;
+    },
+    async insertAuditEvent(event: AuditEventInput) {
+      const { error } = await db.from('audit_events').insert({
+        actor_id: event.actorId,
+        actor_label: event.actorLabel,
+        actor_role: event.actorRole,
+        action: event.action,
+        entity: event.entity,
+        entity_id: event.entityId,
+        summary: event.summary,
+        changes: event.changes,
+        ip: event.ip,
+        user_agent: event.userAgent,
+      });
+      if (error) {
+        // Pre-0012 the log table does not exist: dropping the event is
+        // the correct degradation (lib/audit.ts also guards its caller).
+        if (isMissingAccessControlError(error, 'audit_events')) return;
+        throw new Error(`audit insert failed: ${error.message}`);
+      }
+    },
+    // Security & Activity reads (Phase C). Filters apply BEFORE the
+    // range, so `total` is the filtered count and pages tile the
+    // filtered set; created_at desc + id desc is a total order. The
+    // 'auth' category is the `auth.` action prefix (lib/audit.ts) —
+    // expressed as LIKE / NOT LIKE because the table carries no
+    // category column. Free text goes through an or() of ILIKEs with
+    // the PostgREST or-syntax metacharacters stripped and its LIKE
+    // wildcards escaped to literals; the value is double-quoted so
+    // spaces survive, and a term with nothing searchable left in it
+    // matches nothing rather than degrading to no filter.
+    async listAuditEvents(filter: AuditEventFilter, page?: PageParams): Promise<AuditEventPage> {
+      if (!page) {
+        // The complete filtered set (CSV export): page through at the
+        // PostgREST cap. A degraded first page is the whole answer.
+        const first = await repo.listAuditEvents(filter, { limit: ALL_PAGE_SIZE, offset: 0 });
+        if (first.degraded || first.items.length >= first.total) return first;
+        const items = [...first.items];
+        while (items.length < first.total) {
+          const next = await repo.listAuditEvents(filter, { limit: ALL_PAGE_SIZE, offset: items.length });
+          if (next.items.length === 0) break;
+          items.push(...next.items);
+        }
+        return { items, total: first.total, degraded: false };
+      }
+      // Escape LIKE wildcards in user input so a filter value can
+      // only ever match literally (plus the suffix wildcard WE add
+      // for the action prefix match).
+      const likeLiteral = (s: string) => s.replace(/[%_\\]/g, (c) => `\\${c}`);
+      let query = db
+        .from('audit_events')
+        .select('*', { count: 'exact' })
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false });
+      if (filter.category === 'auth') query = query.like('action', 'auth.%');
+      if (filter.category === 'change') query = query.not('action', 'like', 'auth.%');
+      if (filter.actorId) query = query.eq('actor_id', filter.actorId);
+      if (filter.action) query = query.like('action', `${likeLiteral(filter.action)}%`);
+      if (filter.from) query = query.gte('created_at', filter.from);
+      if (filter.to) query = query.lte('created_at', filter.to);
+      if (filter.q) {
+        // Only the or()-grammar metacharacters are stripped — a
+        // comma / paren / quote would break the filter string
+        // itself. LIKE wildcards in what remains (% and _) and the
+        // escape character are KEPT and passed through likeLiteral,
+        // so they can only ever match literally (the action-prefix
+        // treatment above). The previous strip-everything version
+        // deleted % and \ outright, let _ act as a one-character
+        // wildcard, and silently dropped the filter altogether
+        // when nothing searchable survived the strip.
+        const term = filter.q.replace(/[,()"]/g, ' ').trim();
+        if (!term) {
+          // A q with nothing searchable in it (e.g. ",,,") must not
+          // degrade into "no filter" and stream back the whole
+          // log — it matches nothing.
+          return { items: [], total: 0, degraded: false };
+        }
+        const pattern = `"%${likeLiteral(term)}%"`;
+        query = query.or(`actor_label.ilike.${pattern},summary.ilike.${pattern},action.ilike.${pattern}`);
+      }
+      const { data, error, count } = await query.range(page.offset, page.offset + page.limit - 1);
+      if (error) {
+        // Pre-0012: the log table does not exist — the honest answer
+        // is an EMPTY page flagged degraded, never a 500 (the UI
+        // turns the flag into "logging activates once the database
+        // update is applied").
+        if (isMissingAccessControlError(error, 'audit_events')) return { items: [], total: 0, degraded: true };
+        // A non-UUID actorId filter simply matches no one (fix 8's
+        // malformed-id policy), it is not a server failure.
+        if (isInvalidUuidError(error)) return { items: [], total: 0, degraded: false };
+        throw new Error(`audit events query failed: ${error.message}`);
+      }
+      return { items: ((data ?? []) as Row[]).map(auditEventDTO), total: count ?? 0, degraded: false };
+    },
     async updateSettings(patch) {
       const update: Row = {};
       if (patch.kitchenOpen !== undefined) update.kitchen_open = patch.kitchenOpen;
@@ -994,6 +1574,9 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
       if (patch.address !== undefined) update.address = patch.address;
       if (patch.whatsappNumber !== undefined) update.whatsapp_number = patch.whatsappNumber;
       if (patch.reservationSlotCapacity !== undefined) update.reservation_slot_capacity = patch.reservationSlotCapacity;
+      if (patch.reservationFeeEnabled !== undefined) update.reservation_fee_enabled = patch.reservationFeeEnabled;
+      // Clamp like the read sanitizer: a negative amount is never a charge.
+      if (patch.reservationFeeAmount !== undefined) update.reservation_fee_amount = Math.max(0, patch.reservationFeeAmount);
       if (patch.openingHours !== undefined) update.opening_hours = sanitizeOpeningHours(patch.openingHours);
       // siteLocations merges per group over the CURRENT settings: a
       // PATCH carrying only the footer group must not wipe the contact /
@@ -1008,20 +1591,30 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
         };
         update.site_locations = mergedLocations;
       }
-      // Pre-migration degradation (migration 0010): until the owner runs
-      // 0010 the site_locations column does not exist and PostgREST
-      // rejects any write naming it. Settings saves must keep working
+      // Pre-migration degradation (migrations 0010 + 0014): until the
+      // owner runs a migration its columns do not exist and PostgREST
+      // rejects any write naming one. Settings saves must keep working
       // exactly as before in that state, so a missing-column failure
-      // retries the same write WITHOUT the new column — the location
-      // fields simply activate once 0010 has run.
-      const withoutLocations = (row: Row): Row => {
+      // retries the same write WITHOUT the columns that do not exist
+      // yet — those fields simply activate once their migration runs.
+      const withoutMissingColumns = (row: Row, error: { code?: string; message?: string }): Row | null => {
         const rest = { ...row };
-        delete rest.site_locations;
-        return rest;
+        let stripped = false;
+        if ('site_locations' in rest && isMissingSiteLocationsError(error)) {
+          delete rest.site_locations;
+          stripped = true;
+        }
+        if (('reservation_fee_enabled' in rest || 'reservation_fee_amount' in rest) && isMissingReservationFeeError(error)) {
+          delete rest.reservation_fee_enabled;
+          delete rest.reservation_fee_amount;
+          stripped = true;
+        }
+        return stripped ? rest : null;
       };
       let { data, error } = await db.from('restaurant_settings').update(update).eq('id', 1).select('id');
-      if (error && 'site_locations' in update && isMissingSiteLocationsError(error)) {
-        ({ data, error } = await db.from('restaurant_settings').update(withoutLocations(update)).eq('id', 1).select('id'));
+      if (error) {
+        const retry = withoutMissingColumns(update, error);
+        if (retry) ({ data, error } = await db.from('restaurant_settings').update(retry).eq('id', 1).select('id'));
       }
       if (error) throw new Error(`settings update failed: ${error.message}`);
       if ((data ?? []).length === 0) {
@@ -1038,8 +1631,9 @@ export function createSupabaseRepository(url: string, serviceRoleKey: string): R
         };
         const row = settingsRow(merged);
         let { error: insertError } = await db.from('restaurant_settings').insert(row);
-        if (insertError && isMissingSiteLocationsError(insertError)) {
-          ({ error: insertError } = await db.from('restaurant_settings').insert(withoutLocations(row)));
+        if (insertError) {
+          const retryRow = withoutMissingColumns(row, insertError);
+          if (retryRow) ({ error: insertError } = await db.from('restaurant_settings').insert(retryRow));
         }
         if (insertError) throw new Error(`settings insert failed: ${insertError.message}`);
       }

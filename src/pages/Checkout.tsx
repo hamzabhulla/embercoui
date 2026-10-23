@@ -352,7 +352,9 @@ export default function Checkout() {
                     <CreditCard size={18} color="#C17A3A" />
                     <span>
                       <span className="block" style={{ fontFamily: 'Jost, sans-serif', fontSize: '13px', color: '#F5F0E8' }}>Card — pay now</span>
-                      <span className="block" style={{ fontFamily: 'Jost, sans-serif', fontSize: '11px', color: 'rgba(245,240,232,0.45)' }}>{stripePromise ? 'Secure payment via Stripe' : 'Card payments are coming soon'}</span>
+                      {!stripePromise && (
+                        <span className="block" style={{ fontFamily: 'Jost, sans-serif', fontSize: '11px', color: 'rgba(245,240,232,0.45)' }}>Card payments are coming soon</span>
+                      )}
                     </span>
                     {method === 'card' && <Check size={15} color="#4ade80" className="ml-auto" />}
                   </button>
@@ -400,9 +402,6 @@ export default function Checkout() {
               <button type="submit" disabled={placing} style={emberButton} className="transition-all duration-300 hover:brightness-110 disabled:opacity-60">
                 {placing ? 'Placing your order…' : method === 'card' ? 'Place Order & Pay' : 'Place Order'}
               </button>
-              <p className="text-center mt-4" style={{ fontFamily: 'Jost, sans-serif', fontSize: '10px', color: 'rgba(245,240,232,0.25)' }}>
-                Secure checkout · SSL encrypted
-              </p>
             </aside>
           </form>
         )}

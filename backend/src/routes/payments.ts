@@ -40,7 +40,7 @@ export function paymentsRouter(deps: PaymentDeps) {
       // never a 403 that would confirm the order exists.
       if (order.userId) {
         const isOwner = req.user?.id === order.userId;
-        const isStaff = req.user?.role === 'admin' || req.user?.role === 'staff';
+        const isStaff = req.user?.role === 'admin' || req.user?.role === 'staff' || req.user?.role === 'manager';
         if (!isOwner && !isStaff) throw new ApiError(404, 'Order not found');
       }
       if (order.status === 'cancelled') {
@@ -142,20 +142,41 @@ export function createWebhookHandler(deps: Pick<PaymentDeps, 'repo' | 'stripe'>)
       const signature = req.header('stripe-signature');
       if (!signature) throw new ApiError(400, 'Missing Stripe signature');
       const event = deps.stripe.constructEvent(req.body as Buffer, signature);
-      if (event.paymentIntentId) {
-        let order: OrderDTO | null = null;
-        if (event.type === 'payment_intent.succeeded') {
-          // The webhook is the ONLY path that marks an order paid.
-          order = await deps.repo.markOrderPaidByPaymentIntent(event.paymentIntentId);
-        } else if (event.type === 'payment_intent.payment_failed') {
-          order = await deps.repo.markOrderPaymentFailedByPaymentIntent(event.paymentIntentId);
-        }
-        if (order === null && (event.type === 'payment_intent.succeeded' || event.type === 'payment_intent.payment_failed')) {
-          // No order references this intent (created outside this system,
-          // or the order row is gone). Ack with 200 anyway — Stripe must
-          // not retry forever — but leave a server-side trace so the
-          // payment can be reconciled by hand.
-          console.warn(`[payments] webhook ${event.type} referenced unknown payment intent ${event.paymentIntentId}`);
+      const isPaymentEvent = event.type === 'payment_intent.succeeded' || event.type === 'payment_intent.payment_failed';
+      if (event.paymentIntentId && isPaymentEvent) {
+        // Routing is by the intent's metadata (lib/stripe.ts):
+        // 'reservation_fee' is a Phase F booking fee; NO type is the
+        // order flow's shape (its intents carry only { orderId });
+        // any other type is a foreign purpose sharing this Stripe
+        // account — acked and left completely untouched.
+        const intentType = event.metadata?.type;
+        if (intentType === 'reservation_fee') {
+          // The webhook is the ONLY path that marks a fee paid.
+          const reservation = event.type === 'payment_intent.succeeded'
+            ? await deps.repo.markReservationFeePaidByPaymentIntent(event.paymentIntentId)
+            : await deps.repo.markReservationFeeFailedByPaymentIntent(event.paymentIntentId);
+          if (reservation === null) {
+            // No reservation references this intent (created outside
+            // this system, or the row is gone). Ack with 200 anyway —
+            // Stripe must not retry forever — but leave a trace so the
+            // payment can be reconciled by hand.
+            console.warn(`[payments] webhook ${event.type} referenced unknown reservation fee intent ${event.paymentIntentId}`);
+          }
+        } else if (!intentType) {
+          let order: OrderDTO | null = null;
+          if (event.type === 'payment_intent.succeeded') {
+            // The webhook is the ONLY path that marks an order paid.
+            order = await deps.repo.markOrderPaidByPaymentIntent(event.paymentIntentId);
+          } else {
+            order = await deps.repo.markOrderPaymentFailedByPaymentIntent(event.paymentIntentId);
+          }
+          if (order === null) {
+            // No order references this intent (created outside this system,
+            // or the order row is gone). Ack with 200 anyway — Stripe must
+            // not retry forever — but leave a server-side trace so the
+            // payment can be reconciled by hand.
+            console.warn(`[payments] webhook ${event.type} referenced unknown payment intent ${event.paymentIntentId}`);
+          }
         }
       }
       res.json({ received: true });

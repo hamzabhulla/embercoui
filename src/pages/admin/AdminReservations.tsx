@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { adminGet, adminSend } from '../../services/adminApi';
-import { useAuth } from '../../context/AuthContext';
+import ReservationRequestsInbox from './ReservationRequestsInbox';
+import { reservationHoldsSeats } from '../../lib/reservations';
+import { formatMoney } from '../../lib/currency';
+import { usePermissions } from '../../components/admin/PermissionsContext';
 import {
   Card, CardHead, EmptyNote, ErrorNote, LoadingNote, NoticeNote, PageTitle, StatCard, StatusPill,
   chipBtn, chipDangerBtn, chipGhostBtn, ghostBtn, inputCls, labelCls, primaryBtn,
@@ -9,6 +12,8 @@ import {
 interface Reservation {
   id: string; name: string; email: string | null; phone: string; date: string; time: string;
   guests: number; status: string; source: 'website' | 'admin'; notes: string | null; createdAt: string;
+  /** Booking fee (Phase F): null amount = no fee; otherwise the payment state drives the chip + capacity. */
+  feeAmount: number | null; feeCurrency: string | null; feePaymentStatus: string;
 }
 
 interface Settings { reservationSlotCapacity: number }
@@ -36,13 +41,13 @@ async function fetchDayReservations(date: string): Promise<Reservation[]> {
       `/api/v1/admin/reservations?date=${encodeURIComponent(date)}&limit=${DAY_PAGE_SIZE}&offset=${all.length}`);
     total = d.total;
     if (total > MAX_DAY_TOTAL) {
-      throw new Error(`Is date par ${total} reservations hain — day board itni bookings ek sath nahi dikha sakta, is liye seats nahi dikhaye ja rahe (galat seats dikhane se behtar hai).`);
+      throw new Error(`This date has ${total} reservations — the day board cannot show that many bookings at once, so seats are not shown (better than showing wrong seats).`);
     }
     all.push(...d.reservations);
     if (d.reservations.length === 0) break;
   }
   if (all.length < total) {
-    throw new Error('Is date ki bookings mukammal load nahi ho sakin — page refresh karke dobara try karein.');
+    throw new Error("This date's bookings could not be loaded in full — refresh the page and try again.");
   }
   return all;
 }
@@ -50,8 +55,8 @@ async function fetchDayReservations(date: string): Promise<Reservation[]> {
 const EMPTY_FORM = { name: '', phone: '', email: '', date: '', time: '19:00', guests: 2, status: 'confirmed', notes: '' };
 
 export default function AdminReservations() {
-  const { profile } = useAuth();
-  const isAdmin = profile?.role === 'admin';
+  const { can } = usePermissions();
+  const canManage = can('reservations', 'manage');
   const [rows, setRows] = useState<Reservation[]>([]);
   const [total, setTotal] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -228,7 +233,9 @@ export default function AdminReservations() {
   const boardSlots = (() => {
     const byTime = new Map<string, { parties: number; guests: number }>();
     for (const r of boardRows ?? []) {
-      if (!ACTIVE.includes(r.status)) continue;
+      // Seat-holding only: active status AND (no fee OR fee paid) —
+      // an unpaid fee booking must not eat capacity it hasn't secured.
+      if (!reservationHoldsSeats(r)) continue;
       const key = slotTime(r.time);
       const slot = byTime.get(key) ?? { parties: 0, guests: 0 };
       slot.parties += 1; slot.guests += r.guests;
@@ -242,7 +249,7 @@ export default function AdminReservations() {
   const formRows = form.date ? daySets[form.date] : undefined;
   const formDayError = form.date ? dayErrors[form.date] : undefined;
   const formSlotGuests = (formRows ?? [])
-    .filter((r) => slotTime(r.time) === slotTime(form.time) && ACTIVE.includes(r.status))
+    .filter((r) => slotTime(r.time) === slotTime(form.time) && reservationHoldsSeats(r))
     .reduce((s, r) => s + r.guests, 0);
   const formRemaining = capacity !== null ? capacity - formSlotGuests : 0;
   const formOverbooks = capacity !== null && formRows !== undefined && form.guests > formRemaining;
@@ -251,14 +258,14 @@ export default function AdminReservations() {
   let formHint: string;
   let formHintWarn = false;
   if (!form.date) {
-    formHint = 'Pehle date select karein — phir is slot ki remaining seats dikhengi.';
+    formHint = "Select a date first — then this slot's remaining seats will show.";
   } else if (capacity === null) {
-    formHint = 'Capacity unknown — settings load nahi ho saka, is liye is slot ki remaining seats check nahi ho sakti.';
+    formHint = "Capacity unknown — settings could not be loaded, so this slot's remaining seats cannot be checked.";
   } else if (formDayError) {
-    formHint = `Is date ki bookings load nahi ho sakin (${formDayError}) — remaining seats unknown hain.`;
+    formHint = `This date's bookings could not be loaded (${formDayError}) — remaining seats are unknown.`;
     formHintWarn = true;
   } else if (formRows === undefined) {
-    formHint = 'Is slot ki bookings load ho rahi hain…';
+    formHint = "This slot's bookings are loading…";
   } else if (formRemaining < 0) {
     formHint = `⚠ This slot is already overbooked by ${-formRemaining} guests — adding more will overbook it further`;
     formHintWarn = true;
@@ -293,12 +300,12 @@ export default function AdminReservations() {
   return (
     <div>
       <PageTitle
-        sub="Confirm or cancel table bookings — walk-ins bhi yahin se add hote hain"
-        actions={(
+        sub="Confirm or cancel table bookings — walk-ins are added here too"
+        actions={canManage ? (
           <button type="button" className={primaryBtn} onClick={() => { setFormOpen((o) => !o); setNotice(''); }}>
             {formOpen ? 'Close form' : '+ New Reservation'}
           </button>
-        )}
+        ) : undefined}
       >
         Reservations
       </PageTitle>
@@ -310,7 +317,7 @@ export default function AdminReservations() {
           value={todays ? todays.length : '—'}
           foot={todays
             ? `${todays.reduce((s, r) => s + r.guests, 0)} guests`
-            : dayErrors[today] ? 'Bookings load nahi ho sakin' : 'Loading…'}
+            : dayErrors[today] ? 'Bookings could not be loaded' : 'Loading…'}
         />
         <StatCard label="Pending" value={pendingTotal ?? '—'} foot="Confirmation still needed" />
         <StatCard label="Confirmed" value={confirmedTotal ?? '—'} />
@@ -327,7 +334,7 @@ export default function AdminReservations() {
         />
         <div className="px-[18px] pb-4">
           {boardError ? (
-            <ErrorNote message={`Day board load nahi ho saka: ${boardError}`} />
+            <ErrorNote message={`The day board could not be loaded: ${boardError}`} />
           ) : !boardRows ? (
             <LoadingNote />
           ) : (
@@ -374,12 +381,16 @@ export default function AdminReservations() {
               Settings (fix 4), so telling them to change it there sent
               them to a page they can never reach (audit fix 15). */}
           {capacity !== null ? (
-            <p className="font-bodytext text-[11.5px] text-[#98A096] mt-3">Capacity {capacity} guests per time slot{isAdmin ? ' — Settings se badal sakti hai' : ''}. Cancelled / completed bookings capacity nahi roktay.</p>
+            <p className="font-bodytext text-[11.5px] text-[#98A096] mt-3">Capacity {capacity} guests per time slot{can('settings', 'view') ? ' — you can change it in Settings' : ''}. Cancelled / completed bookings do not take up capacity, and neither does a booking whose fee is still unpaid.</p>
           ) : (
-            <p className="font-bodytext text-[11.5px] text-[#98A096] mt-3">Capacity unknown — settings load nahi ho saka, is liye remaining seats nahi dikhaye ja rahe; booked counts mukammal hain. Cancelled / completed bookings capacity nahi roktay.</p>
+            <p className="font-bodytext text-[11.5px] text-[#98A096] mt-3">Capacity unknown — settings could not be loaded, so remaining seats are not shown; the booked counts are complete. Cancelled / completed bookings do not take up capacity, and neither does a booking whose fee is still unpaid.</p>
           )}
         </div>
       </Card>
+
+      {/* Phase G: customer change requests. Applying one edits the
+          booking, so the board + list reload alongside the inbox. */}
+      <ReservationRequestsInbox canManage={canManage} onApplied={reloadAll} />
 
       {formOpen && (
         <Card className="mb-6">
@@ -437,26 +448,52 @@ export default function AdminReservations() {
       {loaded && rows.length === 0 && !error && <EmptyNote message="No reservations yet." />}
       <div className="space-y-3">
         {rows.map((r) => (
-          <Card key={r.id} className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
+          <Card
+            key={r.id}
+            className={`flex flex-wrap items-center justify-between gap-3 px-5 py-4 ${
+              // Unpaid fee rows are visually distinct: the booking is
+              // real but the table is NOT held until the fee is paid.
+              r.feeAmount != null && r.feePaymentStatus === 'pending'
+                ? 'border-l-4 border-l-[#B07C1E]'
+                : r.feeAmount != null && r.feePaymentStatus === 'failed'
+                  ? 'border-l-4 border-l-[#B0492F]'
+                  : ''
+            }`}
+          >
             <div>
               <p className="font-bodytext text-[14.5px] font-semibold text-[#16241A]">
                 {r.name} <span className="font-normal text-[#98A096] text-[12.5px]">— {r.guests} guests</span>{' '}
                 <span className={`inline-flex items-center px-2 py-[2px] rounded-full font-bodytext text-[10.5px] font-semibold align-middle ${r.source === 'admin' ? 'bg-[#FAF1DC] text-[#B07C1E]' : 'bg-[#EFE9DB] text-[#5C665C]'}`}>
                   {r.source === 'admin' ? 'Walk-in' : 'Website'}
-                </span>
+                </span>{' '}
+                {r.feeAmount != null && (
+                  <span className={`inline-flex items-center px-2 py-[2px] rounded-full font-bodytext text-[10.5px] font-semibold align-middle ${
+                    r.feePaymentStatus === 'paid'
+                      ? 'bg-[#E4F0E7] text-[#2E7D4F]'
+                      : r.feePaymentStatus === 'failed'
+                        ? 'bg-[#F9E7E1] text-[#B0492F]'
+                        : 'bg-[#FAF1DC] text-[#B07C1E]'
+                  }`}>
+                    {r.feePaymentStatus === 'paid'
+                      ? `Fee paid · ${formatMoney(r.feeAmount, r.feeCurrency ?? 'USD')}`
+                      : r.feePaymentStatus === 'failed'
+                        ? `Fee failed · ${formatMoney(r.feeAmount, r.feeCurrency ?? 'USD')}`
+                        : `Awaiting payment · ${formatMoney(r.feeAmount, r.feeCurrency ?? 'USD')}`}
+                  </span>
+                )}
               </p>
               <p className="font-bodytext text-[12.5px] text-[#98A096] mt-0.5">{r.date} at {r.time} · {r.email ?? '—'} · {r.phone}</p>
               {r.notes && <p className="font-bodytext text-[12.5px] text-[#5C665C] mt-0.5">Note: {r.notes}</p>}
             </div>
             <div className="flex items-center gap-2 flex-wrap">
               <StatusPill status={r.status} />
-              {r.status === 'pending' && (
+              {canManage && r.status === 'pending' && (
                 <>
                   <button disabled={busyId === r.id} onClick={() => void setStatus(r.id, 'confirmed')} className={chipBtn}>Confirm</button>
                   <button disabled={busyId === r.id} onClick={() => void setStatus(r.id, 'cancelled')} className={chipDangerBtn}>Cancel</button>
                 </>
               )}
-              {r.status === 'confirmed' && (
+              {canManage && r.status === 'confirmed' && (
                 <>
                   <button disabled={busyId === r.id} onClick={() => void setStatus(r.id, 'completed')} className={chipGhostBtn}>Mark completed</button>
                   <button disabled={busyId === r.id} onClick={() => void setStatus(r.id, 'cancelled')} className={chipDangerBtn}>Cancel</button>

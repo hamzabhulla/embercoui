@@ -45,6 +45,7 @@ function makeReservation(patch: Partial<ReservationDTO> = {}): ReservationDTO {
     id: `seed-res-${n}`, userId: null, name: 'Seed Guest', email: 'guest@example.com',
     phone: '1234567', date: '2026-12-01', time: '19:00', guests: 2,
     source: 'website', notes: null, status: 'pending',
+    feeAmount: null, feeCurrency: null, feePaymentStatus: 'none',
     createdAt: '2026-01-01T00:00:00.000Z', ...patch,
   };
 }
@@ -436,13 +437,14 @@ describe('paged admin staff (audit-2 fix 6)', () => {
   const { repo, app } = setup();
 
   it('pages tile the full set with the exact total (id breaks the created_at tie)', async () => {
-    // The fake seeds 4 profiles sharing one createdAt; id asc orders them.
+    // The fake seeds 5 profiles sharing one createdAt (Phase A added
+    // the manager-1 fixture); id asc orders them.
     const first = await as(request(app).get('/api/v1/admin/staff?limit=3&offset=0'), ADMIN);
     expect(first.status).toBe(200);
-    expect(first.body.total).toBe(4);
-    expect(first.body.staff.map((p: { id: string }) => p.id)).toEqual(['admin-1', 'staff-1', 'user-1']);
+    expect(first.body.total).toBe(5);
+    expect(first.body.staff.map((p: { id: string }) => p.id)).toEqual(['admin-1', 'manager-1', 'staff-1']);
     const rest = await as(request(app).get('/api/v1/admin/staff?limit=3&offset=3'), ADMIN);
-    expect(rest.body.staff.map((p: { id: string }) => p.id)).toEqual(['user-2']);
+    expect(rest.body.staff.map((p: { id: string }) => p.id)).toEqual(['user-1', 'user-2']);
     for (const p of [...first.body.staff, ...rest.body.staff]) expect(p.email).toContain('@');
   });
 
@@ -454,9 +456,9 @@ describe('paged admin staff (audit-2 fix 6)', () => {
 
   it('repository contract: paged returns slice + total, unpaged returns everything', async () => {
     const page = await repo.adminListStaff({ limit: 2, offset: 2 });
-    expect(page.total).toBe(4);
+    expect(page.total).toBe(5);
     expect(page.items).toHaveLength(2);
-    expect(await repo.adminListStaff()).toHaveLength(4);
+    expect(await repo.adminListStaff()).toHaveLength(5);
   });
 
   it('rejects invalid paging params with 400', async () => {

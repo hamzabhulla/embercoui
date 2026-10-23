@@ -49,6 +49,13 @@ export interface PublicSettings {
   whatsappNumber: string | null;
   openingHours: Record<string, unknown>;
   siteLocations: SiteLocations;
+  /**
+   * The EFFECTIVE reservation fee, resolved by the server: present
+   * only when a booking is actually charged one (owner enabled it,
+   * amount above zero, card provider connected). Null = booking is
+   * free. The owner's raw toggle/amount are never sent to the public.
+   */
+  reservationFee: { amount: number; currency: string } | null;
 }
 
 export interface ApprovedReview {
@@ -170,9 +177,19 @@ export async function apiRequest<T>(
   }
 }
 
+/** The card step a fee-bearing booking returns: confirm this intent to hold the table. */
+export interface ReservationFeePayment {
+  clientSecret: string;
+  paymentIntentId: string;
+  amount: number;
+  currency: string;
+}
+
 export const submitReservation = (payload: {
   name: string; email: string; phone: string; date: string; time: string; guests: number;
-}) => apiRequest('/api/v1/reservations', { method: 'POST', body: JSON.stringify(payload) });
+}) => apiRequest<{ reservation: { id: string }; feePayment?: ReservationFeePayment }>(
+  '/api/v1/reservations', { method: 'POST', body: JSON.stringify(payload) },
+);
 
 export const subscribeNewsletter = (email: string) =>
   apiRequest('/api/v1/newsletter', { method: 'POST', body: JSON.stringify({ email }) });

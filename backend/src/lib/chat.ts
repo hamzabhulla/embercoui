@@ -189,6 +189,12 @@ export function summarizeReservationDay(
   const bySlot = new Map<string, number>();
   for (const r of reservations) {
     if (!SEAT_HOLDING_STATUSES.has(r.status)) continue;
+    // A fee-bearing booking holds seats ONLY once its fee is paid —
+    // the same capacity rule the admin day board applies. An unpaid
+    // (pending/failed) fee booking must never make a slot look taken
+    // here either, or the concierge would turn guests away from
+    // seats that are in fact open.
+    if (r.feeAmount != null && r.feePaymentStatus !== 'paid') continue;
     const slot = r.time.slice(0, 5);
     bySlot.set(slot, (bySlot.get(slot) ?? 0) + r.guests);
   }
@@ -293,6 +299,15 @@ export interface ChatPromptContext {
    * claimable; a failure stays silent, exactly like a guest.
    */
   signedInNoOrders?: boolean;
+  /**
+   * The EFFECTIVE reservation fee (lib/reservationFee.ts) resolved by
+   * the route from the live settings: a fee object when guests are
+   * actually charged one at booking, null when booking is free. The
+   * prompt's reservation fact line reads THIS — never the raw
+   * settings — so the concierge can never announce a fee that will
+   * not be charged, nor promise "free" while one is.
+   */
+  reservationFee?: { amount: number; currency: string } | null;
   /** The order behind an id the visitor pasted, when it exists AND is theirs to see; null/absent otherwise — indistinguishably. */
   focusOrder?: ChatOrderSummary | null;
 }
@@ -354,6 +369,21 @@ export function buildChatSystemPrompt(
     }
   }
 
+  // The reservation-fee facts read the LIVE effective fee the route
+  // resolved (context.reservationFee) — with a fee in force the
+  // prompt states its exact amount and how it is charged; without
+  // one it promises free booking. The two wordings are mutually
+  // exclusive by construction: the model can never announce a fee
+  // that is not charged, nor call booking free while one is.
+  const fee = context.reservationFee ?? null;
+  const feeFactLine = fee
+    ? `- Reservations: booking a table carries a booking fee of ${price(fee.amount)} — it is charged online by card at the moment of booking, and the table is held once the fee is paid.`
+    : '- Reservations: booking a table is free of charge — there is no booking fee, ever.';
+  const feeExampleLine = fee
+    ? `- Visitor: "Do I pay to book a table?" — You: "There is a booking fee of ${price(fee.amount)} — it is taken by card on the Reservations page when you book, and your table is held the moment it is paid."`
+    : '- Visitor: "Do I pay to book a table?" — You: "Not a thing — a table with us is free to reserve, always. The Reservations page locks it in under a minute whenever you are ready."';
+  const bookingOffer = fee ? 'the table booking' : 'the free table booking';
+
   const recentOrders = context.recentOrders?.length ? context.recentOrders : null;
   const focusOrder = context.focusOrder ?? null;
   // The claimable no-orders fact needs both order slots empty: with a
@@ -388,10 +418,10 @@ export function buildChatSystemPrompt(
     'Voice rules:',
     '- Lead with what is true. Never open a reply with "I am not sure", never apologise for not knowing, and never say you are unsure twice in one reply.',
     '- Answer everything the facts below can answer. Pointing a visitor elsewhere — another page, a phone call — is the graceful last step only: offer it once, woven into a sentence, never as the whole reply.',
-    '- When something genuinely is not among the facts, say so in one natural sentence — "That one I don\'t have in front of me — but …" — and immediately offer the closest useful thing instead: a dish from the menu, the free table booking, or our phone number. Give the phone number at most once in a reply, and do not repeat it in later replies unless asked.',
+    `- When something genuinely is not among the facts, say so in one natural sentence — "That one I don't have in front of me — but …" — and immediately offer the closest useful thing instead: a dish from the menu, ${bookingOffer}, or our phone number. Give the phone number at most once in a reply, and do not repeat it in later replies unless asked.`,
     '',
     'The voice in practice:',
-    '- Visitor: "Do I pay to book a table?" — You: "Not a thing — a table with us is free to reserve, always. The Reservations page locks it in under a minute whenever you are ready."',
+    feeExampleLine,
     '- Visitor: "Do you cater private weddings?" — You: "That one I don\'t have in front of me — but the kitchen team would be glad to talk it through, and I can walk you through the dishes they are proudest of in the meantime."',
     '',
     'Ground rules:',
@@ -422,7 +452,7 @@ export function buildChatSystemPrompt(
     '',
     'Restaurant facts:',
     `- Kitchen right now: ${settings.kitchenOpen ? `open — typical wait ${settings.waitMin}–${settings.waitMax} minutes` : 'closed for orders right now (menu questions are still welcome)'}`,
-    '- Reservations: booking a table is free of charge — there is no booking fee, ever.',
+    feeFactLine,
     settings.phone ? `- Phone: ${settings.phone}` : null,
     settings.email ? `- Email: ${settings.email}` : null,
     settings.address ? `- Address: ${settings.address}` : null,

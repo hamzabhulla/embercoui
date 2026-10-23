@@ -15,7 +15,7 @@ export async function adminGet<T>(path: string): Promise<T> {
   return res.data;
 }
 
-export async function adminSend<T>(method: 'POST' | 'PATCH' | 'DELETE', path: string, body?: unknown): Promise<T> {
+export async function adminSend<T>(method: 'POST' | 'PATCH' | 'PUT' | 'DELETE', path: string, body?: unknown): Promise<T> {
   const res = await apiRequest<T>(path, {
     method,
     body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -24,7 +24,7 @@ export async function adminSend<T>(method: 'POST' | 'PATCH' | 'DELETE', path: st
   return (res.data ?? ({} as T));
 }
 
-export async function adminDownloadCsv(path: string): Promise<void> {
+export async function adminDownloadCsv(path: string, filename = 'newsletter-subscribers.csv'): Promise<void> {
   const headers: Record<string, string> = {};
   if (supabase) {
     const { data } = await supabase.auth.getSession();
@@ -39,7 +39,7 @@ export async function adminDownloadCsv(path: string): Promise<void> {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = 'newsletter-subscribers.csv';
+  a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
 }

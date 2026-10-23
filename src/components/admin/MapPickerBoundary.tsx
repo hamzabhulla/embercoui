@@ -37,11 +37,11 @@ export class MapPickerBoundary extends React.Component<
       return (
         <div className="rounded-[10px] border border-[#EAE3D3] bg-[#FBF8F1] px-4 py-3.5">
           <p className="font-bodytext text-[12.5px] text-[#5C665C]">
-            Map load nahi ho saka — connection check karke dobara koshish karo. Upar wala Map location text field is doran bilkul theek kaam karta hai.
+            The map could not be loaded — check your connection and try again. The Map location text field above keeps working in the meantime.
           </p>
           <div className="pt-2.5">
             <button type="button" className={ghostBtn} onClick={this.retry}>
-              Dobara koshish karo
+              Try again
             </button>
           </div>
         </div>

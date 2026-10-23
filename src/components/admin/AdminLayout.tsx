@@ -1,37 +1,44 @@
 import React, { useState } from 'react';
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { NavLink, Navigate, Outlet, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
+import { reportAdminSessionEvent } from '../../services/sessionEvents';
+import { hasAnyAccess, type SectionKey } from '../../lib/permissions';
+import { PermissionsProvider, usePermissions } from './PermissionsContext';
+import { LockProvider, clearPersistedScreenLock, useLock } from './LockContext';
+import LockedView from './LockedView';
+import MfaFlow from './MfaFlow';
 import { Avatar, ghostBtn, primaryBtn } from './ui';
 
 const ic = (path: React.ReactNode) => (
   <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{path}</svg>
 );
 
-const NAV_GROUPS: { label: string; items: { to: string; label: string; end?: boolean; adminOnly?: boolean; icon: React.ReactNode }[] }[] = [
+const NAV_GROUPS: { label: string; items: { to: string; label: string; end?: boolean; section: SectionKey; icon: React.ReactNode }[] }[] = [
   {
     label: 'Overview',
     items: [
-      { to: '/admin', label: 'Dashboard', end: true, icon: ic(<><rect x="3" y="3" width="8" height="8" rx="1.5" /><rect x="13" y="3" width="8" height="5" rx="1.5" /><rect x="13" y="10" width="8" height="11" rx="1.5" /><rect x="3" y="13" width="8" height="8" rx="1.5" /></>) },
-      { to: '/admin/orders', label: 'Orders', icon: ic(<><path d="M6 3h12v18l-2-1.5L14 21l-2-1.5L10 21l-2-1.5L6 21z" /><path d="M9 8h6M9 12h6" /></>) },
-      { to: '/admin/reservations', label: 'Reservations', icon: ic(<><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M3 10h18M8 3v4M16 3v4" /></>) },
-      { to: '/admin/menu', label: 'Menu', icon: ic(<><path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z" /><path d="M4 19a2 2 0 0 1 2-2h13" /></>) },
+      { to: '/admin', label: 'Dashboard', end: true, section: 'dashboard', icon: ic(<><rect x="3" y="3" width="8" height="8" rx="1.5" /><rect x="13" y="3" width="8" height="5" rx="1.5" /><rect x="13" y="10" width="8" height="11" rx="1.5" /><rect x="3" y="13" width="8" height="8" rx="1.5" /></>) },
+      { to: '/admin/orders', label: 'Orders', section: 'orders', icon: ic(<><path d="M6 3h12v18l-2-1.5L14 21l-2-1.5L10 21l-2-1.5L6 21z" /><path d="M9 8h6M9 12h6" /></>) },
+      { to: '/admin/reservations', label: 'Reservations', section: 'reservations', icon: ic(<><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M3 10h18M8 3v4M16 3v4" /></>) },
+      { to: '/admin/menu', label: 'Menu', section: 'menu', icon: ic(<><path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z" /><path d="M4 19a2 2 0 0 1 2-2h13" /></>) },
     ],
   },
   {
     label: 'Manage',
     items: [
-      { to: '/admin/customers', label: 'Customers', adminOnly: true, icon: ic(<><circle cx="9" cy="8" r="3.5" /><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5" /><path d="M16 5a3.5 3.5 0 0 1 0 6.5M21 20c0-2.8-1.8-4.7-4.5-5.3" /></>) },
-      { to: '/admin/reviews', label: 'Reviews', icon: ic(<path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.5 9.7l5.9-.9z" />) },
-      { to: '/admin/newsletter', label: 'Newsletter', adminOnly: true, icon: ic(<><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M3.5 6.5L12 13l8.5-6.5" /></>) },
-      { to: '/admin/marketing', label: 'Coupons', icon: ic(<><path d="M3 9V5a2 2 0 0 1 2-2h4l12 12-6 6L3 9z" /><circle cx="8" cy="7.5" r="1.4" /></>) },
+      { to: '/admin/customers', label: 'Customers', section: 'customers', icon: ic(<><circle cx="9" cy="8" r="3.5" /><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5" /><path d="M16 5a3.5 3.5 0 0 1 0 6.5M21 20c0-2.8-1.8-4.7-4.5-5.3" /></>) },
+      { to: '/admin/reviews', label: 'Reviews', section: 'reviews', icon: ic(<path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.5 9.7l5.9-.9z" />) },
+      { to: '/admin/newsletter', label: 'Newsletter', section: 'newsletter', icon: ic(<><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M3.5 6.5L12 13l8.5-6.5" /></>) },
+      { to: '/admin/marketing', label: 'Coupons', section: 'coupons', icon: ic(<><path d="M3 9V5a2 2 0 0 1 2-2h4l12 12-6 6L3 9z" /><circle cx="8" cy="7.5" r="1.4" /></>) },
     ],
   },
   {
     label: 'System',
     items: [
-      { to: '/admin/finance', label: 'Finance', adminOnly: true, icon: ic(<><path d="M4 20V10M10 20V4M16 20v-8M22 20H2" /></>) },
-      { to: '/admin/staff', label: 'Staff', adminOnly: true, icon: ic(<><rect x="3" y="5" width="18" height="14" rx="2" /><circle cx="9" cy="11" r="2" /><path d="M5.5 17c.6-1.8 1.9-2.7 3.5-2.7s2.9.9 3.5 2.7M15.5 9.5h4M15.5 13h4" /></>) },
-      { to: '/admin/settings', label: 'Settings', adminOnly: true, icon: ic(<><path d="M5 7h9M18 7h1M5 17h3M12 17h7" /><circle cx="16" cy="7" r="2.2" /><circle cx="10" cy="17" r="2.2" /></>) },
+      { to: '/admin/finance', label: 'Finance', section: 'finance', icon: ic(<><path d="M4 20V10M10 20V4M16 20v-8M22 20H2" /></>) },
+      { to: '/admin/staff', label: 'Staff', section: 'staff', icon: ic(<><rect x="3" y="5" width="18" height="14" rx="2" /><circle cx="9" cy="11" r="2" /><path d="M5.5 17c.6-1.8 1.9-2.7 3.5-2.7s2.9.9 3.5 2.7M15.5 9.5h4M15.5 13h4" /></>) },
+      { to: '/admin/settings', label: 'Settings', section: 'settings', icon: ic(<><path d="M5 7h9M18 7h1M5 17h3M12 17h7" /><circle cx="16" cy="7" r="2.2" /><circle cx="10" cy="17" r="2.2" /></>) },
+      { to: '/admin/security', label: 'Security & Activity', section: 'security', icon: ic(<><path d="M12 3l7 3v5c0 4.6-3 8.1-7 10-4-1.9-7-5.4-7-10V6z" /><path d="M9.5 12l2 2 3.5-4" /></>) },
     ],
   },
 ];
@@ -49,15 +56,9 @@ export function AdminGuard({ children }: { children: React.ReactNode }) {
     return <GuardLoading />;
   }
   if (!user) {
-    return (
-      <div className="min-h-screen bg-[#F7F4EE] flex items-center justify-center px-6">
-        <div className="text-center bg-white border border-[#EAE3D3] rounded-2xl px-8 py-10 max-w-sm w-full shadow-[0_18px_40px_-24px_rgba(22,36,26,0.35)]">
-          <h1 className="font-display text-3xl text-[#16241A] mb-3">Admin access</h1>
-          <p className="font-bodytext text-[#5C665C] text-sm mb-6">Please sign in with a staff or admin account.</p>
-          <button onClick={() => navigate('/login')} className={primaryBtn}>Sign in</button>
-        </div>
-      </div>
-    );
+    // The dedicated admin sign-in (Phase B) — admin routes never send
+    // anyone to the customer auth screens anymore.
+    return <Navigate to="/admin/login" replace />;
   }
   if (!profile && profileError) {
     // The session is real but the profile fetch failed: an error state
@@ -80,30 +81,76 @@ export function AdminGuard({ children }: { children: React.ReactNode }) {
     // Signed in and no error, so the profile fetch is still settling.
     return <GuardLoading />;
   }
-  if (profile.role !== 'admin' && profile.role !== 'staff') {
-    return (
-      <div className="min-h-screen bg-[#F7F4EE] flex items-center justify-center px-6">
-        <div className="text-center bg-white border border-[#EAE3D3] rounded-2xl px-8 py-10 max-w-sm w-full shadow-[0_18px_40px_-24px_rgba(22,36,26,0.35)]">
-          <h1 className="font-display text-3xl text-[#16241A] mb-3">No admin access</h1>
-          <p className="font-bodytext text-[#5C665C] text-sm mb-6">This account does not have staff permissions.</p>
-          <button onClick={() => navigate('/')} className={primaryBtn}>Back to site</button>
-        </div>
-      </div>
-    );
+  if (profile.role !== 'admin' && profile.role !== 'manager' && profile.role !== 'staff') {
+    // A signed-in customer: the admin sign-in page renders the honest
+    // "this account doesn't have admin access" state (with sign-out)
+    // — the one canonical place for it, never a silent bounce.
+    return <Navigate to="/admin/login" replace />;
   }
   return <>{children}</>;
 }
 
 export default function AdminLayout() {
+  return (
+    <PermissionsProvider>
+      <LockProvider>
+        <AdminShell />
+      </LockProvider>
+    </PermissionsProvider>
+  );
+}
+
+function AdminShell() {
   const { profile, user, signOut } = useAuth();
+  const { me, loading: meLoading, can, refresh } = usePermissions();
+  const { locked, lock } = useLock();
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
-  const isAdmin = profile?.role === 'admin';
-  // Admin-only sections are hidden from staff entirely (the backend 403s
-  // them too); groups left empty by the filter are not rendered.
+  // Login Activity (Phase C): the sign-out is reported BEFORE the
+  // token is discarded — afterwards there is no verified identity
+  // left for the server to record. The report is best-effort and
+  // never blocks the sign-out itself. The persisted screen-lock
+  // flag (Phase D) goes with it, so the next sign-in in this tab
+  // never inherits the lock.
+  const handleSignOut = async () => {
+    await reportAdminSessionEvent('logout');
+    clearPersistedScreenLock();
+    await signOut();
+  };
+  // Two-factor gate (Phase B): until /admin/me has answered, no admin
+  // screen renders at all — the caller's MFA state is part of whether
+  // they may see data, and the backend 403s every data route meanwhile
+  // anyway. An unsatisfied requirement replaces the whole shell with
+  // the enrollment/challenge flow: no sidebar, no page, nothing else.
+  if (meLoading && !me) {
+    return <GuardLoading />;
+  }
+  if (me && me.mfa.required && !me.mfa.satisfied) {
+    return (
+      <div className="min-h-screen bg-[#F7F4EE] flex items-center justify-center px-4 py-10">
+        <MfaFlow onVerified={refresh} />
+      </div>
+    );
+  }
+  // Screen lock (Phase D): a locked screen is replaced wholesale by
+  // the locked view — the live PII-masked orders board plus the
+  // unlock panel — whatever URL was asked for. No sidebar, no other
+  // section renders until the step-up verification succeeds.
+  if (locked) {
+    return <LockedView />;
+  }
+  // The sidebar shows only the sections the caller may view (the
+  // backend 403s the rest too); groups left empty by the filter are
+  // not rendered. While the permission map loads, can() is false
+  // everywhere, so the nav fills in when it arrives — no flash of
+  // sections that are about to vanish.
   const visibleGroups = NAV_GROUPS
-    .map((group) => ({ ...group, items: group.items.filter((item) => isAdmin || !item.adminOnly) }))
+    .map((group) => ({ ...group, items: group.items.filter((item) => can(item.section, 'view')) }))
     .filter((group) => group.items.length > 0);
+  // A privileged account the owner has stripped to no sections at all
+  // gets a clear no-access screen, not an empty broken shell. (The
+  // owner always holds every section, so this can never be them.)
+  const stripped = !!me && profile?.role !== 'admin' && !hasAnyAccess(me.permissions);
   const displayName = profile?.fullName ?? user?.email ?? 'Admin';
   return (
     <div className="min-h-screen bg-[#F7F4EE] text-[#16241A] flex font-bodytext">
@@ -134,22 +181,35 @@ export default function AdminLayout() {
             <Avatar name={displayName} size={32} />
             <div className="min-w-0">
               <p className="font-bodytext text-[13px] font-semibold text-[#16241A] truncate">{displayName}</p>
-              <p className="font-bodytext text-[11px] text-[#98A096] capitalize">{profile?.role ?? ''}</p>
+              <p className="font-bodytext text-[11px] text-[#98A096] capitalize">{profile?.role === 'admin' ? 'Owner' : profile?.role ?? ''}</p>
             </div>
           </div>
-          <div className="flex gap-2 mt-3">
+          <button onClick={lock} className="w-full h-8 px-2 mt-3 rounded-lg border border-[#EAE3D3] bg-white font-bodytext text-[12px] font-medium text-[#16241A] hover:bg-[#FBF8F1] transition-colors">Lock screen</button>
+          <div className="flex gap-2 mt-2">
             <button onClick={() => navigate('/')} className="flex-1 h-8 px-2 rounded-lg border border-[#EAE3D3] bg-white font-bodytext text-[12px] font-medium text-[#16241A] hover:bg-[#FBF8F1] transition-colors">View site</button>
-            <button onClick={() => void signOut()} className="flex-1 h-8 px-2 rounded-lg border border-[#EAE3D3] bg-white font-bodytext text-[12px] font-medium text-[#16241A] hover:bg-[#FBF8F1] transition-colors">Sign out</button>
+            <button onClick={() => void handleSignOut()} className="flex-1 h-8 px-2 rounded-lg border border-[#EAE3D3] bg-white font-bodytext text-[12px] font-medium text-[#16241A] hover:bg-[#FBF8F1] transition-colors">Sign out</button>
           </div>
         </div>
       </aside>
       <div className="flex-1 min-w-0 flex flex-col">
         <div className="md:hidden sticky top-0 z-30 flex items-center justify-between px-4 py-3 bg-white/95 backdrop-blur border-b border-[#EAE3D3]">
           <p className="font-display text-lg font-semibold">Ember &amp; Co. <span className="text-[#98A096] text-sm font-bodytext">Admin</span></p>
-          <button onClick={() => setMenuOpen(!menuOpen)} className="h-8 px-3 rounded-lg border border-[#EAE3D3] bg-white font-bodytext text-[12px] font-medium">Menu</button>
+          <div className="flex gap-2">
+            <button onClick={lock} className="h-8 px-3 rounded-lg border border-[#EAE3D3] bg-white font-bodytext text-[12px] font-medium">Lock</button>
+            <button onClick={() => setMenuOpen(!menuOpen)} className="h-8 px-3 rounded-lg border border-[#EAE3D3] bg-white font-bodytext text-[12px] font-medium">Menu</button>
+          </div>
         </div>
         <main className="flex-1 w-full max-w-[1440px] mx-auto px-5 py-6 md:px-[30px] md:py-[26px]">
-          <Outlet />
+          {stripped ? (
+            <div className="bg-white border border-[#EAE3D3] rounded-[14px] px-6 py-12 text-center mt-6">
+              <h1 className="font-display text-3xl text-[#16241A] mb-3">No sections assigned</h1>
+              <p className="font-bodytext text-[#5C665C] text-sm max-w-md mx-auto">
+                Your account can sign in to the admin console, but the owner has not granted it access to any section yet. Ask the owner to assign sections from Staff &amp; Permissions.
+              </p>
+            </div>
+          ) : (
+            <Outlet />
+          )}
         </main>
       </div>
     </div>

@@ -8,7 +8,7 @@ import { signOut as authSignOut } from '../services/auth.ts';
 export interface AccountProfile {
   id: string;
   email: string | null;
-  role: 'customer' | 'admin' | 'staff';
+  role: 'customer' | 'admin' | 'staff' | 'manager';
   fullName: string | null;
   phone: string | null;
   addresses: unknown[];
@@ -24,7 +24,7 @@ interface AuthContextType {
   profileLoading: boolean;
   /** Why the profile could not be loaded (set only when there is no profile). */
   profileError: string | null;
-  /** True for admin AND staff — either role may enter the admin console. */
+  /** True for admin, manager AND staff — any privileged role may enter the admin console. */
   canAccessAdmin: boolean;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
@@ -120,7 +120,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     <AuthContext.Provider
       value={{
         user, profile, loading, profileLoading, profileError,
-        canAccessAdmin: profile?.role === 'admin' || profile?.role === 'staff',
+        canAccessAdmin: profile?.role === 'admin' || profile?.role === 'manager' || profile?.role === 'staff',
         signOut, refreshProfile,
       }}
     >

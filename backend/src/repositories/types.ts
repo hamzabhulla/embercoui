@@ -76,6 +76,18 @@ export interface PublicSettingsDTO {
   whatsappNumber: string | null;
   /** Guests that fit in one reservation time slot; drives the admin day board. */
   reservationSlotCapacity: number;
+  /**
+   * The owner's reservation-fee controls (migration 0014): the RAW
+   * toggle and amount, exactly as stored. These two fields are NOT
+   * the fee a guest pays — the effective fee (lib/reservationFee.ts)
+   * additionally requires a configured card provider, and every
+   * charging/display surface consumes that computation, never these.
+   * The public settings response strips both and exposes only the
+   * effective fee.
+   */
+  reservationFeeEnabled: boolean;
+  /** Flat per reservation, in `currency`. 0 = no fee even when enabled. */
+  reservationFeeAmount: number;
   openingHours: Record<string, unknown>;
   /** Per-location contact overrides (migration 0010); see SiteLocations. */
   siteLocations: SiteLocations;
@@ -90,13 +102,99 @@ export interface ReviewDTO {
   createdAt: string;
 }
 
+export type UserRole = 'customer' | 'admin' | 'staff' | 'manager';
+
+/**
+ * Section permissions (Phase A; the full model lives in
+ * lib/permissions.ts). Twelve admin sections, three levels each.
+ */
+export type SectionKey =
+  | 'dashboard' | 'orders' | 'reservations' | 'menu' | 'customers' | 'reviews'
+  | 'newsletter' | 'coupons' | 'finance' | 'staff' | 'settings' | 'security';
+
+export type PermissionLevel = 'none' | 'view' | 'manage';
+
+/** A complete effective map — every section resolved to a level. */
+export type PermissionMap = Record<SectionKey, PermissionLevel>;
+
+/** A stored map (role defaults row or per-person overrides): sparse. */
+export type PartialPermissionMap = Partial<Record<SectionKey, PermissionLevel>>;
+
+/** One audit_events row as written by lib/audit.ts. */
+export interface AuditEventInput {
+  actorId: string | null;
+  actorLabel: string | null;
+  actorRole: string | null;
+  action: string;
+  entity: string | null;
+  entityId: string | null;
+  summary: string | null;
+  changes: Record<string, { from: unknown; to: unknown }> | null;
+  ip: string | null;
+  userAgent: string | null;
+}
+
+/** One audit_events row as read back for the Security & Activity API (Phase C). */
+export interface AuditEventDTO {
+  id: string;
+  createdAt: string;
+  actorId: string | null;
+  /** The actor's display label as recorded at write time (name, else email). */
+  actorLabel: string | null;
+  actorRole: string | null;
+  action: string;
+  entity: string | null;
+  entityId: string | null;
+  summary: string | null;
+  changes: Record<string, { from: unknown; to: unknown }> | null;
+  ip: string | null;
+  userAgent: string | null;
+}
+
+/**
+ * Filters for the Security & Activity reads. `category` is the
+ * lib/audit.ts taxonomy ('auth' = the `auth.` action prefix);
+ * `action` is a PREFIX match (the full action string is a prefix of
+ * itself, so exact lookups work too); `q` is a case-insensitive
+ * substring over the actor label, the summary and the action.
+ */
+export interface AuditEventFilter {
+  category?: 'auth' | 'change';
+  actorId?: string;
+  action?: string;
+  /** Inclusive ISO timestamp lower bound on created_at. */
+  from?: string;
+  /** Inclusive ISO timestamp upper bound on created_at. */
+  to?: string;
+  q?: string;
+}
+
+export interface AuditEventPage extends Page<AuditEventDTO> {
+  /**
+   * True when the audit_events table does not exist yet (migration
+   * 0012 not run): the page is empty because logging is not active —
+   * the UI says so honestly instead of implying nothing happened.
+   */
+  degraded: boolean;
+}
+
 export interface ProfileDTO {
   id: string;
-  role: 'customer' | 'admin' | 'staff';
+  role: UserRole;
   fullName: string | null;
   phone: string | null;
   addresses: unknown[];
   favorites: number[];
+  /** Per-person permission overrides (migration 0012); null = none set. */
+  permissions: PartialPermissionMap | null;
+  /**
+   * The owner's per-person two-factor decision (migration 0013):
+   * true/false = explicit, null = follow the role default. The field
+   * is ABSENT (undefined) only in the pre-0013 world, where profiles
+   * are read without the column — lib/mfa.ts treats that as "the
+   * requirement system is not in force yet" and enforcement stays off.
+   */
+  mfaRequired?: boolean | null;
   createdAt: string;
 }
 
@@ -136,7 +234,23 @@ export interface ReservationInput {
   date: string;
   time: string;
   guests: number;
+  /**
+   * The EFFECTIVE fee for this booking (lib/reservationFee.ts), when
+   * one applies: the row is created already owing it (fee state
+   * 'pending') and the route then mints + conditionally stores the
+   * Stripe intent. Absent/null = a free booking, stored exactly as
+   * before migration 0014.
+   */
+  fee?: { amount: number; currency: string } | null;
 }
+
+/**
+ * A booking's fee lifecycle (migration 0014). 'none' = the booking
+ * carries no fee; 'pending' = an intent exists but is unpaid (the
+ * booking holds NO seats); 'paid' = the webhook settled it (the
+ * booking holds seats); 'failed' = payment failed (no seats).
+ */
+export type ReservationFeePaymentStatus = 'none' | 'pending' | 'paid' | 'failed';
 
 /** A booking created from the admin panel (walk-in / phone) — email is optional there. */
 export interface AdminReservationInput {
@@ -150,13 +264,18 @@ export interface AdminReservationInput {
   status: 'pending' | 'confirmed';
 }
 
-export interface ReservationDTO extends Omit<ReservationInput, 'email'> {
+export interface ReservationDTO extends Omit<ReservationInput, 'email' | 'fee'> {
   id: string;
   email: string | null;
   /** 'website' = public form, 'admin' = created from the admin panel. */
   source: 'website' | 'admin';
   notes: string | null;
   status: 'pending' | 'confirmed' | 'cancelled' | 'completed';
+  /** The fee snapshotted at booking (migration 0014); null = no fee. */
+  feeAmount: number | null;
+  /** The settings currency at booking time; null when there is no fee. */
+  feeCurrency: string | null;
+  feePaymentStatus: ReservationFeePaymentStatus;
   createdAt: string;
 }
 
@@ -170,6 +289,77 @@ export interface ReservationDTO extends Omit<ReservationInput, 'email'> {
 export interface ReservationListFilter {
   date?: string;
   status?: ReservationDTO['status'];
+}
+
+/**
+ * A customer's request to change one of their reservations
+ * (migration 0015, Phase G). Every part of the proposal is optional —
+ * a request may be a bare message — and the row is born 'pending'.
+ * The handling admin closes it exactly once: 'approved' (only ever
+ * as part of saving the reservation edit it asked for), 'declined'
+ * (with a reply) or 'handled' (resolved without an edit, e.g. by
+ * phone). The customer reads status + reply back in their account.
+ */
+export type ReservationRequestStatus = 'pending' | 'approved' | 'declined' | 'handled';
+
+export interface ReservationRequestDTO {
+  id: string;
+  reservationId: string;
+  /** The account that sent the request; null if that account is gone. */
+  requesterUserId: string | null;
+  /** The account's email at send time (the inbox's contact snapshot). */
+  requesterEmail: string | null;
+  proposedDate: string | null;
+  proposedTime: string | null;
+  proposedGuests: number | null;
+  /** The customer's note; '' when they only proposed new values. */
+  message: string;
+  status: ReservationRequestStatus;
+  /** The team's answer, shown to the customer; null = no reply given. */
+  adminReply: string | null;
+  /** The privileged profile that closed the request. */
+  handledBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ReservationRequestInput {
+  reservationId: string;
+  requesterUserId: string | null;
+  requesterEmail: string | null;
+  proposedDate: string | null;
+  proposedTime: string | null;
+  proposedGuests: number | null;
+  message: string;
+}
+
+/** The account page's view of one of the customer's reservations. */
+export interface AccountReservationDTO extends ReservationDTO {
+  /** All of this booking's change requests, newest first. */
+  requests: ReservationRequestDTO[];
+}
+
+/** A change request with the booking it refers to (admin inbox row). */
+export interface ReservationRequestWithContext extends ReservationRequestDTO {
+  reservation: ReservationDTO | null;
+}
+
+export interface ReservationRequestListFilter {
+  status?: ReservationRequestStatus;
+}
+
+export interface ReservationRequestInboxPage {
+  items: ReservationRequestWithContext[];
+  /** The filtered set's exact total (the page tiles this set). */
+  total: number;
+  /** The exact count of requests still awaiting a decision — the badge. */
+  pendingTotal: number;
+  /**
+   * True BEFORE migration 0015 runs: the table does not exist, the
+   * inbox is empty because there is nowhere for requests to live —
+   * flagged, never faked.
+   */
+  degraded: boolean;
 }
 
 export interface OrderItemInput {
@@ -266,6 +456,32 @@ export interface Repository {
   upsertProfile(userId: string, data: { fullName?: string | null; phone?: string | null }): Promise<ProfileDTO>;
   updateProfile(userId: string, patch: Partial<Pick<ProfileDTO, 'fullName' | 'phone' | 'addresses' | 'favorites'>>): Promise<ProfileDTO>;
   createReservation(input: ReservationInput): Promise<ReservationDTO>;
+  /**
+   * Store a fee booking's Stripe intent. CONDITIONAL twin of
+   * setOrderPaymentIntent: it applies only while the booking's fee is
+   * still 'pending', so it can never move the pointer on a paid or
+   * failed booking. Resolves true when stored; false when no row
+   * matched — the caller re-reads and answers for the current state.
+   */
+  setReservationFeePaymentIntent(reservationId: string, paymentIntentId: string): Promise<boolean>;
+  /**
+   * Fee payment transitions, guarded exactly like the order pair:
+   * 'paid' may be set from pending/failed and is terminal; 'failed'
+   * may be set from pending only (a late failure never un-pays a
+   * booking). Return the reservation, or null when no reservation
+   * references the intent (a foreign intent — the webhook acks and
+   * leaves everything untouched).
+   */
+  markReservationFeePaidByPaymentIntent(paymentIntentId: string): Promise<ReservationDTO | null>;
+  markReservationFeeFailedByPaymentIntent(paymentIntentId: string): Promise<ReservationDTO | null>;
+  /**
+   * Best-effort compensation when fee SETUP fails after the booking
+   * row exists (the intent could not be minted or stored): the fee
+   * flips 'pending' → 'failed' so the row is honest — it holds no
+   * seats and staff see "Fee failed", never a phantom "awaiting
+   * payment" for a charge that can never complete.
+   */
+  failReservationFee(reservationId: string): Promise<void>;
   addNewsletterSubscriber(email: string): Promise<{ alreadySubscribed: boolean }>;
   createContactMessage(input: { name: string; email: string; phone?: string; subject?: string; message: string }): Promise<void>;
   createReview(input: { userId: string | null; name: string; rating: number; comment: string; country?: string | null }): Promise<ReviewDTO>;
@@ -326,6 +542,50 @@ export interface Repository {
   /** Conditional twin of updateOrderStatus: applies only while the
    * reservation's status is still `expectedStatus`; null on no match. */
   updateReservationStatus(id: string, expectedStatus: ReservationDTO['status'], status: ReservationDTO['status']): Promise<ReservationDTO | null>;
+  /**
+   * Edit a booking's date/time/guests (Phase G — the Apply flow's
+   * save). Only the fields present in the patch move; null when no
+   * reservation has the id (a malformed id counts as no match).
+   */
+  adminUpdateReservation(id: string, patch: { date?: string; time?: string; guests?: number }): Promise<ReservationDTO | null>;
+  /**
+   * The signed-in customer's reservations (Phase G): the ones linked
+   * to their account PLUS guest bookings whose email matches the
+   * account's email (case-insensitive, trimmed — the caller passes
+   * the verified account email; matching happens here, server-side,
+   * so no other customer's booking can ever surface). Sorted
+   * upcoming first (date asc, then time asc), then past bookings
+   * most-recent first. `requests` rides along for exactly those
+   * reservations — and is NULL before migration 0015 runs, the
+   * degradation signal the account route turns into an honest
+   * "change requests not available yet" state (the reservations
+   * themselves read exactly as before).
+   */
+  listReservationsForUser(userId: string, email: string | null): Promise<{ reservations: ReservationDTO[]; requests: ReservationRequestDTO[] | null }>;
+  /**
+   * Create a change request (Phase G). At most one PENDING request
+   * per reservation: a second one is the caller's conflict — an
+   * ApiError(409), whether the pre-check or the partial unique index
+   * (migration 0015) catches it. Resolves null BEFORE 0015 runs (the
+   * route answers an honest 503 — no fake success).
+   */
+  createReservationRequest(input: ReservationRequestInput): Promise<ReservationRequestDTO | null>;
+  /** One request by id; null when absent (or pre-0015) — never a throw for a malformed id. */
+  getReservationRequest(id: string): Promise<ReservationRequestDTO | null>;
+  /**
+   * The admin Requests inbox (Phase G): one page of the filtered
+   * set, newest first, each request joined with its reservation,
+   * plus the exact pending total for the badge. Pre-0015 the page
+   * is empty and flagged degraded.
+   */
+  adminListReservationRequests(filter: ReservationRequestListFilter, page: PageParams): Promise<ReservationRequestInboxPage>;
+  /**
+   * Close a request. CONDITIONAL like every guarded write in this
+   * interface: the update applies only while the request is still
+   * 'pending', so a request is closed exactly once — null when it
+   * was already handled (or does not exist, or pre-0015).
+   */
+  updateReservationRequest(id: string, patch: { status: Exclude<ReservationRequestStatus, 'pending'>; adminReply?: string | null; handledBy: string }): Promise<ReservationRequestDTO | null>;
   adminListCustomers(): Promise<CustomerDTO[]>;
   adminListCustomers(page: PageParams): Promise<Page<CustomerDTO>>;
   adminListReviews(): Promise<(ReviewDTO & { isApproved: boolean })[]>;
@@ -341,6 +601,33 @@ export interface Repository {
   deleteCoupon(id: string): Promise<boolean>;
   adminListStaff(): Promise<StaffDTO[]>;
   adminListStaff(page: PageParams): Promise<Page<StaffDTO>>;
-  updateProfileRole(userId: string, role: ProfileDTO['role']): Promise<ProfileDTO | null>;
+  updateProfileRole(userId: string, role: UserRole): Promise<ProfileDTO | null>;
+  /**
+   * Access control (migration 0012). All four degrade gracefully BEFORE
+   * the migration runs: reads return null (→ built-in defaults apply),
+   * writes become no-ops, audit inserts are dropped — never a throw for
+   * a missing table/column.
+   */
+  getRolePermissions(role: 'manager' | 'staff'): Promise<PartialPermissionMap | null>;
+  setRolePermissions(role: 'manager' | 'staff', permissions: PartialPermissionMap): Promise<void>;
+  /** Stores the person's overrides; an empty map clears them (NULL). */
+  setUserPermissions(userId: string, permissions: PartialPermissionMap): Promise<ProfileDTO | null>;
+  /**
+   * Stores the person's explicit two-factor requirement (migration
+   * 0013); null clears it back to the role default. Degrades like the
+   * other access-control writes BEFORE 0013 runs: a no-op that returns
+   * the profile as it actually stands.
+   */
+  setUserMfaRequired(userId: string, required: boolean | null): Promise<ProfileDTO | null>;
+  insertAuditEvent(event: AuditEventInput): Promise<void>;
+  /**
+   * Security & Activity reads (Phase C). With a page: that slice of
+   * the filtered set plus its exact total. Without: the complete
+   * filtered set (the CSV export). There is deliberately NO update or
+   * delete for audit rows anywhere in this interface — the log is
+   * append-only, for every role including the owner.
+   */
+  listAuditEvents(filter: AuditEventFilter, page: PageParams): Promise<AuditEventPage>;
+  listAuditEvents(filter: AuditEventFilter): Promise<AuditEventPage>;
   updateSettings(patch: SettingsPatch): Promise<PublicSettingsDTO>;
 }

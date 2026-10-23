@@ -22,7 +22,7 @@ export default function Navbar({ forceDark = false }: { forceDark?: boolean }) {
   // static text is only the pre-load placeholder.
   const brandName = settings?.restaurantName ?? 'Ember & Co.';
   useEffect(() => {
-    if (settings?.restaurantName) document.title = `${settings.restaurantName} | Premium Forest-to-Table Dining`;
+    if (settings?.restaurantName) document.title = `${settings.restaurantName} | Forest-to-Table Dining`;
   }, [settings]);
 
   const handleLoginClick = () => {

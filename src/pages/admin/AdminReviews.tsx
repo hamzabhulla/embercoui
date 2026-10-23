@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { adminGet, adminSend } from '../../services/adminApi';
-import { useAuth } from '../../context/AuthContext';
+import { usePermissions } from '../../components/admin/PermissionsContext';
 import { Avatar, Card, CardHead, DeleteButton, EmptyNote, ErrorNote, LoadingNote, PageTitle, StatusPill, chipBtn, chipGhostBtn, fmtDate, ghostBtn } from '../../components/admin/ui';
 
 const PAGE_SIZE = 100;
@@ -17,8 +17,8 @@ function Stars({ rating }: { rating: number }) {
 }
 
 export default function AdminReviews() {
-  const { profile } = useAuth();
-  const isAdmin = profile?.role === 'admin';
+  const { can } = usePermissions();
+  const canManage = can('reviews', 'manage');
   const [rows, setRows] = useState<Review[]>([]);
   const [total, setTotal] = useState(0);
   const [stats, setStats] = useState<ReviewStats | null>(null);
@@ -94,11 +94,13 @@ export default function AdminReviews() {
                     <span className="flex items-center gap-2.5"><Stars rating={r.rating} /><StatusPill status={r.isApproved ? 'approved' : 'pending'} /></span>
                   </div>
                   <p className="font-bodytext text-[13.5px] text-[#5C665C] leading-relaxed mb-3">{r.comment}</p>
-                  <div className="flex gap-2">
-                    {!r.isApproved && <button onClick={() => void setApproved(r.id, true)} className={chipBtn}>Approve</button>}
-                    {r.isApproved && <button onClick={() => void setApproved(r.id, false)} className={chipGhostBtn}>Unapprove</button>}
-                    {isAdmin && <DeleteButton name={`the review by ${r.name}`} onDelete={() => void remove(r.id)} />}
-                  </div>
+                  {canManage && (
+                    <div className="flex gap-2">
+                      {!r.isApproved && <button onClick={() => void setApproved(r.id, true)} className={chipBtn}>Approve</button>}
+                      {r.isApproved && <button onClick={() => void setApproved(r.id, false)} className={chipGhostBtn}>Unapprove</button>}
+                      <DeleteButton name={`the review by ${r.name}`} onDelete={() => void remove(r.id)} />
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

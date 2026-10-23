@@ -1,16 +1,13 @@
 import { useEffect, useState } from 'react';
 import { adminGet } from '../../services/adminApi';
-import { useAuth } from '../../context/AuthContext';
 import { useCurrency } from '../../context/CurrencyContext';
-import { AdminsOnly, Avatar, Card, EmptyNote, ErrorNote, LoadingNote, PageTitle, ghostBtn, money, tableCls, tdCls, thCls } from '../../components/admin/ui';
+import { Avatar, Card, EmptyNote, ErrorNote, LoadingNote, PageTitle, ghostBtn, money, tableCls, tdCls, thCls } from '../../components/admin/ui';
 
 interface Customer { id: string; email: string | null; fullName: string | null; phone: string | null; role: string; createdAt: string; orderCount: number; totalSpent: number }
 
 const PAGE_SIZE = 100;
 
 export default function AdminCustomers() {
-  const { profile } = useAuth();
-  const isAdmin = profile?.role === 'admin';
   const [rows, setRows] = useState<Customer[]>([]);
   const [total, setTotal] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -18,12 +15,11 @@ export default function AdminCustomers() {
   const [loaded, setLoaded] = useState(false);
   const { currency } = useCurrency();
   useEffect(() => {
-    if (!isAdmin) return;
     adminGet<{ customers: Customer[]; total: number }>(`/api/v1/admin/customers?limit=${PAGE_SIZE}&offset=0`)
       .then((d) => { setRows(d.customers); setTotal(d.total); })
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoaded(true));
-  }, [isAdmin]);
+  }, []);
   const loadMore = () => {
     setLoadingMore(true);
     adminGet<{ customers: Customer[]; total: number }>(`/api/v1/admin/customers?limit=${PAGE_SIZE}&offset=${rows.length}`)
@@ -31,7 +27,6 @@ export default function AdminCustomers() {
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoadingMore(false));
   };
-  if (!isAdmin) return <AdminsOnly />;
   return (
     <div>
       <PageTitle sub={`Registered customers · lifetime spend shown in ${currency}`}>Customers</PageTitle>

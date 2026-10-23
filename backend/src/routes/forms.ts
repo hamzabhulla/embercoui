@@ -1,9 +1,12 @@
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
-import { notConfigured } from '../lib/errors';
+import { ApiError, notConfigured } from '../lib/errors';
 import { optionalAuth, requireAuth, type AuthedRequest } from '../lib/auth';
 import type { TokenVerifier } from '../lib/auth';
+import { toMinorUnits } from '../lib/currency';
+import { effectiveReservationFee } from '../lib/reservationFee';
+import type { StripeService } from '../lib/stripe';
 import { validateBody } from '../middleware/validate';
 import type { Repository } from '../repositories/types';
 
@@ -57,16 +60,37 @@ const reviewSchema = z.object({
   country: z.string().trim().max(80).optional(),
 });
 
-export function formsRouter(deps: { repo: Repository | null; verifyToken: TokenVerifier }) {
+export function formsRouter(deps: { repo: Repository | null; verifyToken: TokenVerifier; stripe?: StripeService | null }) {
   const router = Router();
   const repo = () => {
     if (!deps.repo) throw notConfigured();
     return deps.repo;
   };
 
+  // Fee compensation (marking a fee booking 'failed' when its
+  // payment could not be set up) is best-effort: it must never mask
+  // the original failure, which is what the guest is told about.
+  // But a SILENT swallow would hide a booking left stuck 'pending'
+  // from the operator — so a failed compensation is logged, the
+  // same posture as the audit / auth-event best-effort paths.
+  const failFeeWithLog = async (reservationId: string) => {
+    try {
+      await repo().failReservationFee(reservationId);
+    } catch (err) {
+      console.error(`[ember] reservation fee compensation failed for reservation ${reservationId}:`, err instanceof Error ? err.message : err);
+    }
+  };
+
   router.post('/reservations', formLimiter, optionalAuth(deps), validateBody(reservationSchema), async (req: AuthedRequest, res, next) => {
     try {
       const body = req.body as z.infer<typeof reservationSchema>;
+      // The fee a guest pays is computed HERE, from the live settings
+      // and whether a card provider actually exists — the client's
+      // body carries no fee fields and none would be trusted if it
+      // did. No effective fee → the booking is exactly the pre-fee
+      // one, response included.
+      const settings = await repo().getSettings();
+      const fee = effectiveReservationFee(settings, deps.stripe != null);
       // Build the repository input field by field instead of spreading
       // `body`: z.infer's object type only keeps its properties required
       // under strict TS configs, and not every toolchain that compiles
@@ -81,8 +105,63 @@ export function formsRouter(deps: { repo: Repository | null; verifyToken: TokenV
         date: body.date,
         time: body.time,
         guests: body.guests,
+        fee,
       });
-      res.status(201).json({ reservation });
+      if (!fee) {
+        res.status(201).json({ reservation });
+        return;
+      }
+      // Fee booking, the order flow's Fix 1 discipline in one request:
+      // the row exists owing its fee ('pending'), the intent is minted
+      // against it (idempotency-keyed by the reservation, so a retried
+      // submit Stripe-side dedupes), and the intent is stored
+      // CONDITIONALLY — only while the fee is still pending. The
+      // webhook is the only path that ever marks the fee paid, and
+      // only a paid fee booking holds its slot.
+      const stripe = deps.stripe as StripeService;
+      let intent: Awaited<ReturnType<StripeService['createReservationFeePaymentIntent']>>;
+      try {
+        intent = await stripe.createReservationFeePaymentIntent({
+          reservationId: reservation.id,
+          amountCents: toMinorUnits(fee.amount, fee.currency),
+          currency: fee.currency.toLowerCase(),
+          idempotencyKey: `reservation-fee-${reservation.id}`,
+        });
+      } catch (err) {
+        // The row exists but its charge can never be set up: fail the
+        // fee (best effort) so the booking reads honestly — it holds
+        // no seats — instead of awaiting a payment that cannot start.
+        await failFeeWithLog(reservation.id);
+        throw err;
+      }
+      let stored: boolean;
+      try {
+        stored = await repo().setReservationFeePaymentIntent(reservation.id, intent.id);
+      } catch (err) {
+        await failFeeWithLog(reservation.id);
+        throw err;
+      }
+      if (!stored) {
+        // The fee's state moved on between create and store (a webhook
+        // settling it instantly is the only realistic race). Answer
+        // for the CURRENT state, never hand out a client secret for
+        // an intent that was never stored.
+        const current = await repo().getReservation(reservation.id);
+        if (current && current.feePaymentStatus === 'paid') {
+          res.status(201).json({ reservation: current });
+          return;
+        }
+        throw new ApiError(409, 'Your booking changed while payment was being set up — please try again');
+      }
+      res.status(201).json({
+        reservation,
+        feePayment: {
+          clientSecret: intent.clientSecret,
+          paymentIntentId: intent.id,
+          amount: fee.amount,
+          currency: fee.currency,
+        },
+      });
     } catch (err) { next(err); }
   });
 

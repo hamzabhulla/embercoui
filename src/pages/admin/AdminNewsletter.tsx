@@ -1,15 +1,12 @@
 import { useEffect, useState } from 'react';
 import { adminDownloadCsv, adminGet } from '../../services/adminApi';
-import { useAuth } from '../../context/AuthContext';
-import { AdminsOnly, Card, EmptyNote, ErrorNote, LoadingNote, PageTitle, StatCard, fmtDate, ghostBtn, primaryBtn, tableCls, tdCls, thCls } from '../../components/admin/ui';
+import { Card, EmptyNote, ErrorNote, LoadingNote, PageTitle, StatCard, fmtDate, ghostBtn, primaryBtn, tableCls, tdCls, thCls } from '../../components/admin/ui';
 
 interface Sub { email: string; createdAt: string }
 
 const PAGE_SIZE = 100;
 
 export default function AdminNewsletter() {
-  const { profile } = useAuth();
-  const isAdmin = profile?.role === 'admin';
   const [rows, setRows] = useState<Sub[]>([]);
   const [total, setTotal] = useState(0);
   // "New this week" is a SERVER count over all subscribers (the `since`
@@ -22,7 +19,6 @@ export default function AdminNewsletter() {
   const [error, setError] = useState('');
   const [loaded, setLoaded] = useState(false);
   useEffect(() => {
-    if (!isAdmin) return;
     adminGet<{ subscribers: Sub[]; total: number }>(`/api/v1/admin/newsletter?limit=${PAGE_SIZE}&offset=0`)
       .then((d) => { setRows(d.subscribers); setTotal(d.total); })
       .catch((e: Error) => setError(e.message))
@@ -31,7 +27,7 @@ export default function AdminNewsletter() {
     adminGet<{ total: number }>(`/api/v1/admin/newsletter?limit=1&offset=0&since=${encodeURIComponent(since)}`)
       .then((d) => setNewThisWeek(d.total))
       .catch(() => setNewThisWeek(null));
-  }, [isAdmin]);
+  }, []);
   const loadMore = () => {
     setLoadingMore(true);
     adminGet<{ subscribers: Sub[]; total: number }>(`/api/v1/admin/newsletter?limit=${PAGE_SIZE}&offset=${rows.length}`)
@@ -43,7 +39,6 @@ export default function AdminNewsletter() {
     try { await adminDownloadCsv('/api/v1/admin/newsletter.csv'); }
     catch (e) { setError((e as Error).message); }
   };
-  if (!isAdmin) return <AdminsOnly />;
   return (
     <div>
       <PageTitle sub={`${total} subscribers`} actions={<button className={primaryBtn} onClick={() => void download()}>Export CSV</button>}>Newsletter</PageTitle>

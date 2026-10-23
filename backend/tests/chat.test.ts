@@ -237,6 +237,7 @@ function seedReservation(repo: FakeRepository, patch: Partial<ReservationDTO>) {
     userId: null, name: 'Test Guest', email: 'guest@example.com', phone: '123',
     date: dateFromToday(1), time: '19:00', guests: 2,
     source: 'website', notes: null, status: 'confirmed',
+    feeAmount: null, feeCurrency: null, feePaymentStatus: 'none',
     createdAt: new Date().toISOString(),
     ...patch,
   });

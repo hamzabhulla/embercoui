@@ -36,9 +36,24 @@ import { createApp } from '../src/app';
 import { createSupabaseTokenVerifier } from '../src/lib/auth';
 import { FakeRepository, testEnv } from './fakeRepository';
 
+// JWT-shaped tokens for the aal pins (Phase B): the stubbed Auth API
+// "verifies" them by returning the user, exactly as the real API does
+// for a well-signed token — the aal the verifier reports must then
+// come from the token's OWN claims, decoded only after that verdict.
+const jwtWith = (claims: unknown) =>
+  `eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.sig`;
+const AAL2_TOKEN = jwtWith({ sub: 'user-1', aal: 'aal2' });
+const AAL1_TOKEN = jwtWith({ sub: 'user-1', aal: 'aal1' });
+const NO_AAL_TOKEN = jwtWith({ sub: 'user-1' });
+const GARBAGE_PAYLOAD_TOKEN = 'eyJhbGciOiJub25lIn0.@@@.sig'; // payload segment is not base64/JSON at all
+
 const AUTH_RESPONSES: Record<string, GetUserResult> = {
   // A live session for the seeded customer user-1.
   'good-token': { data: { user: { id: 'user-1', email: 'user@example.com' } }, error: null },
+  [AAL2_TOKEN]: { data: { user: { id: 'user-1', email: 'user@example.com' } }, error: null },
+  [AAL1_TOKEN]: { data: { user: { id: 'user-1', email: 'user@example.com' } }, error: null },
+  [NO_AAL_TOKEN]: { data: { user: { id: 'user-1', email: 'user@example.com' } }, error: null },
+  [GARBAGE_PAYLOAD_TOKEN]: { data: { user: { id: 'user-1', email: 'user@example.com' } }, error: null },
   // A live Auth user with NO profile row (created before the
   // handle_new_user trigger existed, per the requireAuth comment).
   'new-user-token': { data: { user: { id: 'brand-new-user', email: 'new@example.com' } }, error: null },
@@ -68,8 +83,26 @@ const getProfile = (token?: string) => {
 };
 
 describe('createSupabaseTokenVerifier — classification (unit level)', () => {
-  it('returns the user for a valid token', async () => {
-    await expect(verifyToken('good-token')).resolves.toEqual({ id: 'user-1', email: 'user@example.com' });
+  it('returns the user for a valid token (a non-JWT token carries no aal claim → aal1)', async () => {
+    await expect(verifyToken('good-token')).resolves.toEqual({ id: 'user-1', email: 'user@example.com', aal: 'aal1' });
+  });
+
+  it('reads the aal claim from the VERIFIED token: aal2 only when the claim says so', async () => {
+    await expect(verifyToken(AAL2_TOKEN)).resolves.toEqual({ id: 'user-1', email: 'user@example.com', aal: 'aal2' });
+    await expect(verifyToken(AAL1_TOKEN)).resolves.toMatchObject({ aal: 'aal1' });
+    // No aal claim at all = aal1 (absence of proof is never proof),
+    // and an undecodable payload degrades to aal1 the same way — a
+    // malformed claim can never elevate a session.
+    await expect(verifyToken(NO_AAL_TOKEN)).resolves.toMatchObject({ aal: 'aal1' });
+    await expect(verifyToken(GARBAGE_PAYLOAD_TOKEN)).resolves.toMatchObject({ aal: 'aal1' });
+  });
+
+  it('an aal2 CLAIM on an INVALID token elevates nothing — verification comes first', async () => {
+    // AUTH_RESPONSES has no entry for this string, so the stub answers
+    // with the invalid-JWT response: the verifier must return null,
+    // never a user carrying the forged claim.
+    const forged = jwtWith({ sub: 'user-1', aal: 'aal2', forged: true });
+    await expect(verifyToken(forged)).resolves.toBeNull();
   });
 
   it('returns null for invalid and for expired tokens (401-class, not an outage)', async () => {

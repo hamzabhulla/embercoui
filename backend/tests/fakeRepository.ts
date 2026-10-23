@@ -1,10 +1,12 @@
+import { auditCategoryOf } from '../src/lib/audit';
 import { currencyExponent } from '../src/lib/currency';
 import { ApiError } from '../src/lib/errors';
+import { sanitizePermissionMap } from '../src/lib/permissions';
 import { DEFAULT_SETTINGS, cloneSettings, sanitizeOpeningHours, sanitizeSiteLocations } from '../src/repositories/supabaseRepository';
 import type {
-  AdminReservationInput, CouponDTO, CreateOrderData, CustomerDTO, MenuItemDTO, NewsletterSubscriberDTO,
-  OrderDTO, Page, PageParams, ProfileDTO, PublicSettingsDTO,
-  Repository, ReservationDTO, ReservationInput, ReservationListFilter, ReviewDTO,
+  AdminReservationInput, AuditEventDTO, AuditEventFilter, AuditEventInput, AuditEventPage, CouponDTO, CreateOrderData, CustomerDTO, MenuItemDTO, NewsletterSubscriberDTO,
+  OrderDTO, Page, PageParams, PartialPermissionMap, ProfileDTO, PublicSettingsDTO,
+  Repository, ReservationDTO, ReservationInput, ReservationListFilter, ReservationRequestDTO, ReservationRequestListFilter, ReviewDTO,
 } from '../src/repositories/types';
 
 type FullMenuItem = MenuItemDTO & { isAvailable: boolean; sortOrder: number };
@@ -32,7 +34,8 @@ export class FakeRepository implements Repository {
   // reads fall back to DEFAULT_SETTINGS, exactly like the real repository.
   settings: PublicSettingsDTO | null = {
     kitchenOpen: true, waitMin: 20, waitMax: 30, currency: 'USD', restaurantName: 'Ember & Co.',
-    phone: null, email: null, address: null, whatsappNumber: null, reservationSlotCapacity: 40, openingHours: {},
+    phone: null, email: null, address: null, whatsappNumber: null, reservationSlotCapacity: 40,
+    reservationFeeEnabled: false, reservationFeeAmount: 0, openingHours: {},
     siteLocations: {
       footer: { phone: null, email: null, address: null },
       contact: { phone: null, email: null, address: null, hours: null, mapLocation: null, mapLat: null, mapLng: null },
@@ -43,13 +46,50 @@ export class FakeRepository implements Repository {
     { id: 'rev-1', name: 'Amélie Fontaine', rating: 5, comment: 'Wonderful.', country: 'France', createdAt: '2026-01-01T00:00:00Z', isApproved: true },
     { id: 'rev-2', name: 'Pending Pete', rating: 4, comment: 'Awaiting moderation.', country: null, createdAt: '2026-01-02T00:00:00Z', isApproved: false },
   ];
+  // No mfaRequired key on the seeds: that is the PRE-0013 world, which
+  // is what the real repository produces against a database where
+  // migration 0013 has not run (the column is absent from select('*')
+  // rows — see profileDTO's key-presence check) and is therefore the
+  // fake's default, exactly as the pre-Phase-B suites assume. Tests
+  // for the MFA system itself set the field explicitly: null is the
+  // post-0013 "column exists, no per-person decision" state, and
+  // true/false are the owner's decisions (mfa.test.ts opts in).
   profiles = new Map<string, ProfileDTO>([
-    ['user-1', { id: 'user-1', role: 'customer', fullName: 'Test User', phone: null, addresses: [], favorites: [], createdAt: '2026-01-01T00:00:00.000Z' }],
-    ['admin-1', { id: 'admin-1', role: 'admin', fullName: 'Admin', phone: null, addresses: [], favorites: [], createdAt: '2026-01-01T00:00:00.000Z' }],
-    ['staff-1', { id: 'staff-1', role: 'staff', fullName: 'Staff', phone: null, addresses: [], favorites: [], createdAt: '2026-01-01T00:00:00.000Z' }],
-    ['user-2', { id: 'user-2', role: 'customer', fullName: 'Second User', phone: null, addresses: [], favorites: [], createdAt: '2026-01-01T00:00:00.000Z' }],
+    ['user-1', { id: 'user-1', role: 'customer', fullName: 'Test User', phone: null, addresses: [], favorites: [], permissions: null, createdAt: '2026-01-01T00:00:00.000Z' }],
+    ['admin-1', { id: 'admin-1', role: 'admin', fullName: 'Admin', phone: null, addresses: [], favorites: [], permissions: null, createdAt: '2026-01-01T00:00:00.000Z' }],
+    ['staff-1', { id: 'staff-1', role: 'staff', fullName: 'Staff', phone: null, addresses: [], favorites: [], permissions: null, createdAt: '2026-01-01T00:00:00.000Z' }],
+    ['manager-1', { id: 'manager-1', role: 'manager', fullName: 'Manager', phone: null, addresses: [], favorites: [], permissions: null, createdAt: '2026-01-01T00:00:00.000Z' }],
+    ['user-2', { id: 'user-2', role: 'customer', fullName: 'Second User', phone: null, addresses: [], favorites: [], permissions: null, createdAt: '2026-01-01T00:00:00.000Z' }],
   ]);
+  /** Owner-edited role defaults (role_permissions rows); absent = built-ins. */
+  rolePermissions = new Map<'manager' | 'staff', PartialPermissionMap>();
+  /** audit_events rows, in insert order. */
+  auditEvents: (AuditEventInput & { id: string; createdAt: string })[] = [];
+  /**
+   * False simulates the PRE-0012 world for the Phase C reads: the
+   * audit_events table does not exist, so listAuditEvents answers the
+   * degraded empty page exactly like the real repository (writes
+   * through insertAuditEvent stay accepted-and-dropped either way —
+   * the fake keeps them visible here so hook tests can assert them).
+   */
+  auditLogAvailable = true;
   reservations: ReservationDTO[] = [];
+  /** reservation_requests rows (Phase G), in insert order. */
+  reservationRequests: ReservationRequestDTO[] = [];
+  /**
+   * False simulates the PRE-0015 world: the reservation_requests
+   * table does not exist, so request reads degrade (list → null,
+   * inbox → degraded page) and creation resolves null, exactly like
+   * the real repository.
+   */
+  reservationRequestsAvailable = true;
+  /**
+   * reservation id → fee payment intent id (Phase F). Mirrors the
+   * reservations.fee_payment_intent_id column, which deliberately
+   * does NOT ride on ReservationDTO (the same internal-only treatment
+   * as orderIdempotencyKeys below).
+   */
+  reservationFeeIntentIds = new Map<string, string>();
   newsletter = new Set<string>();
   contactMessages: unknown[] = [];
   orders: OrderDTO[] = [];
@@ -101,7 +141,7 @@ export class FakeRepository implements Repository {
   async getProfile(userId: string) { return this.profiles.get(userId) ?? null; }
   async upsertProfile(userId: string, data: { fullName?: string | null; phone?: string | null }) {
     const existing = this.profiles.get(userId);
-    const profile: ProfileDTO = existing ?? { id: userId, role: 'customer', fullName: data.fullName ?? null, phone: data.phone ?? null, addresses: [], favorites: [], createdAt: new Date().toISOString() };
+    const profile: ProfileDTO = existing ?? { id: userId, role: 'customer', fullName: data.fullName ?? null, phone: data.phone ?? null, addresses: [], favorites: [], permissions: null, createdAt: new Date().toISOString() };
     if (data.fullName !== undefined) profile.fullName = data.fullName;
     if (data.phone !== undefined) profile.phone = data.phone;
     this.profiles.set(userId, profile);
@@ -114,12 +154,57 @@ export class FakeRepository implements Repository {
     return profile;
   }
   async createReservation(input: ReservationInput): Promise<ReservationDTO> {
-    const reservation: ReservationDTO = { ...input, id: `res-${++this.seq}`, status: 'pending', source: 'website', notes: null, createdAt: new Date().toISOString() };
+    const reservation: ReservationDTO = {
+      userId: input.userId, name: input.name, email: input.email, phone: input.phone,
+      date: input.date, time: input.time, guests: input.guests,
+      id: `res-${++this.seq}`, status: 'pending', source: 'website', notes: null,
+      // Mirror the real repository: a fee booking is born 'pending',
+      // a free one carries no fee at all.
+      feeAmount: input.fee?.amount ?? null,
+      feeCurrency: input.fee?.currency ?? null,
+      feePaymentStatus: input.fee ? 'pending' : 'none',
+      createdAt: new Date().toISOString(),
+    };
     this.reservations.push(reservation);
     return reservation;
   }
+  async setReservationFeePaymentIntent(reservationId: string, paymentIntentId: string) {
+    const reservation = this.reservations.find((r) => r.id === reservationId);
+    // Mirror the real conditional write: only while the fee is pending.
+    if (!reservation || reservation.feePaymentStatus !== 'pending') return false;
+    this.reservationFeeIntentIds.set(reservationId, paymentIntentId);
+    return true;
+  }
+  async markReservationFeePaidByPaymentIntent(paymentIntentId: string) {
+    const reservation = this.reservations.find((r) => this.reservationFeeIntentIds.get(r.id) === paymentIntentId);
+    if (!reservation) return null;
+    // Same guards as the real repository: 'paid' from pending/failed, terminal.
+    if (reservation.feePaymentStatus === 'pending' || reservation.feePaymentStatus === 'failed') {
+      reservation.feePaymentStatus = 'paid';
+    }
+    return reservation;
+  }
+  async markReservationFeeFailedByPaymentIntent(paymentIntentId: string) {
+    const reservation = this.reservations.find((r) => this.reservationFeeIntentIds.get(r.id) === paymentIntentId);
+    if (!reservation) return null;
+    // 'failed' from pending only — a late failure never un-pays a booking.
+    if (reservation.feePaymentStatus === 'pending') {
+      reservation.feePaymentStatus = 'failed';
+    }
+    return reservation;
+  }
+  async failReservationFee(reservationId: string) {
+    const reservation = this.reservations.find((r) => r.id === reservationId);
+    if (reservation && reservation.feePaymentStatus === 'pending') {
+      reservation.feePaymentStatus = 'failed';
+    }
+  }
   async adminCreateReservation(input: AdminReservationInput): Promise<ReservationDTO> {
-    const reservation: ReservationDTO = { userId: null, ...input, id: `res-${++this.seq}`, source: 'admin', createdAt: new Date().toISOString() };
+    const reservation: ReservationDTO = {
+      userId: null, ...input, id: `res-${++this.seq}`, source: 'admin',
+      feeAmount: null, feeCurrency: null, feePaymentStatus: 'none',
+      createdAt: new Date().toISOString(),
+    };
     this.reservations.push(reservation);
     return reservation;
   }
@@ -267,6 +352,77 @@ export class FakeRepository implements Repository {
     r.status = status;
     return r;
   }
+  async adminUpdateReservation(id: string, patch: { date?: string; time?: string; guests?: number }) {
+    const r = this.reservations.find((x) => x.id === id);
+    if (!r) return null;
+    if (patch.date !== undefined) r.date = patch.date;
+    if (patch.time !== undefined) r.time = patch.time;
+    if (patch.guests !== undefined) r.guests = patch.guests;
+    return r;
+  }
+  async listReservationsForUser(userId: string, email: string | null) {
+    // Mirror the real repository: linked by user_id OR email match
+    // (trimmed, case-insensitive), de-duplicated, upcoming first
+    // (date/time asc) then the past most-recent first.
+    const mine = (email ?? '').trim().toLowerCase();
+    const visible = this.reservations.filter((r) =>
+      r.userId === userId || (!!mine && (r.email ?? '').trim().toLowerCase() === mine));
+    const today = new Date().toISOString().slice(0, 10);
+    const upcoming = visible.filter((r) => r.date >= today)
+      .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0) || (a.time < b.time ? -1 : a.time > b.time ? 1 : 0) || byCreatedDescIdDesc(a, b));
+    const past = visible.filter((r) => r.date < today)
+      .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0) || (a.time < b.time ? 1 : a.time > b.time ? -1 : 0) || byCreatedDescIdDesc(a, b));
+    const reservations = [...upcoming, ...past];
+    if (!this.reservationRequestsAvailable) return { reservations, requests: null };
+    const ids = new Set(reservations.map((r) => r.id));
+    const requests = this.reservationRequests
+      .filter((q) => ids.has(q.reservationId))
+      .sort((a, b) => byCreatedDescIdDesc(a, b));
+    return { reservations, requests };
+  }
+  async createReservationRequest(input: {
+    reservationId: string; requesterUserId: string | null; requesterEmail: string | null;
+    proposedDate: string | null; proposedTime: string | null; proposedGuests: number | null; message: string;
+  }): Promise<ReservationRequestDTO | null> {
+    if (!this.reservationRequestsAvailable) return null;
+    // Mirror the real one-pending guard (friendly check; the partial
+    // unique index is its database backstop).
+    if (this.reservationRequests.some((q) => q.reservationId === input.reservationId && q.status === 'pending')) {
+      throw new ApiError(409, 'A change request is already pending for this reservation — our team will answer that one first');
+    }
+    const now = new Date().toISOString();
+    const created: ReservationRequestDTO = {
+      id: `req-${++this.seq}`, ...input, status: 'pending',
+      adminReply: null, handledBy: null, createdAt: now, updatedAt: now,
+    };
+    this.reservationRequests.push(created);
+    return created;
+  }
+  async getReservationRequest(id: string) {
+    if (!this.reservationRequestsAvailable) return null;
+    return this.reservationRequests.find((q) => q.id === id) ?? null;
+  }
+  async adminListReservationRequests(filter: ReservationRequestListFilter, page: PageParams) {
+    if (!this.reservationRequestsAvailable) return { items: [], total: 0, pendingTotal: 0, degraded: true };
+    const pendingTotal = this.reservationRequests.filter((q) => q.status === 'pending').length;
+    const filtered = this.reservationRequests
+      .filter((q) => !filter.status || q.status === filter.status)
+      .sort((a, b) => byCreatedDescIdDesc(a, b));
+    const items = filtered.slice(page.offset, page.offset + page.limit)
+      .map((q) => ({ ...q, reservation: this.reservations.find((r) => r.id === q.reservationId) ?? null }));
+    return { items, total: filtered.length, pendingTotal, degraded: false };
+  }
+  async updateReservationRequest(id: string, patch: { status: 'approved' | 'declined' | 'handled'; adminReply?: string | null; handledBy: string }) {
+    if (!this.reservationRequestsAvailable) return null;
+    const q = this.reservationRequests.find((x) => x.id === id);
+    // Mirror the real conditional write: only a pending request closes.
+    if (!q || q.status !== 'pending') return null;
+    q.status = patch.status;
+    if (patch.adminReply !== undefined) q.adminReply = patch.adminReply;
+    q.handledBy = patch.handledBy;
+    q.updatedAt = new Date().toISOString();
+    return q;
+  }
   async adminListCustomers(): Promise<CustomerDTO[]>;
   async adminListCustomers(page: PageParams): Promise<Page<CustomerDTO>>;
   async adminListCustomers(page?: PageParams): Promise<CustomerDTO[] | Page<CustomerDTO>> {
@@ -388,6 +544,50 @@ export class FakeRepository implements Repository {
     p.role = role;
     return p;
   }
+  async getRolePermissions(role: 'manager' | 'staff') {
+    const stored = this.rolePermissions.get(role);
+    return stored ? { ...stored } : null;
+  }
+  async setRolePermissions(role: 'manager' | 'staff', permissions: PartialPermissionMap) {
+    // Sanitised on write, like the real repository.
+    this.rolePermissions.set(role, { ...(sanitizePermissionMap(permissions) ?? {}) });
+  }
+  async setUserPermissions(userId: string, permissions: PartialPermissionMap) {
+    const p = this.profiles.get(userId);
+    if (!p) return null;
+    const clean = sanitizePermissionMap(permissions);
+    p.permissions = clean && Object.keys(clean).length > 0 ? clean : null;
+    return p;
+  }
+  async setUserMfaRequired(userId: string, required: boolean | null) {
+    const p = this.profiles.get(userId);
+    if (!p) return null;
+    p.mfaRequired = required;
+    return p;
+  }
+  async insertAuditEvent(event: AuditEventInput) {
+    this.auditEvents.push({ ...event, id: `audit-${++this.seq}`, createdAt: new Date().toISOString() });
+  }
+  async listAuditEvents(filter: AuditEventFilter, page?: PageParams): Promise<AuditEventPage> {
+    if (!this.auditLogAvailable) return { items: [], total: 0, degraded: true };
+    // Same semantics as the real repository: filters before paging,
+    // total = the FILTERED count, newest first (created_at desc,
+    // id desc tiebreak).
+    const q = filter.q?.toLowerCase();
+    const filtered = this.auditEvents.filter((e) =>
+      (!filter.category || auditCategoryOf(e.action) === filter.category) &&
+      (!filter.actorId || e.actorId === filter.actorId) &&
+      (!filter.action || e.action.startsWith(filter.action)) &&
+      (!filter.from || e.createdAt >= filter.from) &&
+      (!filter.to || e.createdAt <= filter.to) &&
+      (!q || (e.actorLabel ?? '').toLowerCase().includes(q) ||
+        (e.summary ?? '').toLowerCase().includes(q) ||
+        e.action.toLowerCase().includes(q)));
+    const sorted = [...filtered].sort((a, b) => byCreatedDescIdDesc(a, b));
+    const items: AuditEventDTO[] = sorted.map((e) => ({ ...e }));
+    if (!page) return { items, total: items.length, degraded: false };
+    return { items: items.slice(page.offset, page.offset + page.limit), total: items.length, degraded: false };
+  }
   async updateSettings(patch: Partial<PublicSettingsDTO>) {
     // Mirror the real repository: patching while the row is missing
     // creates the singleton (defaults + patch) — the save must persist,
@@ -406,11 +606,19 @@ export class FakeRepository implements Repository {
   }
 }
 
+// The verified user's assurance level rides along like the real
+// verifier's: plain tokens are aal1 (password only); appending
+// '-aal2' to any known token yields the same user at aal2 (an MFA-
+// verified session), which is how the MFA gate matrix is exercised.
 export const fakeVerifyToken = async (token: string) => {
-  if (token === 'token-user') return { id: 'user-1', email: 'user@example.com' };
-  if (token === 'token-admin') return { id: 'admin-1', email: 'admin@example.com' };
-  if (token === 'token-staff') return { id: 'staff-1', email: 'staff@example.com' };
-  if (token === 'token-user2') return { id: 'user-2', email: 'user2@example.com' };
+  const aal2 = token.endsWith('-aal2');
+  const base = aal2 ? token.slice(0, -'-aal2'.length) : token;
+  const aal = (aal2 ? 'aal2' : 'aal1') as 'aal1' | 'aal2';
+  if (base === 'token-user') return { id: 'user-1', email: 'user@example.com', aal };
+  if (base === 'token-admin') return { id: 'admin-1', email: 'admin@example.com', aal };
+  if (base === 'token-staff') return { id: 'staff-1', email: 'staff@example.com', aal };
+  if (base === 'token-manager') return { id: 'manager-1', email: 'manager@example.com', aal };
+  if (base === 'token-user2') return { id: 'user-2', email: 'user2@example.com', aal };
   return null;
 };
 

@@ -7,6 +7,8 @@ interface FakeIntentRecord {
   currency: string;
   idempotencyKey: string;
   status: string;
+  /** The metadata the real service would set — fee intents carry { type: 'reservation_fee', reservationId }. */
+  metadata: Record<string, string>;
 }
 
 export class FakeStripeService implements StripeService {
@@ -19,7 +21,20 @@ export class FakeStripeService implements StripeService {
     const existingId = this.byIdempotencyKey.get(input.idempotencyKey);
     if (existingId) return { id: existingId, clientSecret: `${existingId}_secret_test` };
     const id = `pi_${++this.seq}`;
-    this.intents.set(id, { ...input, status: 'requires_payment_method' });
+    this.intents.set(id, { ...input, status: 'requires_payment_method', metadata: { orderId: input.orderId } });
+    this.byIdempotencyKey.set(input.idempotencyKey, id);
+    return { id, clientSecret: `${id}_secret_test` };
+  }
+
+  async createReservationFeePaymentIntent(input: { reservationId: string; amountCents: number; currency: string; idempotencyKey: string }) {
+    const existingId = this.byIdempotencyKey.get(input.idempotencyKey);
+    if (existingId) return { id: existingId, clientSecret: `${existingId}_secret_test` };
+    const id = `pi_${++this.seq}`;
+    this.intents.set(id, {
+      orderId: '', amountCents: input.amountCents, currency: input.currency, idempotencyKey: input.idempotencyKey,
+      status: 'requires_payment_method',
+      metadata: { type: 'reservation_fee', reservationId: input.reservationId },
+    });
     this.byIdempotencyKey.set(input.idempotencyKey, id);
     return { id, clientSecret: `${id}_secret_test` };
   }
@@ -45,7 +60,7 @@ export class FakeStripeService implements StripeService {
 
   constructEvent(payload: Buffer, signature: string) {
     if (signature !== 'valid-sig') throw new ApiError(400, 'Invalid webhook signature');
-    const parsed = JSON.parse(payload.toString('utf8')) as { type: string; paymentIntentId: string };
-    return { type: parsed.type, paymentIntentId: parsed.paymentIntentId };
+    const parsed = JSON.parse(payload.toString('utf8')) as { type: string; paymentIntentId: string; metadata?: Record<string, string> };
+    return { type: parsed.type, paymentIntentId: parsed.paymentIntentId, metadata: parsed.metadata ?? {} };
   }
 }

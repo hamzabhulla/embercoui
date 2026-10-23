@@ -124,13 +124,25 @@ describe('constructEvent mapping (real SDK, unit level)', () => {
   it('maps a payment_intent object to its own id', () => {
     const payload = eventPayload('payment_intent.succeeded', { id: 'pi_unit_1', object: 'payment_intent' });
     const event = stripe.constructEvent(Buffer.from(payload, 'utf8'), sign(payload, WEBHOOK_SECRET));
-    expect(event).toEqual({ type: 'payment_intent.succeeded', paymentIntentId: 'pi_unit_1' });
+    expect(event).toEqual({ type: 'payment_intent.succeeded', paymentIntentId: 'pi_unit_1', metadata: {} });
   });
 
   it('maps other objects to their payment_intent field', () => {
     const payload = eventPayload('charge.succeeded', { id: 'ch_1', object: 'charge', payment_intent: 'pi_unit_2' });
     const event = stripe.constructEvent(Buffer.from(payload, 'utf8'), sign(payload, WEBHOOK_SECRET));
-    expect(event).toEqual({ type: 'charge.succeeded', paymentIntentId: 'pi_unit_2' });
+    expect(event).toEqual({ type: 'charge.succeeded', paymentIntentId: 'pi_unit_2', metadata: {} });
+  });
+
+  it('carries a payment intent\'s metadata through (the webhook routes fee intents on it)', () => {
+    const payload = eventPayload('payment_intent.succeeded', {
+      id: 'pi_unit_fee', object: 'payment_intent',
+      metadata: { type: 'reservation_fee', reservationId: 'res-unit-1' },
+    });
+    const event = stripe.constructEvent(Buffer.from(payload, 'utf8'), sign(payload, WEBHOOK_SECRET));
+    expect(event).toEqual({
+      type: 'payment_intent.succeeded', paymentIntentId: 'pi_unit_fee',
+      metadata: { type: 'reservation_fee', reservationId: 'res-unit-1' },
+    });
   });
 
   it('throws the route-facing 400 ApiError on a bad signature', () => {

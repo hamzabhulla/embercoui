@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { adminGet, adminSend } from '../../services/adminApi';
-import { useAuth } from '../../context/AuthContext';
+import { usePermissions } from '../../components/admin/PermissionsContext';
 import { useCurrency } from '../../context/CurrencyContext';
 import { currencyExponent } from '../../lib/currency';
 import { Card, DeleteButton, EmptyNote, ErrorNote, LoadingNote, NoticeNote, PageTitle, StatusPill, Toggle, ghostBtn, inputCls, labelCls, money, primaryBtn, tableCls, tdCls, thCls } from '../../components/admin/ui';
@@ -9,8 +9,8 @@ interface Coupon { id: string; code: string; type: 'percent' | 'fixed'; value: n
 const PAGE_SIZE = 100;
 
 export default function AdminMarketing() {
-  const { profile } = useAuth();
-  const isAdmin = profile?.role === 'admin';
+  const { can } = usePermissions();
+  const canManage = can('coupons', 'manage');
   const { currency } = useCurrency();
   const [rows, setRows] = useState<Coupon[]>([]);
   const [total, setTotal] = useState(0);
@@ -59,7 +59,7 @@ export default function AdminMarketing() {
       <PageTitle sub="Discount codes customers can use at checkout">Coupons</PageTitle>
       {error && <ErrorNote message={error} />}
       {notice && <NoticeNote message={notice} />}
-      {isAdmin ? (
+      {canManage ? (
         <form onSubmit={create} className="bg-white border border-[#EAE3D3] rounded-[14px] shadow-[0_1px_2px_rgba(22,36,26,0.03),0_10px_24px_-18px_rgba(22,36,26,0.18)] p-6 mb-8 grid md:grid-cols-4 gap-4 items-end">
           <div><label className={labelCls} htmlFor="c-code">Code</label><input id="c-code" className={inputCls} value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} required minLength={3} /></div>
           <div><label className={labelCls} htmlFor="c-type">Type</label>
@@ -71,7 +71,7 @@ export default function AdminMarketing() {
           <button type="submit" className={primaryBtn}>Create coupon</button>
         </form>
       ) : (
-        <p className="font-bodytext text-[13.5px] text-[#5C665C] mb-8">Only admins can create or change coupons.</p>
+        <p className="font-bodytext text-[13.5px] text-[#5C665C] mb-8">You have view-only access to coupons.</p>
       )}
       <Card className="overflow-hidden">
         {!loaded && !error && <LoadingNote />}
@@ -80,7 +80,7 @@ export default function AdminMarketing() {
           <div className="overflow-x-auto">
             <table className={tableCls}>
               <thead>
-                <tr><th className={thCls}>Code</th><th className={thCls}>Discount</th><th className={thCls}>Expires</th><th className={thCls}>Status</th>{isAdmin && <th className={thCls}>Active</th>}{isAdmin && <th className={thCls}></th>}</tr>
+                <tr><th className={thCls}>Code</th><th className={thCls}>Discount</th><th className={thCls}>Expires</th><th className={thCls}>Status</th>{canManage && <th className={thCls}>Active</th>}{canManage && <th className={thCls}></th>}</tr>
               </thead>
               <tbody>
                 {rows.map((c) => (
@@ -89,8 +89,8 @@ export default function AdminMarketing() {
                     <td className={`${tdCls} font-semibold`}>{c.type === 'percent' ? `${c.value}% off` : `${money(c.value, currency)} off`}</td>
                     <td className={`${tdCls} text-[#5C665C]`}>{c.expiresAt ? new Date(c.expiresAt).toLocaleDateString() : 'No expiry'}</td>
                     <td className={tdCls}><StatusPill status={c.isActive ? 'active' : 'inactive'} /></td>
-                    {isAdmin && <td className={tdCls}><Toggle on={c.isActive} onClick={() => void toggle(c)} label={`${c.isActive ? 'Deactivate' : 'Activate'} coupon ${c.code}`} /></td>}
-                    {isAdmin && <td className={tdCls}><span className="flex justify-end"><DeleteButton name={`coupon ${c.code}`} onDelete={() => void remove(c.id)} /></span></td>}
+                    {canManage && <td className={tdCls}><Toggle on={c.isActive} onClick={() => void toggle(c)} label={`${c.isActive ? 'Deactivate' : 'Activate'} coupon ${c.code}`} /></td>}
+                    {canManage && <td className={tdCls}><span className="flex justify-end"><DeleteButton name={`coupon ${c.code}`} onDelete={() => void remove(c.id)} /></span></td>}
                   </tr>
                 ))}
               </tbody>

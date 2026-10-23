@@ -1,8 +1,9 @@
 import { Router } from 'express';
 import { ApiError, notConfigured } from '../lib/errors';
+import { effectiveReservationFee } from '../lib/reservationFee';
 import type { Repository } from '../repositories/types';
 
-export function publicRouter(deps: { repo: Repository | null }) {
+export function publicRouter(deps: { repo: Repository | null; stripeConfigured?: boolean }) {
   const router = Router();
   const repo = () => {
     if (!deps.repo) throw notConfigured();
@@ -27,7 +28,19 @@ export function publicRouter(deps: { repo: Repository | null }) {
 
   router.get('/settings/public', async (_req, res, next) => {
     try {
-      res.json({ settings: await repo().getSettings() });
+      const settings = await repo().getSettings();
+      // The public never sees the owner's RAW fee toggle/amount —
+      // only the EFFECTIVE fee (lib/reservationFee.ts), which is null
+      // whenever the fee cannot actually be charged (off, zero, or no
+      // card provider). A page reading this response can therefore
+      // never tell a guest about a charge that will not happen.
+      const view: Record<string, unknown> = {
+        ...settings,
+        reservationFee: effectiveReservationFee(settings, deps.stripeConfigured ?? false),
+      };
+      delete view.reservationFeeEnabled;
+      delete view.reservationFeeAmount;
+      res.json({ settings: view });
     } catch (err) { next(err); }
   });
 

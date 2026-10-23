@@ -471,17 +471,6 @@ export default function CartSidebar() {
             >
               Checkout <span style={{ fontSize: '14px' }}>→</span>
             </button>
-            
-            <p 
-              className="text-center mt-4"
-              style={{
-                fontFamily: 'Jost, sans-serif',
-                fontSize: '10px',
-                color: 'rgba(245,240,232,0.2)'
-              }}
-            >
-              Secure checkout · SSL encrypted
-            </p>
           </div>
         )}
       </aside>

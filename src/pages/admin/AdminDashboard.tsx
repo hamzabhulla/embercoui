@@ -4,8 +4,12 @@ import { Avatar, Card, CardHead, EmptyNote, ErrorNote, LoadingNote, PageTitle, S
 
 interface DashData {
   currency: string;
-  stats: { revenue: number; totalOrders: number; pendingOrders: number; ordersByStatus: Record<string, number>; customers: number; pendingReservations: number };
-  recentOrders: { id: string; customerName: string; total: number; status: string; paymentStatus: string; createdAt: string; currency: string }[];
+  // Section-assembled on the backend (Phase A): a block is present
+  // only when the caller may view its section — revenue rides on
+  // finance, order figures on orders, the customer count on customers,
+  // pending reservations on reservations. Absent blocks render nothing.
+  stats: { revenue?: number; totalOrders?: number; pendingOrders?: number; ordersByStatus?: Record<string, number>; customers?: number; pendingReservations?: number };
+  recentOrders?: { id: string; customerName: string; total: number; status: string; paymentStatus: string; createdAt: string; currency: string }[];
 }
 
 export default function AdminDashboard() {
@@ -26,20 +30,24 @@ export default function AdminDashboard() {
       {data && (
         <>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5 mb-6">
-            <StatCard label={`Revenue (paid) · ${data.currency}`} value={money(data.stats.revenue, data.currency)} foot="Paid orders in this currency only" />
-            <StatCard label="Total orders" value={data.stats.totalOrders} />
-            <StatCard label="Pending orders" value={data.stats.pendingOrders} foot="Waiting to be confirmed" />
-            <StatCard label="Customers" value={data.stats.customers} />
-            <StatCard label="Pending reservations" value={data.stats.pendingReservations} foot="Bookings to confirm" />
+            {data.stats.revenue !== undefined && <StatCard label={`Revenue (paid) · ${data.currency}`} value={money(data.stats.revenue, data.currency)} foot="Paid orders in this currency only" />}
+            {data.stats.totalOrders !== undefined && <StatCard label="Total orders" value={data.stats.totalOrders} />}
+            {data.stats.pendingOrders !== undefined && <StatCard label="Pending orders" value={data.stats.pendingOrders} foot="Waiting to be confirmed" />}
+            {data.stats.customers !== undefined && <StatCard label="Customers" value={data.stats.customers} />}
+            {data.stats.pendingReservations !== undefined && <StatCard label="Pending reservations" value={data.stats.pendingReservations} foot="Bookings to confirm" />}
             {/* 'pending' is skipped here: it already has the dedicated
                 "Pending orders" card above, and showing the same number
                 twice made the grid look padded (audit fix 15). */}
-            {Object.entries(data.stats.ordersByStatus)
+            {Object.entries(data.stats.ordersByStatus ?? {})
               .filter(([status]) => status !== 'pending')
               .map(([status, count]) => (
                 <StatCard key={status} label={status.replace(/_/g, ' ')} value={count} />
               ))}
           </div>
+          {Object.keys(data.stats).length === 0 && (
+            <EmptyNote message="Nothing to show yet — the owner has not granted your account any dashboard sections." />
+          )}
+          {data.recentOrders && (
           <Card>
             <CardHead title="Recent orders" />
             {data.recentOrders.length === 0 ? (
@@ -67,6 +75,7 @@ export default function AdminDashboard() {
               </div>
             )}
           </Card>
+          )}
         </>
       )}
     </div>

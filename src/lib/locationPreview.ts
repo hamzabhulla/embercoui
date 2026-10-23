@@ -24,7 +24,7 @@ import type { PublicSettings, SiteLocations } from '../services/api.ts';
  */
 
 /** Placeholder shown when neither the override nor its fallback has a value. */
-export const NOTHING_LIVE = 'Website par abhi kuch nahi dikhta';
+export const NOTHING_LIVE = 'Nothing is live on the website yet';
 
 /** The Restaurant-profile side of every fallback chain. */
 export interface LocationProfileSource {

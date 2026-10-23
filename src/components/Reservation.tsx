@@ -1,8 +1,11 @@
 import { useState } from 'react';
 import { ArrowRight, Check } from 'lucide-react';
+import { Elements, PaymentElement, useElements, useStripe } from '@stripe/react-stripe-js';
 import { useInView } from '../hooks/useInView';
 import { openingHoursLines, usePublicSettings } from '../hooks/usePublicSettings';
-import { submitReservation } from '../services/api.ts';
+import { submitReservation, type ReservationFeePayment } from '../services/api.ts';
+import { formatMoney } from '../lib/currency.ts';
+import { stripePromise } from '../lib/stripe.ts';
 
 // ONE slot list for both layouts. The desktop <select> and the mobile
 // slot grid used to keep separate lists that had drifted apart (lunch
@@ -24,6 +27,71 @@ function todayLocal(): string {
   return `${d.getFullYear()}-${mm}-${dd}`;
 }
 
+/**
+ * The booking-fee card step (Phase F), modelled on Checkout's card
+ * form: the server has already created the booking and its payment
+ * intent; confirming here is what pays the fee. A declined card is an
+ * honest error and the step stays open for another try — the booking
+ * holds no table until the fee is paid, which the copy says plainly.
+ */
+function FeePaymentForm({ fee, onPaid }: { fee: ReservationFeePayment; onPaid: () => void }) {
+  const stripe = useStripe();
+  const elements = useElements();
+  const [paying, setPaying] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const pay = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!stripe || !elements) return;
+    setPaying(true);
+    setError(null);
+    const { error: confirmError, paymentIntent } = await stripe.confirmPayment({ elements, redirect: 'if_required' });
+    setPaying(false);
+    if (confirmError) {
+      setError(confirmError.message ?? 'Your card was declined — the booking fee was not paid, so your table is not held yet. You can try another card.');
+      return;
+    }
+    if (paymentIntent && (paymentIntent.status === 'succeeded' || paymentIntent.status === 'processing')) {
+      onPaid();
+      return;
+    }
+    // No error from Stripe, but the payment did not complete either
+    // (a further step was requested, the attempt was cancelled, …):
+    // never leave the guest staring at a silent form — the fee is
+    // unpaid and the table is not held, and the step stays open for
+    // another try.
+    setError('That payment was not completed, so the booking fee was not paid and your table is not held yet. You can try again or use another card.');
+  };
+
+  return (
+    <form onSubmit={pay} className="w-full max-w-md mx-auto lg:mx-0 flex flex-col gap-5 px-[24px] py-[32px] md:p-0">
+      <div>
+        <h3 className="text-3xl mb-3" style={{ fontFamily: 'Cormorant Garamond, serif', color: '#F5F0E8' }}>
+          Booking Fee
+        </h3>
+        <p className="text-sm" style={{ color: 'rgba(245,240,232,0.6)', fontFamily: 'Jost, sans-serif' }}>
+          A booking fee of {formatMoney(fee.amount, fee.currency)} is charged by card now.
+          Your table is held once the fee is paid.
+        </p>
+      </div>
+      <PaymentElement options={{ layout: 'tabs' }} />
+      {error && <p className="text-[#ef4444]" style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px' }}>{error}</p>}
+      <button
+        type="submit"
+        disabled={!stripe || paying}
+        className="w-full bg-[#C17A3A] hover:bg-[#A66932] text-white py-4 px-6 flex items-center justify-between transition-all duration-[250ms] uppercase disabled:opacity-50"
+        style={{ fontFamily: 'Jost, sans-serif', fontSize: '11px', letterSpacing: '0.2em' }}
+      >
+        <span>{paying ? 'Processing…' : `Pay ${formatMoney(fee.amount, fee.currency)}`}</span>
+        <ArrowRight className="w-4 h-4" />
+      </button>
+      <p style={{ fontFamily: 'Jost, sans-serif', fontSize: '10px', color: 'rgba(245,240,232,0.3)' }}>
+        Payments are processed by Stripe.
+      </p>
+    </form>
+  );
+}
+
 export default function Reservation() {
   const [form, setForm] = useState({
     name: '', email: '', phone: '', date: '', time: '', guests: ''
@@ -31,12 +99,22 @@ export default function Reservation() {
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  // A fee-bearing booking's card step: set from the server's response
+  // (never from the settings alone — the server decides the fee).
+  const [feeStep, setFeeStep] = useState<ReservationFeePayment | null>(null);
   const [step, setStep] = useState(1);
   const { ref, isInView } = useInView<HTMLDivElement>(0.1);
   // Reservation contact details: this section's own overrides win, the
   // global Restaurant profile fields are the fallback, and a line whose
   // value resolves to null is omitted — no hardcoded stand-ins.
   const settings = usePublicSettings();
+  // The EFFECTIVE booking fee as the server resolved it (null = free).
+  // Used only for the pre-confirm disclosure — the charge itself is
+  // decided by the server's response to the submit, below.
+  const fee = settings?.reservationFee ?? null;
+  const feeDisclosure = fee
+    ? `A booking fee of ${formatMoney(fee.amount, fee.currency)} applies — charged by card now. Your table is held once the fee is paid.`
+    : null;
   const reservationContacts = settings?.siteLocations?.reservation;
   const resAddress = reservationContacts?.address ?? settings?.address ?? null;
   const resPhone = reservationContacts?.phone ?? settings?.phone ?? null;
@@ -63,6 +141,25 @@ export default function Reservation() {
       setSubmitError(res.error ?? 'We could not save your reservation — please try again or call us.');
       return;
     }
+    const feePayment = res.data?.feePayment;
+    if (feePayment) {
+      // The booking exists and owes its fee: move to the card step.
+      // Without a publishable key the card cannot be taken here at
+      // all — say so honestly instead of stranding the guest.
+      if (!stripePromise) {
+        setSubmitError('Card payment is unavailable right now — please call us to complete your booking.');
+        return;
+      }
+      setFeeStep(feePayment);
+      return;
+    }
+    setSubmitted(true);
+    setTimeout(() => setSubmitted(false), 4000);
+    setForm({ name: '', email: '', phone: '', date: '', time: '', guests: '' });
+  };
+
+  const handleFeePaid = () => {
+    setFeeStep(null);
     setSubmitted(true);
     setTimeout(() => setSubmitted(false), 4000);
     setForm({ name: '', email: '', phone: '', date: '', time: '', guests: '' });
@@ -116,28 +213,14 @@ export default function Reservation() {
               style={getRevealStyle('0.2s')}
             ></div>
 
-            <p
-              className="mb-12 max-w-sm"
-              style={{ 
-                color: 'rgba(245,240,232,0.5)', 
-                fontFamily: 'Jost, sans-serif',
-                fontWeight: 300,
-                fontSize: '16px',
-                lineHeight: '1.6',
-                ...getRevealStyle('0.3s')
-              }}
-            >
-              Join us for an unforgettable dining experience rooted in forest-to-table philosophy.
-            </p>
-
-            <div 
+            <div
               className="space-y-3"
-              style={{ 
-                color: 'rgba(245,240,232,0.4)', 
+              style={{
+                color: 'rgba(245,240,232,0.4)',
                 fontFamily: 'Jost, sans-serif',
                 fontSize: '12px',
                 fontWeight: 300,
-                ...getRevealStyle('0.4s')
+                ...getRevealStyle('0.3s')
               }}
             >
               {resAddress && <p style={{ whiteSpace: 'pre-line' }}>📍 {resAddress}</p>}
@@ -167,6 +250,10 @@ export default function Reservation() {
                   We've received your reservation request. Our team will review it and call you to confirm — please keep your phone handy. We look forward to welcoming you.
                 </p>
               </div>
+            ) : feeStep ? (
+              <Elements stripe={stripePromise} options={{ clientSecret: feeStep.clientSecret, appearance: { theme: 'night', variables: { colorPrimary: '#C17A3A', colorBackground: '#1C2B1E', colorText: '#F5F0E8', fontFamily: 'Jost, sans-serif' } } }}>
+                <FeePaymentForm fee={feeStep} onPaid={handleFeePaid} />
+              </Elements>
             ) : (
               <>
                 {/* DESKTOP FORM */}
@@ -247,6 +334,13 @@ export default function Reservation() {
                       <label htmlFor="guests" className={getLabelClass(form.guests)} style={{ fontFamily: 'Jost, sans-serif', color: 'rgba(245,240,232,0.5)' }}>Guests</label>
                     </div>
                   </div>
+
+                  {/* Fee disclosure — before confirming, never after */}
+                  {feeDisclosure && (
+                    <p style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: 'rgba(245,240,232,0.65)', ...getRevealStyle('0.55s') }}>
+                      {feeDisclosure}
+                    </p>
+                  )}
 
                   {/* SUBMIT BUTTON */}
                   <div className="pt-4" style={getRevealStyle('0.6s')}>
@@ -393,6 +487,13 @@ export default function Reservation() {
                         </div>
                       </div>
                       
+                      {/* Fee disclosure — before the Confirm tap */}
+                      {feeDisclosure && (
+                        <p style={{ fontFamily: 'Jost, sans-serif', fontSize: '12px', color: 'rgba(245,240,232,0.65)' }}>
+                          {feeDisclosure}
+                        </p>
+                      )}
+
                       <div className="flex gap-[12px] pt-[12px] sticky bottom-0 z-10 bg-[#0D1A0E] mt-auto">
                         <button 
                           type="button" onClick={() => setStep(1)}

@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { adminGet, adminSend } from '../../services/adminApi';
+import { usePermissions } from '../../components/admin/PermissionsContext';
+import { useLock } from '../../components/admin/LockContext';
+import Pii from '../../components/admin/Pii';
 import { Card, EmptyNote, ErrorNote, FChip, LoadingNote, PageTitle, StatusPill, chipBtn, chipDangerBtn, fmtDate, ghostBtn, money } from '../../components/admin/ui';
 
 const PAGE_SIZE = 100;
@@ -23,6 +26,14 @@ const NEXT: Record<string, string[]> = {
 const chipLabel = (s: string) => (s === 'all' ? 'All' : s.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase()));
 
 export default function AdminOrders() {
+  const { can } = usePermissions();
+  const { locked } = useLock();
+  // Screen lock (Phase D): the locked view renders this same board —
+  // same fetch, same refresh behaviour — but with every write
+  // control removed and customer PII masked (the Pii component
+  // below). The name, items, totals and statuses stay fully visible
+  // so the board remains useful at the counter.
+  const canManage = can('orders', 'manage') && !locked;
   const [orders, setOrders] = useState<Order[]>([]);
   const [total, setTotal] = useState(0);
   const [filter, setFilter] = useState('all');
@@ -65,7 +76,7 @@ export default function AdminOrders() {
 
   return (
     <div>
-      <PageTitle sub="Status changes save instantly and update the customer's tracking page">Orders</PageTitle>
+      <PageTitle sub={locked ? 'Screen locked — order details are masked.' : "Status changes save instantly and update the customer's tracking page"}>Orders</PageTitle>
       <div className="flex flex-wrap gap-2 mb-5">
         {STATUSES.map((s) => (
           <FChip key={s} active={filter === s} onClick={() => setFilter(s)}>{chipLabel(s)}</FChip>
@@ -79,7 +90,7 @@ export default function AdminOrders() {
           <Card key={o.id} className="px-5 py-[18px]">
             <div className="flex flex-wrap justify-between gap-3 mb-2.5">
               <div>
-                <p className="font-bodytext text-[14.5px] font-semibold text-[#16241A]">{o.customerName} <span className="font-normal text-[#98A096] text-[12.5px]">· {o.customerEmail}{o.customerPhone ? ` · ${o.customerPhone}` : ''}</span></p>
+                <p className="font-bodytext text-[14.5px] font-semibold text-[#16241A]">{o.customerName} <span className="font-normal text-[#98A096] text-[12.5px]">· <Pii kind="email" value={o.customerEmail} />{o.customerPhone ? <> · <Pii kind="phone" value={o.customerPhone} /></> : ''}</span></p>
                 <p className="font-bodytext text-[12px] text-[#98A096] mt-0.5">{fmtDate(o.createdAt)} · <span className="text-[#8A551F] font-semibold">#{o.id.slice(0, 8)}</span></p>
               </div>
               <div className="flex gap-1.5 items-start"><StatusPill status={o.status} /><StatusPill status={o.paymentStatus} /></div>
@@ -89,14 +100,16 @@ export default function AdminOrders() {
             </ul>
             <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#EFE9DB] pt-3">
               <p className="font-bodytext text-[13.5px] text-[#5C665C]">Total <span className="text-[#8A551F] font-semibold text-[15px]">{money(o.total, o.currency)}</span>{o.discount > 0 && <span className="text-[#2E7D4F]"> (−{money(o.discount, o.currency)})</span>}</p>
-              <div className="flex gap-2 flex-wrap">
-                {(NEXT[o.status] ?? []).map((s) => (
-                  <button key={s} disabled={busyId === o.id} onClick={() => void setStatus(o.id, s)}
-                    className={s === 'cancelled' ? chipDangerBtn : chipBtn}>
-                    {s.replace(/_/g, ' ')}
-                  </button>
-                ))}
-              </div>
+              {canManage && (
+                <div className="flex gap-2 flex-wrap">
+                  {(NEXT[o.status] ?? []).map((s) => (
+                    <button key={s} disabled={busyId === o.id} onClick={() => void setStatus(o.id, s)}
+                      className={s === 'cancelled' ? chipDangerBtn : chipBtn}>
+                      {s.replace(/_/g, ' ')}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </Card>
         ))}

@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { loadEnv } from './config/env';
 import { createSupabaseRepository } from './repositories/supabaseRepository';
 import { createSupabaseTokenVerifier, type TokenVerifier } from './lib/auth';
+import { createSupabaseAuthAdminService, type AuthAdminService } from './lib/authAdmin';
 import { createApp } from './app';
 import { createStripeService, type StripeService } from './lib/stripe';
 import { createStorageService, type StorageService } from './lib/storage';
@@ -12,9 +13,11 @@ function main() {
   const env = loadEnv();
   let repo: Repository | null = null;
   let verifyToken: TokenVerifier = async () => null;
+  let authAdmin: AuthAdminService | null = null;
   if (env.supabaseConfigured && env.supabaseUrl && env.supabaseServiceRoleKey) {
     repo = createSupabaseRepository(env.supabaseUrl, env.supabaseServiceRoleKey);
     verifyToken = createSupabaseTokenVerifier(env.supabaseUrl, env.supabaseServiceRoleKey);
+    authAdmin = createSupabaseAuthAdminService(env.supabaseUrl, env.supabaseServiceRoleKey);
   } else {
     console.warn('[ember] Supabase is not configured — DB endpoints will respond 503. See SUPABASE_SETUP.md.');
   }
@@ -33,7 +36,7 @@ function main() {
   if (!chat) {
     console.warn('[ember] GEMINI_API_KEY is not set — Ember AI chat will respond 503 until it is configured.');
   }
-  const app = createApp({ env, repo, verifyToken, stripe, storage, chat });
+  const app = createApp({ env, repo, verifyToken, stripe, storage, chat, authAdmin });
   app.listen(env.port, () => {
     console.log(`[ember] API listening on http://localhost:${env.port} (${env.nodeEnv})`);
   });

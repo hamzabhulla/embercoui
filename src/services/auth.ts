@@ -1,4 +1,5 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabase.ts';
+import { clearPersistedScreenLock } from '../lib/screenLock.ts';
 
 export { isSupabaseConfigured };
 
@@ -58,6 +59,13 @@ export async function updatePassword(newPassword: string): Promise<AuthResult> {
 }
 
 export async function signOut(): Promise<void> {
+  // Every sign-out surface — the admin shell, the unlock panel, the
+  // MFA flow, the admin login page, the customer Account page —
+  // funnels through this one function (via AuthContext), so the
+  // persisted admin screen lock (Phase D) is dropped HERE, by
+  // construction: whatever account signs in next in this tab can
+  // never inherit a lock the previous session left behind.
+  clearPersistedScreenLock();
   if (!supabase) return;
   await supabase.auth.signOut();
 }
