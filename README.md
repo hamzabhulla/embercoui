@@ -69,4 +69,4 @@ supabase/       SQL migrations + seed
 
 ---
 
-Built by **Hamza Mohsin** — full-stack developer from Bhai Pheru, Pakistan.
+Built by **Hamza Bhulla** — full-stack developer from Bhai Pheru, Pakistan.
