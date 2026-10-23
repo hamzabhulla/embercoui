@@ -19,11 +19,14 @@ function Medallion({ size = 46 }: { size?: number }) {
         height: size,
         border: '1px solid rgba(193,122,58,0.65)',
         boxShadow: '0 0 0 4px rgba(193,122,58,0.10), inset 0 0 12px rgba(193,122,58,0.15)',
-        color: '#C17A3A',
-        fontSize: size * 0.38,
       }}
     >
-      ✦
+      {/* Brand monogram (logo kit) inside the medallion ring. */}
+      <img
+        src="/ember-co-monogram.svg"
+        alt=""
+        style={{ width: size * 0.55, height: size * 0.55 }}
+      />
     </div>
   );
 }

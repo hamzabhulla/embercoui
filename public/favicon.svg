@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="220" height="220" viewBox="0 0 220 220" role="img" aria-labelledby="title desc">
+  <title id="title">Ember &amp; Co. hearth monogram</title>
+  <desc id="desc">A copper E-shaped hearth with a central ember detail.</desc>
+  <g transform="translate(10 13) scale(1.0)">
+    <path d="
+M 98 18
+C 62 18 37 44 37 80
+L 37 148
+C 37 176 57 195 84 195
+L 151 195
+C 160 195 167 188 167 179
+L 167 177
+L 84 177
+C 67 177 55 165 55 148
+L 55 117
+L 143 117
+L 143 101
+L 55 101
+L 55 81
+C 55 59 72 43 98 43
+C 118 43 132 55 135 74
+L 153 74
+C 150 42 127 18 98 18 Z
+" fill="#C58A53"/>
+    <path d="
+M 105 54
+C 98 64 96 69 99 75
+C 101 80 106 82 110 78
+C 117 72 114 64 105 54 Z
+" fill="#C58A53"/>
+  </g>
+</svg>

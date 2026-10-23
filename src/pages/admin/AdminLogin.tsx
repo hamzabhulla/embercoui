@@ -44,7 +44,7 @@ function Card({ children }: { children: ReactNode }) {
 function Brand() {
   return (
     <>
-      <span className="mx-auto mb-4 w-[46px] h-[46px] rounded-full border border-[#C17A3A]/50 text-[#C17A3A] flex items-center justify-center font-display text-[22px] shadow-[0_0_0_4px_rgba(193,122,58,0.10)]">✦</span>
+      <span className="mx-auto mb-4 w-[46px] h-[46px] rounded-full border border-[#C17A3A]/50 text-[#C17A3A] flex items-center justify-center font-display text-[22px] shadow-[0_0_0_4px_rgba(193,122,58,0.10)]"><img src="/ember-co-monogram.svg" alt="" className="w-[24px] h-[24px]" /></span>
       <h1 className="font-display text-[26px] font-semibold text-[#16241A]">Ember &amp; Co.</h1>
       <p className="font-bodytext text-[10px] tracking-[0.26em] uppercase text-[#98A096] mt-1 mb-6">Admin Console</p>
     </>

@@ -69,7 +69,6 @@ export default function Navbar({ forceDark = false }: { forceDark?: boolean }) {
 
   const isLightMode = !forceDark && scrolled && isLight;
   const effectiveScrolled = forceDark || scrolled;
-  const logoColor = isLightMode ? 'text-[#1C2B1E]' : 'text-white';
   const iconColor = isLightMode ? 'text-[#1C2B1E]' : 'text-white';
   const navLinkColor = isLightMode ? 'text-[#1C2B1E]/80 hover:text-[#1C2B1E]' : 'text-white/80 hover:text-white';
   const buttonClass = isLightMode
@@ -119,15 +118,17 @@ export default function Navbar({ forceDark = false }: { forceDark?: boolean }) {
               e.preventDefault();
               navigate('/');
             }}
-            className="flex items-center gap-2 group"
+            className="flex items-center gap-2 group shrink-0"
           >
-            <span className={logoColor + ' text-2xl'}>✦</span>
-            <span
-              className={`font-heading ${logoColor} text-2xl font-semibold tracking-wide`}
-              style={{ fontFamily: 'Cormorant Garamond, serif' }}
-            >
-              {brandName}
-            </span>
+            {/* Brand signature (logo kit): the ivory wordmark on the
+                dark header; the dark-pine variant whenever the header
+                sits on a light section, matching the text colours it
+                replaces. Height is fixed so the bar never shifts. */}
+            <img
+              src={isLightMode ? '/ember-co-logo-light.svg' : '/ember-co-logo.svg'}
+              alt={brandName}
+              className="h-[30px] w-auto"
+            />
           </a>
 
           {/* Desktop nav links */}
@@ -237,10 +238,9 @@ export default function Navbar({ forceDark = false }: { forceDark?: boolean }) {
               navigate('/');
               setSidebarOpen(false);
             }}
-            className="font-heading text-xl"
-            style={{ fontFamily: 'Cormorant Garamond, serif', color: '#F5F0E8' }}
+            className="shrink-0"
           >
-            {brandName}
+            <img src="/ember-co-logo.svg" alt={brandName} className="h-[24px] w-auto" />
           </a>
           <button
             onClick={() => setSidebarOpen(false)}

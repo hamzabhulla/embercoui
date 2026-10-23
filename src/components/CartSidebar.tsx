@@ -113,17 +113,21 @@ export default function CartSidebar() {
             </button>
           </div>
           
-          <h2
-            className="mt-2"
-            style={{ 
-              fontFamily: 'Cormorant Garamond, serif',
-              fontSize: '28px',
-              fontWeight: 300,
-              color: '#F5F0E8'
-            }}
-          >
-            {brandName}
-          </h2>
+          <div className="mt-2 flex items-center gap-3">
+            {/* Brand monogram (logo kit) beside the drawer's brand
+                heading — the heading text itself is unchanged. */}
+            <img src="/ember-co-monogram.svg" alt="" className="w-[28px] h-[28px] shrink-0" />
+            <h2
+              style={{
+                fontFamily: 'Cormorant Garamond, serif',
+                fontSize: '28px',
+                fontWeight: 300,
+                color: '#F5F0E8'
+              }}
+            >
+              {brandName}
+            </h2>
+          </div>
           
           <div 
             className="mt-4"

@@ -198,7 +198,7 @@ export default function LockedView() {
       <header className="sticky top-0 z-30 bg-white/95 backdrop-blur border-b border-[#EAE3D3]">
         <div className="w-full max-w-[1440px] mx-auto px-5 md:px-[30px] py-3 flex items-center justify-between gap-3 min-w-0">
           <div className="flex items-center gap-3 min-w-0">
-            <span className="w-[34px] h-[34px] rounded-full border border-[#C17A3A]/50 text-[#C17A3A] flex items-center justify-center font-display text-[17px] shadow-[0_0_0_4px_rgba(193,122,58,0.10)] shrink-0">✦</span>
+            <span className="w-[34px] h-[34px] rounded-full border border-[#C17A3A]/50 text-[#C17A3A] flex items-center justify-center font-display text-[17px] shadow-[0_0_0_4px_rgba(193,122,58,0.10)] shrink-0"><img src="/ember-co-monogram.svg" alt="" className="w-[18px] h-[18px]" /></span>
             <p className="font-display text-[19px] font-semibold leading-none text-[#16241A] whitespace-nowrap">Ember &amp; Co.</p>
           </div>
           <p className="font-bodytext text-[12px] text-[#5C665C] flex items-center gap-2 min-w-0">

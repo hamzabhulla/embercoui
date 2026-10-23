@@ -142,7 +142,7 @@ export default function MfaFlow({ onVerified }: { onVerified: () => void }) {
 
   return (
     <div className="w-full max-w-sm bg-white border border-[#EAE3D3] rounded-2xl px-6 py-8 sm:px-8 shadow-[0_18px_40px_-24px_rgba(22,36,26,0.35)] text-center">
-      <span className="mx-auto mb-4 w-[46px] h-[46px] rounded-full border border-[#C17A3A]/50 text-[#C17A3A] flex items-center justify-center font-display text-[22px] shadow-[0_0_0_4px_rgba(193,122,58,0.10)]">✦</span>
+      <span className="mx-auto mb-4 w-[46px] h-[46px] rounded-full border border-[#C17A3A]/50 text-[#C17A3A] flex items-center justify-center font-display text-[22px] shadow-[0_0_0_4px_rgba(193,122,58,0.10)]"><img src="/ember-co-monogram.svg" alt="" className="w-[24px] h-[24px]" /></span>
 
       {phase === 'loading' && (
         <p className="font-bodytext text-[#98A096] tracking-[0.2em] uppercase text-xs py-6">Loading…</p>

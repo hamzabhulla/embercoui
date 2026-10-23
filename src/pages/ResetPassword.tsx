@@ -74,7 +74,7 @@ export default function ResetPassword() {
       >
         <div className="text-center mb-8">
           <p className="uppercase mb-3" style={{ fontFamily: 'Jost, sans-serif', fontSize: '10px', letterSpacing: '0.25em', color: '#C17A3A' }}>
-            ✦ &nbsp; Ember &amp; Co.
+            <img src="/ember-co-monogram.svg" alt="" className="inline-block w-[14px] h-[14px] align-[-2px]" /> &nbsp; Ember &amp; Co.
           </p>
           <h1 style={{ fontFamily: 'Cormorant Garamond, serif', fontWeight: 300, fontSize: '32px', color: '#F5F0E8' }}>
             Set a New Password

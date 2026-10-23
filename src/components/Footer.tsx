@@ -47,14 +47,10 @@ export default function Footer() {
             className={`reveal ${colVisible[0] ? 'visible' : ''}`}
             style={{ transitionDelay: '0s' }}
           >
-            <div className="flex items-center gap-2 mb-4">
-              <span className="text-ember text-xl">✦</span>
-              <span
-                className="text-white text-lg font-semibold"
-                style={{ fontFamily: 'Cormorant Garamond, serif' }}
-              >
-                {brandName}
-              </span>
+            <div className="mb-4">
+              {/* Brand signature (logo kit) — dark-surface variant,
+                  larger than the navbar's, as the footer's brand row. */}
+              <img src="/ember-co-logo.svg" alt={brandName} className="h-[38px] w-auto max-w-full" />
             </div>
             <p
               className="text-xs leading-relaxed"

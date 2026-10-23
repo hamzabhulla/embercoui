@@ -28,7 +28,7 @@ function SuccessMedallion({ mounted }: { mounted: boolean }) {
           boxShadow: '0 0 0 6px rgba(193,122,58,0.08), inset 0 0 16px rgba(193,122,58,0.15)',
         }}
       >
-        <span style={{ color: '#C17A3A', fontSize: '26px' }} className="animate-pulse">✦</span>
+        <img src="/ember-co-monogram.svg" alt="" style={{ width: '30px', height: '30px' }} className="animate-pulse" />
       </div>
     </div>
   );

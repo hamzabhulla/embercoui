@@ -155,12 +155,11 @@ function AdminShell() {
   return (
     <div className="min-h-screen bg-[#F7F4EE] text-[#16241A] flex font-bodytext">
       <aside className={`${menuOpen ? 'flex' : 'hidden'} md:flex fixed md:sticky top-0 inset-y-0 left-0 z-40 w-[230px] shrink-0 h-screen flex-col bg-white border-r border-[#EAE3D3]`}>
-        <div className="flex items-center gap-3 px-[18px] pt-5 pb-4 border-b border-[#EFE9DB]">
-          <span className="w-[38px] h-[38px] rounded-full border border-[#C17A3A]/50 text-[#C17A3A] flex items-center justify-center font-display text-[19px] shadow-[0_0_0_4px_rgba(193,122,58,0.10)] shrink-0">✦</span>
-          <div>
-            <p className="font-display text-[19px] font-semibold leading-none text-[#16241A]">Ember &amp; Co.</p>
-            <p className="font-bodytext text-[9.5px] tracking-[0.26em] uppercase text-[#98A096] mt-[5px]">Admin Console</p>
-          </div>
+        <div className="px-[18px] pt-5 pb-4 border-b border-[#EFE9DB]">
+          {/* Brand signature (logo kit) — light-surface variant for
+              the light admin theme; the console eyebrow stays. */}
+          <img src="/ember-co-logo-light.svg" alt="Ember & Co." className="h-[34px] w-auto max-w-full" />
+          <p className="font-bodytext text-[9.5px] tracking-[0.26em] uppercase text-[#98A096] mt-2">Admin Console</p>
         </div>
         <nav className="flex-1 px-3 py-4 overflow-y-auto">
           {visibleGroups.map((group) => (
