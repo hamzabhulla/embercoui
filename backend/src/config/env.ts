@@ -12,6 +12,31 @@ export interface Env {
   geminiConfigured: boolean;
   geminiModel: string | null;
   trustProxy: number | undefined;
+  /**
+   * The site's public origin (no trailing slash) — the base for every
+   * absolute URL the server generates (robots.txt, sitemap.xml,
+   * llms.txt, llms-full.txt). Per-client go-live env: each restaurant's
+   * install sets SITE_URL to its own domain; the default is this
+   * demo's Vercel origin.
+   */
+  siteUrl: string;
+}
+
+export const DEFAULT_SITE_URL = 'https://embercoui.vercel.app';
+
+// SITE_URL must be an absolute http(s) origin; anything else (blank,
+// unparseable, another scheme) falls back to the default rather than
+// generating broken or unsafe absolute URLs into public files.
+function parseSiteUrl(raw: string | undefined): string {
+  const trimmed = (raw ?? '').trim().replace(/\/+$/, '');
+  if (!trimmed) return DEFAULT_SITE_URL;
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return DEFAULT_SITE_URL;
+    return trimmed;
+  } catch {
+    return DEFAULT_SITE_URL;
+  }
 }
 
 function parsePort(raw: string | undefined): number {
@@ -67,5 +92,6 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
     geminiConfigured: Boolean(geminiApiKey),
     geminiModel: source.GEMINI_MODEL?.trim() || null,
     trustProxy: parseTrustProxy(source.TRUST_PROXY),
+    siteUrl: parseSiteUrl(source.SITE_URL),
   };
 }

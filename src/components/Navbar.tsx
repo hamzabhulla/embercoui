@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext.tsx';
 import { ShoppingBag, User, X, Menu } from 'lucide-react';
 import { useCart } from '../context/CartContext.tsx';
 import { useGoToReservations } from '../lib/nav.ts';
+import { applyPageMeta } from '../lib/pageMeta.ts';
 import { usePublicSettings } from '../hooks/usePublicSettings';
 
 const links = ['Menu', 'Our Story', 'Reservations', 'Contact'];
@@ -21,9 +22,14 @@ export default function Navbar({ forceDark = false }: { forceDark?: boolean }) {
   // The brand is the admin's Restaurant name once settings load; the
   // static text is only the pre-load placeholder.
   const brandName = settings?.restaurantName ?? 'Ember & Co.';
+  // Document title + meta description follow the route (GEO): the four
+  // public pages each get their own title/description; every other
+  // route keeps the brand title this effect has always set, with
+  // index.html's description. Runs on navigation, and again when the
+  // settings — and with them the real brand name — arrive.
   useEffect(() => {
-    if (settings?.restaurantName) document.title = `${settings.restaurantName} | Forest-to-Table Dining`;
-  }, [settings]);
+    applyPageMeta(location.pathname, brandName);
+  }, [location.pathname, brandName]);
 
   const handleLoginClick = () => {
     // Record where the visitor is now so a successful sign-in returns

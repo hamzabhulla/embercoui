@@ -5,6 +5,7 @@ import { sanitizeReturnPath } from './services/auth.ts';
 import { CartProvider } from './context/CartContext.tsx';
 import { CurrencyProvider } from './context/CurrencyContext.tsx';
 import Navbar from './components/Navbar.tsx';
+import StructuredData from './components/StructuredData.tsx';
 import Hero from './components/Hero.tsx';
 import LiveStatus from './components/LiveStatus.tsx';
 import MenuSection from './components/MenuSection.tsx';
@@ -117,6 +118,7 @@ function App() {
     <CartProvider>
       <div className="min-h-screen" style={{ background: '#F5F0E8' }}>
         {!isAdmin && <Navbar forceDark={canonicalPath === '/menu' || canonicalPath === '/our-story' || canonicalPath === '/contact' || canonicalPath === '/account' || canonicalPath === '/reset-password' || canonicalPath === '/checkout' || canonicalPath.startsWith('/track-order')} />}
+        {!isAdmin && <StructuredData />}
 
         <Suspense fallback={<RouteFallback />}>
         <Routes>

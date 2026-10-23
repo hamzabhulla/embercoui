@@ -17,6 +17,7 @@ import { formsRouter } from './routes/forms';
 import { authEventsRouter } from './routes/authEvents';
 import { accountRouter } from './routes/account';
 import { chatRouter } from './routes/chat';
+import { geoRouter } from './routes/geo';
 import type { ChatService } from './lib/chat';
 
 export interface AppDeps {
@@ -100,6 +101,13 @@ export function createApp(deps: AppDeps): Express {
       timestamp: new Date().toISOString(),
     });
   });
+
+  // The generated GEO files (robots/sitemap/llms) live OUTSIDE /api/v1:
+  // Vercel rewrites /robots.txt etc. to /api/<file>, and the standalone
+  // server serves them at the root — one router, both mounts.
+  const geo = geoRouter({ repo: deps.repo, siteUrl: deps.env.siteUrl, stripeConfigured: deps.env.stripeConfigured });
+  app.use('/api', geo);
+  app.use('/', geo);
 
   app.use('/api/v1', publicRouter({ repo: deps.repo, stripeConfigured: deps.env.stripeConfigured }));
   app.use('/api/v1', formsRouter(deps));
