@@ -157,3 +157,90 @@ describe('Account — Your Reservations', () => {
     expect(screen.queryByText('Request a Change')).toBeNull();
   });
 });
+
+// The featured order's progress tracker once laid its six steps out as
+// a no-shrink flex row: each step's automatic minimum size was its
+// label's min-content (~71px for CONFIRMED), the row's ~382px minimum
+// widened the whole page grid column, and at ~390px the Account page
+// scrolled sideways with the labels butted together. These pins hold
+// the responsive contract that replaced it: a 3-over-3 grid below sm
+// (6 across from sm up, geometrically identical to the old flex row),
+// shrinkable steps, the row-break step's connector hidden only below
+// sm, and action groups allowed to wrap instead of forcing width.
+const FEATURED_ORDER = {
+  id: '50b3d461-1111-4000-8000-000000000001', status: 'preparing', paymentStatus: 'pending',
+  total: 86, currency: 'USD', createdAt: '2026-10-22T16:54:00.000Z',
+  items: [
+    { menuItemId: 1, name: 'Ember Classic Burger', unitPrice: 28.5, quantity: 2 },
+    { menuItemId: 2, name: 'Forest Truffle Burger', unitPrice: 29, quantity: 1 },
+  ],
+};
+const HISTORY_ORDER = {
+  id: '9f2ac410-2222-4000-8000-000000000002', status: 'delivered', paymentStatus: 'paid',
+  total: 86, currency: 'USD', createdAt: '2026-10-18T12:00:00.000Z',
+  items: [{ menuItemId: 1, name: 'Ember Classic Burger', unitPrice: 28.5, quantity: 2 }],
+};
+
+function mockApiWithOrders() {
+  h.apiRequest.mockImplementation(async (path: string) => {
+    if (path === '/api/v1/account/orders') {
+      return { ok: true, status: 200, data: { orders: [FEATURED_ORDER, HISTORY_ORDER] }, error: null };
+    }
+    if (path === '/api/v1/account/favorites') return { ok: true, status: 200, data: { items: [] }, error: null };
+    if (path === '/api/v1/account/reservations') {
+      return { ok: true, status: 200, error: null, data: { reservations: [], requestsDegraded: false } };
+    }
+    return { ok: false, status: 404, data: null, error: 'Not found' };
+  });
+}
+
+describe('Account — Orders tab tracker (mobile layout contract)', () => {
+  async function renderOrders() {
+    mockApiWithOrders();
+    render(
+      <MemoryRouter>
+        <Account />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText('#50b3d461')).toBeTruthy();
+    const placed = screen.getByText('Placed');
+    const step = placed.parentElement as HTMLElement;
+    return { tracker: step.parentElement as HTMLElement, step };
+  }
+
+  it('lays the six steps out as a responsive grid of shrinkable cells', async () => {
+    const { tracker } = await renderOrders();
+    expect(tracker.className).toContain('grid-cols-3');
+    expect(tracker.className).toContain('sm:grid-cols-6');
+    const steps = Array.from(tracker.children) as HTMLElement[];
+    expect(steps).toHaveLength(6);
+    for (const s of steps) {
+      expect(s.className).toContain('min-w-0');
+      expect(s.className).not.toContain('flex-1');
+    }
+    expect(steps.map((s) => s.lastElementChild?.textContent)).toEqual([
+      'Placed', 'Confirmed', 'Preparing', 'Ready', 'On its way', 'Delivered',
+    ]);
+  });
+
+  it('hides only the row-break step’s connector below sm', async () => {
+    const { tracker } = await renderOrders();
+    const steps = Array.from(tracker.children) as HTMLElement[];
+    const connector = (i: number) => steps[i].querySelector('span');
+    // Step 4 (Ready) starts the second mobile row: its incoming
+    // connector would dangle at the row's left edge, so it is hidden
+    // below sm and restored from sm up, where all six sit in one row.
+    expect(connector(3)?.className).toContain('max-sm:hidden');
+    expect(connector(1)?.className).not.toContain('max-sm:hidden');
+    expect(connector(4)?.className).not.toContain('max-sm:hidden');
+  });
+
+  it('lets the order action groups wrap instead of forcing the card wide', async () => {
+    await renderOrders();
+    const againButtons = screen.getAllByText('Order Again');
+    expect(againButtons.length).toBeGreaterThanOrEqual(2);
+    for (const b of againButtons) {
+      expect((b.parentElement as HTMLElement).className).toContain('flex-wrap');
+    }
+  });
+});

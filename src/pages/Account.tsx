@@ -518,13 +518,13 @@ export default function Account() {
                           {featured.status.replace(/_/g, ' ')}
                         </span>
                       </div>
-                      <div className="flex" style={{ margin: '26px 2px 6px' }}>
+                      <div className="grid grid-cols-3 gap-y-[18px] sm:grid-cols-6 sm:gap-y-0" style={{ margin: '26px 2px 6px' }}>
                         {STEPS.map((step, i) => {
                           const cur = STEPS.findIndex((s) => s.key === featured.status);
                           const state = i < cur ? 'done' : i === cur ? 'now' : 'todo';
                           return (
-                            <div key={step.key} className="relative flex-1 text-center">
-                              {i > 0 && <span style={{ position: 'absolute', top: '11px', left: '-50%', width: '100%', height: '1px', background: state !== 'todo' || i <= cur ? '#C17A3A' : 'rgba(245,240,232,0.14)', opacity: i <= cur ? 1 : undefined, ...(i > cur ? { background: 'rgba(245,240,232,0.14)' } : {}) }} />}
+                            <div key={step.key} className="relative min-w-0 text-center">
+                              {i > 0 && <span className={i === 3 ? 'max-sm:hidden' : undefined} style={{ position: 'absolute', top: '11px', left: '-50%', width: '100%', height: '1px', background: state !== 'todo' || i <= cur ? '#C17A3A' : 'rgba(245,240,232,0.14)', opacity: i <= cur ? 1 : undefined, ...(i > cur ? { background: 'rgba(245,240,232,0.14)' } : {}) }} />}
                               <div className="relative mx-auto flex items-center justify-center" style={{ width: '23px', height: '23px', borderRadius: '50%', fontSize: '11px', zIndex: 1, background: state === 'done' ? '#C17A3A' : '#1B2B16', border: `1px solid ${state === 'done' ? '#C17A3A' : state === 'now' ? '#D9A45B' : 'rgba(245,240,232,0.16)'}`, color: state === 'done' ? '#FFF3E2' : 'transparent' }}>
                                 {state === 'done' ? '✓' : state === 'now' ? <span className="animate-ping" style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#D9A45B' }} /> : ''}
                               </div>
@@ -549,7 +549,7 @@ export default function Account() {
                           <span className="block" style={{ fontFamily: JOST, fontSize: '10px', letterSpacing: '0.2em', color: 'rgba(245,240,232,0.38)' }}>TOTAL</span>
                           <span style={{ fontFamily: SERIF, fontSize: '27px', fontWeight: 600, color: '#D9A45B' }}>{format(featured.total, featured.currency)}</span>
                         </div>
-                        <div className="flex gap-2.5">
+                        <div className="flex flex-wrap gap-2.5">
                           <button onClick={() => void reorder(featured)} style={{ ...ghostButton, padding: '10px 18px', fontSize: '10.5px' }} className="transition-colors">Order Again</button>
                           <button onClick={() => navigate(`/track-order/${featured.id}`)} style={{ ...emberButton, padding: '10px 18px', fontSize: '10.5px' }} className="transition-all hover:brightness-110">Track Order →</button>
                         </div>
@@ -583,7 +583,7 @@ export default function Account() {
                               <span className="block" style={{ fontFamily: JOST, fontSize: '10px', letterSpacing: '0.2em', color: 'rgba(245,240,232,0.38)' }}>TOTAL</span>
                               <span style={{ fontFamily: SERIF, fontSize: '27px', fontWeight: 600, color: '#D9A45B' }}>{format(order.total, order.currency)}</span>
                             </div>
-                            <div className="flex gap-2.5">
+                            <div className="flex flex-wrap gap-2.5">
                               <button onClick={() => void reorder(order)} style={{ ...ghostButton, padding: '10px 18px', fontSize: '10.5px' }} className="transition-colors">Order Again</button>
                               {order.status !== 'cancelled' && (
                                 <button onClick={() => navigate(`/track-order/${order.id}`)} style={{ ...ghostButton, padding: '10px 18px', fontSize: '10.5px' }} className="transition-colors">Track Order →</button>
