@@ -146,3 +146,56 @@ describe('Reservation fee step — confirm outcomes', () => {
     expect(screen.queryByText('Reservation Received')).toBeNull();
   });
 });
+
+describe('Mobile form step panels — no fixed-height clip, no sticky overlap', () => {
+  // Regression: Step 1's Continue bar was `sticky bottom-0` inside a
+  // 520px overflow-hidden wrapper, so on a phone it painted over
+  // guest rows 16–20. The active panel must be in flow (relative)
+  // so the wrapper grows to its full height, the inactive panel
+  // absolute (out of flow, sliding), and neither button bar sticky.
+  const panelOf = (el: HTMLElement) => {
+    // Continue is a direct child of the Step 1 panel; Back/Confirm
+    // sit in a row div inside the Step 2 panel.
+    let node: HTMLElement | null = el;
+    while (node && !String(node.className).includes('space-y-[28px]')) node = node.parentElement;
+    if (!node) throw new Error('step panel not found');
+    return node;
+  };
+
+  it('Step 1 active: its panel is relative, Step 2 parked absolute, Continue not sticky', () => {
+    render(<Reservation />);
+    const continueBtn = screen.getByRole('button', { name: /Continue/ });
+    const step1 = panelOf(continueBtn);
+    expect(step1.classList.contains('relative')).toBe(true);
+    expect(step1.classList.contains('absolute')).toBe(false);
+    expect(continueBtn.classList.contains('sticky')).toBe(false);
+    const confirmBtn = screen.getByRole('button', { name: /Confirm/ });
+    const step2 = panelOf(confirmBtn);
+    expect(step2.classList.contains('absolute')).toBe(true);
+    expect(step2.classList.contains('pointer-events-none')).toBe(true);
+    // The Step 2 button row itself must not be sticky either.
+    expect(confirmBtn.parentElement?.classList.contains('sticky')).toBe(false);
+  });
+
+  it('after advancing, Step 2 is relative and Step 1 parked absolute', () => {
+    render(<Reservation />);
+    const set = (id: string, value: string) => {
+      const el = document.getElementById(id);
+      if (!el) throw new Error(`missing field #${id}`);
+      fireEvent.change(el, { target: { value } });
+    };
+    set('name-mobile', 'Clip Guest');
+    set('email-mobile', 'clip@example.com');
+    set('phone-mobile', '1234567');
+    fireEvent.click(screen.getByRole('button', { name: '2' }));
+    fireEvent.click(screen.getByRole('button', { name: /Continue/ }));
+    const confirmBtn = screen.getByRole('button', { name: /Confirm/ });
+    const step2 = panelOf(confirmBtn);
+    expect(step2.classList.contains('relative')).toBe(true);
+    expect(step2.classList.contains('absolute')).toBe(false);
+    const continueBtn = screen.getByRole('button', { name: /Continue/ });
+    const step1 = panelOf(continueBtn);
+    expect(step1.classList.contains('absolute')).toBe(true);
+    expect(step1.classList.contains('pointer-events-none')).toBe(true);
+  });
+});

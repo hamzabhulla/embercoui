@@ -336,9 +336,15 @@ export default function Reservation() {
                     </div>
                   </div>
 
-                  <div className="overflow-hidden relative" style={{ minHeight: '520px' }}>
+                  {/* The wrapper grows to the ACTIVE step's full height:
+                      the active panel is relative (in flow), the
+                      inactive one absolute (out of flow, sliding).
+                      A fixed min-height used to clip Step 1 here and
+                      the sticky Continue bar painted over the last
+                      guest row — no fixed clip, no sticky overlap. */}
+                  <div className="overflow-hidden relative">
                     {/* STEP 1 */}
-                    <div className={`absolute top-0 left-0 w-full transition-all duration-500 flex flex-col space-y-[28px] ${step === 1 ? 'opacity-100 translate-x-0' : 'opacity-0 -translate-x-full pointer-events-none'}`}>
+                    <div className={`w-full transition-all duration-500 flex flex-col space-y-[28px] ${step === 1 ? 'relative opacity-100 translate-x-0' : 'absolute top-0 left-0 opacity-0 -translate-x-full pointer-events-none'}`}>
                       <div className="relative">
                         <label htmlFor="name-mobile" className="text-[9px] text-[#C17A3A] uppercase tracking-[0.15em] block mb-[6px]" style={{ fontFamily: 'Jost, sans-serif' }}>Full Name</label>
                         <input
@@ -386,7 +392,7 @@ export default function Reservation() {
                         onClick={() => {
                           if(form.name && form.email && form.phone && form.guests) setStep(2);
                         }}
-                        className="w-full bg-[#C17A3A] text-white p-[18px] text-[12px] tracking-[0.2em] uppercase flex items-center justify-between transition-colors shadow-lg disabled:opacity-50 hover:bg-[#A66932] mt-[28px] sticky bottom-0 z-10 rounded-none"
+                        className="w-full bg-[#C17A3A] text-white p-[18px] text-[12px] tracking-[0.2em] uppercase flex items-center justify-between transition-colors shadow-lg disabled:opacity-50 hover:bg-[#A66932] mt-[28px] rounded-none"
                         style={{ fontFamily: 'Jost, sans-serif' }}
                         disabled={!form.name || !form.email || !form.phone || !form.guests}
                       >
@@ -395,7 +401,7 @@ export default function Reservation() {
                     </div>
 
                     {/* STEP 2 */}
-                    <div className={`absolute top-0 left-0 w-full transition-all duration-500 flex flex-col space-y-[28px] ${step === 2 ? 'opacity-100 translate-x-0' : 'opacity-0 translate-x-full pointer-events-none'}`}>
+                    <div className={`w-full transition-all duration-500 flex flex-col space-y-[28px] ${step === 2 ? 'relative opacity-100 translate-x-0' : 'absolute top-0 left-0 opacity-0 translate-x-full pointer-events-none'}`}>
                       <div className="relative">
                         <label htmlFor="date-mobile" className="text-[9px] text-[#C17A3A] uppercase tracking-[0.15em] block mb-[6px]" style={{ fontFamily: 'Jost, sans-serif' }}>Select Date</label>
                         <input
@@ -430,7 +436,7 @@ export default function Reservation() {
                         </p>
                       )}
 
-                      <div className="flex gap-[12px] pt-[12px] sticky bottom-0 z-10 bg-[#0D1A0E] mt-auto">
+                      <div className="flex gap-[12px] pt-[12px]">
                         <button 
                           type="button" onClick={() => setStep(1)}
                           className="w-1/3 border border-white/20 text-white/70 p-[18px] text-[10px] tracking-widest uppercase flex items-center justify-center transition-colors rounded-none"
