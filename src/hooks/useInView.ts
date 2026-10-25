@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from 'react';
 export function useInView<T extends HTMLElement = HTMLElement>(threshold = 0.1) {
   const ref = useRef<T | null>(null);
   const [isInView, setIsInView] = useState(false);
+  // Latch guard: even a stray callback after disconnect must be a no-op.
+  const seenRef = useRef(false);
 
   useEffect(() => {
     const el = ref.current;
@@ -15,7 +17,15 @@ export function useInView<T extends HTMLElement = HTMLElement>(threshold = 0.1) 
       raf2 = requestAnimationFrame(() => {
         observer = new IntersectionObserver(
           ([entry]) => {
-            setIsInView(entry.isIntersecting);
+            // Latch: a reveal animation plays exactly once per page
+            // load. Once an element has been seen it stays seen, and
+            // the observer stops watching it, so scrolling away and
+            // back cannot reset it and replay the animation.
+            if (entry.isIntersecting && !seenRef.current) {
+              seenRef.current = true;
+              setIsInView(true);
+              observer.disconnect();
+            }
           },
           { threshold }
         );

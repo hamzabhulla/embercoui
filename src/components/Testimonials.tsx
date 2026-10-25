@@ -69,12 +69,18 @@ export default function Testimonials() {
     reviews.forEach((_, i) => {
       const el = cardRefs.current[i];
       if (!el) return;
+      // Latch: a card reveals exactly once per page load.
+      let seen = false;
       const obs = new IntersectionObserver(([entry]) => {
+        if (!entry.isIntersecting || seen) return;
+        seen = true;
         setCardVisible(prev => {
+          if (prev[i]) return prev;
           const next = [...prev];
-          next[i] = entry.isIntersecting;
+          next[i] = true;
           return next;
         });
+        obs.disconnect();
       }, { threshold: 0.1 });
       obs.observe(el);
       observers.push(obs);
