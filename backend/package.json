@@ -1,6 +1,7 @@
 {
   "name": "ember-co-backend",
   "private": true,
+  "license": "SEE LICENSE IN LICENSE",
   "version": "1.0.0",
   "type": "commonjs",
   "scripts": {

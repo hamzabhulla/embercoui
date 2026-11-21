@@ -7,9 +7,11 @@
 
 # Ember & Co.
 
-### Online orders, table reservations and restaurant management — in one website you own.
+### Online orders, table reservations and restaurant management — a full-stack portfolio build. Live demo for evaluation.
 
 Guests browse your menu, order, book a table and pay online. Your team runs everything from one secure admin panel.
+
+> Source-available, not open source. © 2026 Hamza Bhulla — all rights reserved. You may read the code and run it locally only to evaluate my work for hiring or a client project. Commercial use, hosting for real customers, rebranding and reselling are not allowed without a written commercial license — see [LICENSE](LICENSE). Commercial enquiries: heyhamza.dev@gmail.com
 
 [**🔗 Live demo**](https://embercoui.vercel.app) · [What you get](#-what-your-restaurant-gets) · [Try the demo](#-try-the-live-demo) · [Features](#-features) · [Under the hood](#-under-the-hood) · [Contact](#-lets-work-together)
 
@@ -41,7 +43,7 @@ Guests browse your menu, order, book a table and pay online. Your team runs ever
 | 🌍 **Ready for your market** | Works in any currency, includes a WhatsApp chat button, looks great on phones, and runs on your own domain. |
 | 🔎 **Easier to find online** | Pages and files for search engines and AI search tools are generated automatically from your live menu and settings, so they never go out of date. |
 
-**Your site, your data.** Each restaurant gets its own deployment — its own domain, its own database and its own branding. It is not a shared marketplace. To launch a new restaurant, you change the name, contact details, hours, currency and menu in the admin panel and point the site at your domain. No code changes needed.
+**Your site, your data.** The demo is one restaurant's deployment — its own domain, its own database and its own branding. It is not a shared marketplace. Running it for another restaurant, or for real customers, needs a commercial license — see [LICENSE](LICENSE).
 
 ---
 
@@ -300,6 +302,8 @@ All endpoints live under `/api/v1`. Admin routes are individually gated by secti
 
 ## 🚀 Getting started
 
+For evaluation only. Follow these steps on your own computer to review the code — do not deploy this for real customers without a commercial license.
+
 **Prerequisites:** Node.js 20+ and a free [Supabase](https://supabase.com) project. Stripe and Gemini keys are optional — features that need them return a clear `503` until configured.
 
 ```bash
@@ -346,6 +350,8 @@ npm run dev
 
 ## ☁️ Deployment
 
+Deployment instructions below are for the author and for commercial licensees only. Public redeployment is not permitted — see [LICENSE](LICENSE).
+
 | Branch | Environment |
 |---|---|
 | `develop` | Staging |
@@ -383,13 +389,13 @@ npm run dev
 ## 🗺️ Roadmap
 
 - PayPal checkout option
-- Per-restaurant theming pack for repeat deployments
+- Per-restaurant theming pack (commercial licensees only)
 
 ---
 
 ## 📄 License
 
-**© 2026 Hamza Bhulla — all rights reserved.** This repository is **source-available for evaluation**, not open source. You're welcome to read the code and run it locally to evaluate my work. Copying or republishing it, hosting it for real customers, or using it in another product requires written permission — see [`LICENSE`](LICENSE).
+**© 2026 Hamza Bhulla — all rights reserved.** This repository is **source-available for evaluation**, not open source. You're welcome to read the code and run it locally to evaluate my work. Copying or republishing it, hosting it for real customers, or using it in another product requires written permission — see [`LICENSE`](LICENSE). Rebranding, white-label use and resale are expressly prohibited.
 
 **Want this platform for your restaurant, or a custom build?** That's what a commercial license is for — [get in touch](mailto:heyhamza.dev@gmail.com).
 

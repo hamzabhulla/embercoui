@@ -1,10 +1,12 @@
-EMBER & CO. SOURCE-AVAILABLE LICENSE (ALL RIGHTS RESERVED)
+EMBER & CO. SOURCE-AVAILABLE LICENSE v1.1
+SPDX-License-Identifier: LicenseRef-EmberCo-Source-Available-1.0
 
 Copyright (c) 2026 Hamza Bhulla. All rights reserved.
 
 This repository (the "Software") is published so that employers, clients and
 collaborators can evaluate the author's work. It is source-available. It is
-NOT open source.
+NOT open source. No open-source license (including MIT, Apache-2.0 and
+GPL) applies to this Software.
 
 1. WHAT YOU MAY DO
 
@@ -12,40 +14,55 @@ NOT open source.
 
    a) read and review the source code and documentation;
 
-   b) clone the repository and run it on your own computer, solely to evaluate
-      it (for example, as part of a hiring process, or before commissioning
-      work from the author);
+   b) clone the repository and run it on your own computer, solely to
+      evaluate it (for example, as part of a hiring process, or before
+      commissioning work from the author);
 
    c) quote short excerpts, share screenshots or link to the live demo when
       discussing or reviewing the author's work, with credit to the author.
+
+   Evaluation use ends when the evaluation ends. It does not include use
+   for any real customer, business or public audience.
 
 2. WHAT YOU MAY NOT DO
 
    Without the author's prior written permission, you may not:
 
    a) copy, modify, adapt, translate or create derivative works of the
-      Software, in whole or in part;
+      Software, in whole or in part — including code, UI/design, database
+      schema and migrations, in this repository or in any other project;
 
-   b) publish, distribute, sublicense, sell, rent, lease or otherwise make the
-      Software, or any part of it, available to others (including by
-      republishing a fork);
+   b) publish, distribute, sublicense, sell, rent, lease or otherwise make
+      the Software, or any part of it, available to others (including by
+      republishing a fork, public or private);
 
-   c) host, deploy or operate the Software, or anything derived from it, for
-      any real customer, business or public audience (a private local test
-      under section 1(b) is allowed);
+   c) host, deploy or operate the Software, or anything derived from it,
+      for any real customer, business or public audience — including as a
+      SaaS product, hosted service, template, starter kit or white-label
+      product (a private local test under section 1(b) is allowed);
 
    d) use the Software, or any part of it, in a commercial product, service
-      or client project;
+      or client project, or charge anyone for access to it;
 
-   e) remove or alter this license, copyright notices or attribution;
+   e) rebrand, rename, white-label or resell the Software, or remove,
+      hide or alter its branding, name, logo, copyright notices,
+      attribution or this license;
 
-   f) present the Software, or work derived from it, as your own work.
+   f) present the Software, or work derived from it, as your own work;
+
+   g) use the Software to train a machine-learning / AI model, or scrape
+      it automatically for reuse;
+
+   h) remove or alter this license, copyright notices or attribution.
 
 3. COMMERCIAL LICENSING
 
    Want to deploy this platform for a restaurant, build on it, or commission a
    custom version? Contact the author for a commercial license:
    heyhamza.dev@gmail.com
+
+   A commercial license is a separate written agreement. Nothing in this
+   license grants commercial rights by implication.
 
 4. THIRD-PARTY COMPONENTS
 
@@ -66,9 +83,14 @@ NOT open source.
 6. TERMINATION
 
    Any breach of this license automatically ends the permissions granted in
-   section 1. On termination you must delete all copies of the Software in your
-   possession.
+   section 1. On termination you must delete all copies of the Software in
+   your possession.
 
 7. RESERVATION OF RIGHTS
 
    All rights not expressly granted in this license are reserved by the author.
+
+8. GOVERNING LAW
+
+   This license is governed by the laws of Pakistan. Any dispute arising
+   under it shall be subject to the courts of Lahore, Pakistan.
